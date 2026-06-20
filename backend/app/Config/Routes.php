@@ -7,7 +7,7 @@ use CodeIgniter\Router\RouteCollection;
 $routes->get('/', 'HealthController::index');
 $routes->get('health', 'HealthController::index');
 
-$routes->group('api/v1', static function (RouteCollection $routes): void {
+$routes->group('v1', static function (RouteCollection $routes): void {
     // ---- Auth (public + authenticated) -----------------------------------
     $routes->post('auth/login',          'AuthController::login');
     $routes->post('auth/refresh',        'AuthController::refresh');

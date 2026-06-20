@@ -5,7 +5,8 @@
 
 # Use production on smoke.aicountly.org (development exposes full stack traces).
 CI_ENVIRONMENT = production
-app.baseURL = 'http://localhost:8080/'
+# Local dev (Vite proxies /api → backend). Production cPanel: https://smoke.aicountly.org/api/
+app.baseURL = 'http://localhost:8080/api/'
 app.indexPage = ''
 
 #--------------------------------------------------------------------
