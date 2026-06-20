@@ -9,6 +9,8 @@ app.indexPage = ''
 
 #--------------------------------------------------------------------
 # DATABASE
+# cPanel: use the PostgreSQL host from cPanel → PostgreSQL Databases
+# (usually NOT 127.0.0.1). If the host requires TLS, set sslmode = require
 #--------------------------------------------------------------------
 
 database.default.hostname = 127.0.0.1
@@ -19,6 +21,7 @@ database.default.password = change_me
 database.default.DBDriver = Postgre
 database.default.DBPrefix =
 database.default.charset  = utf8
+# database.default.sslmode  = require
 
 #--------------------------------------------------------------------
 # AUTH / JWT

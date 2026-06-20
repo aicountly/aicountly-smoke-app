@@ -28,6 +28,8 @@ class Database extends Config
         'strictOn'   => false,
         'failover'   => [],
         'schema'     => 'public',
+        'sslmode'    => '',
+        'connect_timeout' => 10,
     ];
 
     public array $tests = [
@@ -48,6 +50,8 @@ class Database extends Config
         'strictOn'   => false,
         'failover'   => [],
         'schema'     => 'public',
+        'sslmode'    => '',
+        'connect_timeout' => 10,
     ];
 
     public function __construct()

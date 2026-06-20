@@ -203,9 +203,12 @@ jobs:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
           REMOTE_ROOT="${REMOTE_ROOT%/}"
+          echo "DB settings from server api/.env (no secrets printed):"
+          ssh cpanel-prod "grep -E '^database\.default\.(hostname|port|database|username|sslmode)' '${REMOTE_ROOT}/api/.env' 2>/dev/null || true"
           if ! ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark migrate --all --no-interaction"; then
             echo "::error::Migration failed — diagnostics:"
             ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && (test -f .env && echo '.env: present' || echo '.env: MISSING') && php -m | grep -i pgsql || echo 'pgsql PHP extension: NOT loaded'"
+            echo "::error::cPanel PostgreSQL: use the host from cPanel PostgreSQL Databases, not 127.0.0.1 unless local socket is configured. Try database.default.sslmode = require in api/.env"
             ssh cpanel-prod "ls -la '${REMOTE_ROOT}/api/writable/logs/' 2>/dev/null; tail -30 '${REMOTE_ROOT}/api/writable/logs/log-'*.log 2>/dev/null || true"
             exit 1
           fi
@@ -221,8 +224,13 @@ jobs:
             exit 0
           fi
           echo "First deploy — running InitialSeeder..."
-          ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark db:seed InitialSeeder"
-          ssh cpanel-prod "touch '${MARKER}' && chmod 644 '${MARKER}'"
+          if ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark db:seed InitialSeeder"; then
+            ssh cpanel-prod "touch '${MARKER}' && chmod 644 '${MARKER}'"
+          else
+            echo "::warning::Seeder failed — deploy continues. Fix api/.env DB settings on cPanel, then run manually:"
+            echo "  ssh → cd api && php spark db:seed InitialSeeder"
+            echo "cPanel tip: set database.default.hostname to the PostgreSQL host from cPanel (not 127.0.0.1). Add database.default.sslmode = require if needed."
+          fi
 
       - name: Set backend writable permissions
         env:
