@@ -3,7 +3,8 @@
 # Copy this file to `.env` (in this same backend/ directory) and fill in.
 #--------------------------------------------------------------------
 
-CI_ENVIRONMENT = development
+# Use production on smoke.aicountly.org (development exposes full stack traces).
+CI_ENVIRONMENT = production
 app.baseURL = 'http://localhost:8080/'
 app.indexPage = ''
 
@@ -77,4 +78,4 @@ REPORTS_DIR = ../smoke-reports
 # CORS
 #--------------------------------------------------------------------
 
-CORS_ALLOW_ORIGINS = http://localhost:5173,http://127.0.0.1:5173
+CORS_ALLOW_ORIGINS = https://smoke.aicountly.org,http://localhost:5173,http://127.0.0.1:5173

@@ -14,6 +14,13 @@ class App extends BaseConfig
 
     public string $uriProtocol = 'REQUEST_URI';
 
+    /**
+     * Allowed URL characters (regex character class). Required by CI4.4.7+ Router.
+     *
+     * @see https://codeigniter4.github.io/userguide/general/urls.html#uri-security
+     */
+    public string $permittedURIChars = 'a-z 0-9~%.:_\-';
+
     public string $defaultLocale = 'en';
 
     public bool $negotiateLocale = false;
