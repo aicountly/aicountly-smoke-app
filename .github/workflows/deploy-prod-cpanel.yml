@@ -8,11 +8,8 @@ name: Deploy to cPanel via SSH (manual Production)
 #   /worker/              ← Playwright worker (not web-facing)
 #   /samples/ /migrations/ /smoke-reports/
 #
-# Secrets (SSH): PROD_SSH_HOST, PROD_SSH_PORT, PROD_SSH_USER, PROD_REMOTE_ROOT, PROD_SSH_PRIVATE_KEY
-# Secrets (app):  DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD,
-#                  JWT_SECRET, SMOKE_VAULT_KEY, WORKER_SHARED_TOKEN
-# Optional:        PROD_APP_BASE_URL, CORS_ALLOW_ORIGINS, VITE_API_BASE_URL, VITE_APP_NAME,
-#                  OPENAI_API_KEY, GEMINI_API_KEY, PERPLEXITY_API_KEY
+# Secrets (SSH only): PROD_SSH_HOST, PROD_SSH_PORT, PROD_SSH_USER, PROD_REMOTE_ROOT, PROD_SSH_PRIVATE_KEY
+# App config: maintain api/.env manually on the server — deploy never creates or overwrites it.
 on:
   workflow_dispatch:
 
@@ -42,15 +39,8 @@ jobs:
           if [ -z "${{ secrets.PROD_SSH_USER }}" ]; then echo "::error::Missing repository secret: PROD_SSH_USER"; missing=1; fi
           if [ -z "${{ secrets.PROD_SSH_PRIVATE_KEY }}" ]; then echo "::error::Missing repository secret: PROD_SSH_PRIVATE_KEY"; missing=1; fi
           if [ -z "${{ secrets.PROD_REMOTE_ROOT }}" ]; then echo "::error::Missing repository secret: PROD_REMOTE_ROOT"; missing=1; fi
-          if [ -z "${{ secrets.DB_HOST }}" ]; then echo "::error::Missing repository secret: DB_HOST"; missing=1; fi
-          if [ -z "${{ secrets.DB_DATABASE }}" ]; then echo "::error::Missing repository secret: DB_DATABASE"; missing=1; fi
-          if [ -z "${{ secrets.DB_USERNAME }}" ]; then echo "::error::Missing repository secret: DB_USERNAME"; missing=1; fi
-          if [ -z "${{ secrets.DB_PASSWORD }}" ]; then echo "::error::Missing repository secret: DB_PASSWORD"; missing=1; fi
-          if [ -z "${{ secrets.JWT_SECRET }}" ]; then echo "::error::Missing repository secret: JWT_SECRET"; missing=1; fi
-          if [ -z "${{ secrets.SMOKE_VAULT_KEY }}" ]; then echo "::error::Missing repository secret: SMOKE_VAULT_KEY"; missing=1; fi
-          if [ -z "${{ secrets.WORKER_SHARED_TOKEN }}" ]; then echo "::error::Missing repository secret: WORKER_SHARED_TOKEN"; missing=1; fi
           if [ "$missing" -ne 0 ]; then exit 1; fi
-          echo "All required deploy secrets are present."
+          echo "All required SSH deploy secrets are present."
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -68,15 +58,12 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Create frontend .env for production
+      - name: Create frontend .env for production build
         working-directory: frontend
-        env:
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-          VITE_APP_NAME: ${{ secrets.VITE_APP_NAME }}
         run: |
           printf 'VITE_API_BASE_URL=%s\nVITE_APP_NAME=%s\n' \
-            "${VITE_API_BASE_URL:-/api/v1}" \
-            "${VITE_APP_NAME:-AICountly Smoke}" \
+            "/api/v1" \
+            "AICountly Smoke" \
             > .env
 
       - name: Build frontend
@@ -146,62 +133,17 @@ jobs:
             --exclude 'writable/debugbar/*' \
             backend/ "cpanel-prod:${REMOTE_ROOT}/api/"
 
-      - name: Write api production .env from secrets
+      - name: Verify server api/.env exists
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_DATABASE: ${{ secrets.DB_DATABASE }}
-          DB_USERNAME: ${{ secrets.DB_USERNAME }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          SMOKE_VAULT_KEY: ${{ secrets.SMOKE_VAULT_KEY }}
-          WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
-          PROD_APP_BASE_URL: ${{ secrets.PROD_APP_BASE_URL }}
-          CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
         run: |
           REMOTE_ROOT="${REMOTE_ROOT%/}"
-          APP_BASE="${PROD_APP_BASE_URL:-https://smoke.aicountly.org/}"
-          CORS="${CORS_ALLOW_ORIGINS:-https://smoke.aicountly.org}"
-          {
-            echo "CI_ENVIRONMENT=production"
-            echo "app.baseURL=${APP_BASE}"
-            echo "app.indexPage="
-            echo ""
-            echo "database.default.hostname=${DB_HOST}"
-            echo "database.default.port=${DB_PORT:-5432}"
-            echo "database.default.database=${DB_DATABASE}"
-            echo "database.default.username=${DB_USERNAME}"
-            echo "database.default.password=${DB_PASSWORD}"
-            echo "database.default.DBDriver=Postgre"
-            echo "database.default.DBPrefix="
-            echo "database.default.charset=utf8"
-            echo ""
-            echo "JWT_SECRET=${JWT_SECRET}"
-            echo "JWT_ACCESS_TTL=86400"
-            echo "JWT_REFRESH_TTL=2592000"
-            echo "JWT_ISSUER=smoke.aicountly.org"
-            echo ""
-            echo "SMOKE_VAULT_KEY=${SMOKE_VAULT_KEY}"
-            echo "SMOKE_VAULT_KEY_VERSION=1"
-            echo ""
-            echo "WORKER_SHARED_TOKEN=${WORKER_SHARED_TOKEN}"
-            echo "WORKER_BACKEND_URL=https://smoke.aicountly.org/api/v1"
-            echo ""
-            echo "REPORTS_DIR=../smoke-reports"
-            echo "CORS_ALLOW_ORIGINS=${CORS}"
-            echo ""
-            echo "OPENAI_API_KEY=${OPENAI_API_KEY}"
-            echo "GEMINI_API_KEY=${GEMINI_API_KEY}"
-            echo "PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}"
-          } > /tmp/smoke-api.env
-          scp -i ~/.ssh/deploy_key -P "${{ secrets.PROD_SSH_PORT }}" /tmp/smoke-api.env \
-            "cpanel-prod:${REMOTE_ROOT}/api/.env"
-          ssh cpanel-prod "chmod 600 '${REMOTE_ROOT}/api/.env'"
-          echo "Production .env written to ${REMOTE_ROOT}/api/.env"
+          if ! ssh cpanel-prod "test -f '${REMOTE_ROOT}/api/.env'"; then
+            echo "::error::${REMOTE_ROOT}/api/.env not found on the server."
+            echo "Create it manually in cPanel (copy from backend/env) — deploy never writes or overwrites .env."
+            exit 1
+          fi
+          echo "Server api/.env present — will be used for migrations (unchanged by deploy)."
 
       - name: Rsync worker
         env:
