@@ -11,12 +11,14 @@ permissions:
   pages: write
   id-token: write
 
+# One Pages deploy at a time; cancel queued workflow runs (not the CDN purge itself).
 concurrency:
   group: github-pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
-  NODE_VERSION: "20"
+  NODE_VERSION: "24"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
@@ -68,7 +70,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     permissions:
       pages: write
       id-token: write
@@ -76,11 +78,28 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Cancel stuck GitHub Pages deployments
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh api "repos/${{ github.repository }}/pages/deployments" --paginate \
+            -q '.[] | select(.status=="queued" or .status=="in_progress") | .id' || true)
+          if [ -z "$ids" ]; then
+            echo "No stuck Pages deployments."
+            exit 0
+          fi
+          for id in $ids; do
+            echo "Cancelling Pages deployment ${id}..."
+            gh api --method POST "repos/${{ github.repository }}/pages/deployments/${id}/cancel" || true
+          done
+          echo "Waiting 15s for GitHub to release the deployment lock..."
+          sleep 15
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
         with:
-          # Default 10m is often too short when GitHub CDN purge is slow.
-          timeout: 1200000
+          timeout: 600000
           error_count: 30
           reporting_interval: 10000
