@@ -1,8 +1,14 @@
 name: Deploy to cPanel via SSH (manual Production)
 
 # Manual-only. Trigger via Actions UI → Run workflow (no prompts).
-# Always: full rsync (backend + frontend + worker + samples) then php spark migrate.
-# Secrets: PROD_SSH_HOST, PROD_SSH_PORT, PROD_SSH_USER, PROD_REMOTE_ROOT, PROD_SSH_PRIVATE_KEY.
+#
+# cPanel layout (PROD_REMOTE_ROOT = document root, e.g. public_html):
+#   /                     ← frontend/dist (index.html, assets/)
+#   /api/                 ← backend/ (CodeIgniter — api/public/index.php)
+#   /worker/              ← Playwright worker (not web-facing)
+#   /samples/ /migrations/ /smoke-reports/
+#
+# Secrets: PROD_SSH_HOST, PROD_SSH_PORT, PROD_SSH_USER, PROD_REMOTE_ROOT, PROD_SSH_PRIVATE_KEY
 on:
   workflow_dispatch:
 
@@ -13,10 +19,6 @@ concurrency:
 env:
   NODE_VERSION: "20"
   PHP_VERSION: "8.2"
-  PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-  PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
-  PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
-  PROD_REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
 
 jobs:
   deploy:
@@ -55,8 +57,24 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Create frontend .env for production
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          VITE_APP_NAME: ${{ secrets.VITE_APP_NAME }}
+        run: |
+          printf 'VITE_API_BASE_URL=%s\nVITE_APP_NAME=%s\n' \
+            "${VITE_API_BASE_URL:-/api/v1}" \
+            "${VITE_APP_NAME:-AICountly Smoke}" \
+            > .env
+
       - name: Build frontend
         run: npm run frontend:build
+
+      - name: Prepare frontend for document root
+        run: |
+          cp deploy/public_html.htaccess frontend/dist/.htaccess
+          cp frontend/dist/index.html frontend/dist/404.html
 
       - name: Build worker
         run: npm run worker:build
@@ -88,22 +106,24 @@ jobs:
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
           ssh cpanel-prod "mkdir -p \
-            '${REMOTE_ROOT}/backend' \
-            '${REMOTE_ROOT}/frontend' \
+            '${REMOTE_ROOT}/api' \
             '${REMOTE_ROOT}/worker' \
             '${REMOTE_ROOT}/samples' \
             '${REMOTE_ROOT}/smoke-reports' \
             '${REMOTE_ROOT}/migrations' \
-            '${REMOTE_ROOT}/backend/writable/cache' \
-            '${REMOTE_ROOT}/backend/writable/logs' \
-            '${REMOTE_ROOT}/backend/writable/session' \
-            '${REMOTE_ROOT}/backend/writable/uploads'"
+            '${REMOTE_ROOT}/api/writable/cache' \
+            '${REMOTE_ROOT}/api/writable/logs' \
+            '${REMOTE_ROOT}/api/writable/session' \
+            '${REMOTE_ROOT}/api/writable/uploads'"
 
-      - name: Rsync backend
+      # backend → api/ (same pattern as aicountly-qa server-php → public_html/api/)
+      - name: Rsync backend to api/
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
           rsync -avz --delete \
             --exclude '.env' \
             --exclude '.git/' \
@@ -113,19 +133,13 @@ jobs:
             --exclude 'writable/session/*' \
             --exclude 'writable/uploads/*' \
             --exclude 'writable/debugbar/*' \
-            backend/ "cpanel-prod:${REMOTE_ROOT}/backend/"
-
-      - name: Rsync frontend
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          rsync -avz --delete \
-            frontend/dist/ "cpanel-prod:${REMOTE_ROOT}/frontend/"
+            backend/ "cpanel-prod:${REMOTE_ROOT}/api/"
 
       - name: Rsync worker
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
           rsync -avz --delete \
             worker/dist/ "cpanel-prod:${REMOTE_ROOT}/worker/dist/"
           rsync -avz \
@@ -135,15 +149,38 @@ jobs:
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
           rsync -avz samples/ "cpanel-prod:${REMOTE_ROOT}/samples/"
           rsync -avz migrations/ "cpanel-prod:${REMOTE_ROOT}/migrations/"
           rsync -avz --exclude '*/' \
             smoke-reports/.gitkeep "cpanel-prod:${REMOTE_ROOT}/smoke-reports/" || true
 
+      # frontend/dist → document root; preserve api/, worker/, etc.
+      - name: Rsync frontend to document root
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          rsync -avz --delete \
+            --exclude 'api/' \
+            --exclude 'worker/' \
+            --exclude 'samples/' \
+            --exclude 'smoke-reports/' \
+            --exclude 'migrations/' \
+            frontend/dist/ "cpanel-prod:${REMOTE_ROOT}/"
+
+      - name: Remove obsolete deploy folders
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          ssh cpanel-prod "rm -rf '${REMOTE_ROOT}/backend' '${REMOTE_ROOT}/frontend'"
+
       - name: Install worker production dependencies on server
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
           ssh cpanel-prod "cd '${REMOTE_ROOT}/worker' && \
             if command -v npm >/dev/null 2>&1; then \
               npm ci --omit=dev --ignore-scripts 2>/dev/null || npm install --omit=dev --ignore-scripts; \
@@ -155,24 +192,36 @@ jobs:
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
-          ssh cpanel-prod "cd '${REMOTE_ROOT}/backend' && php spark migrate --all --no-interaction"
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark migrate --all --no-interaction"
 
       - name: Set backend writable permissions
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
-          ssh cpanel-prod "chmod -R ug+rwx '${REMOTE_ROOT}/backend/writable' || true"
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          ssh cpanel-prod "chmod -R ug+rwx '${REMOTE_ROOT}/api/writable' || true"
+
+      - name: Verify remote deploy
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          ssh cpanel-prod "ls -la '${REMOTE_ROOT}/index.html' '${REMOTE_ROOT}/api/public/index.php'"
 
       - name: Deploy summary
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
           {
             echo "## cPanel production deploy"
             echo ""
-            echo "Full stack rsync + migrations completed."
+            echo "| Path | Purpose |"
+            echo "|---|---|"
+            echo "| \`${REMOTE_ROOT}/\` | React portal (index.html) |"
+            echo "| \`${REMOTE_ROOT}/api/\` | CodeIgniter API |"
+            echo "| \`${REMOTE_ROOT}/worker/\` | Playwright worker |"
             echo ""
-            echo "| Remote root | \`${REMOTE_ROOT}\` |"
-            echo ""
-            echo "> Verify the app on production."
+            echo "> Open https://smoke.aicountly.org/ — should show the login page, not a directory listing."
           } >> "$GITHUB_STEP_SUMMARY"

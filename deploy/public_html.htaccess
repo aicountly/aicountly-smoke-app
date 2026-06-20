@@ -1,0 +1,16 @@
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # CodeIgniter API — backend deployed to api/ (public/ is the front controller)
+    RewriteRule ^api/v1/(.*)$ api/public/index.php/api/v1/$1 [L,QSA,NC]
+    RewriteRule ^api/v1/?$ api/public/index.php/api/v1 [L,QSA,NC]
+
+    # React SPA — all other routes
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} !^/api/
+    RewriteRule ^ index.html [L]
+</IfModule>
