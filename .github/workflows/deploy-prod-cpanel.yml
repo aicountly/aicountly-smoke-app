@@ -8,7 +8,11 @@ name: Deploy to cPanel via SSH (manual Production)
 #   /worker/              ← Playwright worker (not web-facing)
 #   /samples/ /migrations/ /smoke-reports/
 #
-# Secrets: PROD_SSH_HOST, PROD_SSH_PORT, PROD_SSH_USER, PROD_REMOTE_ROOT, PROD_SSH_PRIVATE_KEY
+# Secrets (SSH): PROD_SSH_HOST, PROD_SSH_PORT, PROD_SSH_USER, PROD_REMOTE_ROOT, PROD_SSH_PRIVATE_KEY
+# Secrets (app):  DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD,
+#                  JWT_SECRET, SMOKE_VAULT_KEY, WORKER_SHARED_TOKEN
+# Optional:        PROD_APP_BASE_URL, CORS_ALLOW_ORIGINS, VITE_API_BASE_URL, VITE_APP_NAME,
+#                  OPENAI_API_KEY, GEMINI_API_KEY, PERPLEXITY_API_KEY
 on:
   workflow_dispatch:
 
@@ -38,6 +42,13 @@ jobs:
           if [ -z "${{ secrets.PROD_SSH_USER }}" ]; then echo "::error::Missing repository secret: PROD_SSH_USER"; missing=1; fi
           if [ -z "${{ secrets.PROD_SSH_PRIVATE_KEY }}" ]; then echo "::error::Missing repository secret: PROD_SSH_PRIVATE_KEY"; missing=1; fi
           if [ -z "${{ secrets.PROD_REMOTE_ROOT }}" ]; then echo "::error::Missing repository secret: PROD_REMOTE_ROOT"; missing=1; fi
+          if [ -z "${{ secrets.DB_HOST }}" ]; then echo "::error::Missing repository secret: DB_HOST"; missing=1; fi
+          if [ -z "${{ secrets.DB_DATABASE }}" ]; then echo "::error::Missing repository secret: DB_DATABASE"; missing=1; fi
+          if [ -z "${{ secrets.DB_USERNAME }}" ]; then echo "::error::Missing repository secret: DB_USERNAME"; missing=1; fi
+          if [ -z "${{ secrets.DB_PASSWORD }}" ]; then echo "::error::Missing repository secret: DB_PASSWORD"; missing=1; fi
+          if [ -z "${{ secrets.JWT_SECRET }}" ]; then echo "::error::Missing repository secret: JWT_SECRET"; missing=1; fi
+          if [ -z "${{ secrets.SMOKE_VAULT_KEY }}" ]; then echo "::error::Missing repository secret: SMOKE_VAULT_KEY"; missing=1; fi
+          if [ -z "${{ secrets.WORKER_SHARED_TOKEN }}" ]; then echo "::error::Missing repository secret: WORKER_SHARED_TOKEN"; missing=1; fi
           if [ "$missing" -ne 0 ]; then exit 1; fi
           echo "All required deploy secrets are present."
 
@@ -135,6 +146,63 @@ jobs:
             --exclude 'writable/debugbar/*' \
             backend/ "cpanel-prod:${REMOTE_ROOT}/api/"
 
+      - name: Write api production .env from secrets
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_DATABASE: ${{ secrets.DB_DATABASE }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SMOKE_VAULT_KEY: ${{ secrets.SMOKE_VAULT_KEY }}
+          WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+          PROD_APP_BASE_URL: ${{ secrets.PROD_APP_BASE_URL }}
+          CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          APP_BASE="${PROD_APP_BASE_URL:-https://smoke.aicountly.org/}"
+          CORS="${CORS_ALLOW_ORIGINS:-https://smoke.aicountly.org}"
+          {
+            echo "CI_ENVIRONMENT=production"
+            echo "app.baseURL=${APP_BASE}"
+            echo "app.indexPage="
+            echo ""
+            echo "database.default.hostname=${DB_HOST}"
+            echo "database.default.port=${DB_PORT:-5432}"
+            echo "database.default.database=${DB_DATABASE}"
+            echo "database.default.username=${DB_USERNAME}"
+            echo "database.default.password=${DB_PASSWORD}"
+            echo "database.default.DBDriver=Postgre"
+            echo "database.default.DBPrefix="
+            echo "database.default.charset=utf8"
+            echo ""
+            echo "JWT_SECRET=${JWT_SECRET}"
+            echo "JWT_ACCESS_TTL=86400"
+            echo "JWT_REFRESH_TTL=2592000"
+            echo "JWT_ISSUER=smoke.aicountly.org"
+            echo ""
+            echo "SMOKE_VAULT_KEY=${SMOKE_VAULT_KEY}"
+            echo "SMOKE_VAULT_KEY_VERSION=1"
+            echo ""
+            echo "WORKER_SHARED_TOKEN=${WORKER_SHARED_TOKEN}"
+            echo "WORKER_BACKEND_URL=https://smoke.aicountly.org/api/v1"
+            echo ""
+            echo "REPORTS_DIR=../smoke-reports"
+            echo "CORS_ALLOW_ORIGINS=${CORS}"
+            echo ""
+            echo "OPENAI_API_KEY=${OPENAI_API_KEY}"
+            echo "GEMINI_API_KEY=${GEMINI_API_KEY}"
+            echo "PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}"
+          } > /tmp/smoke-api.env
+          scp -i ~/.ssh/deploy_key -P "${{ secrets.PROD_SSH_PORT }}" /tmp/smoke-api.env \
+            "cpanel-prod:${REMOTE_ROOT}/api/.env"
+          ssh cpanel-prod "chmod 600 '${REMOTE_ROOT}/api/.env'"
+          echo "Production .env written to ${REMOTE_ROOT}/api/.env"
+
       - name: Rsync worker
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
@@ -193,7 +261,26 @@ jobs:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
           REMOTE_ROOT="${REMOTE_ROOT%/}"
-          ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark migrate --all --no-interaction"
+          if ! ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark migrate --all --no-interaction"; then
+            echo "::error::Migration failed — diagnostics:"
+            ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && (test -f .env && echo '.env: present' || echo '.env: MISSING') && php -m | grep -i pgsql || echo 'pgsql PHP extension: NOT loaded'"
+            ssh cpanel-prod "ls -la '${REMOTE_ROOT}/api/writable/logs/' 2>/dev/null; tail -30 '${REMOTE_ROOT}/api/writable/logs/log-'*.log 2>/dev/null || true"
+            exit 1
+          fi
+
+      - name: Run database seeders (first deploy only)
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          MARKER="${REMOTE_ROOT}/api/writable/.smoke_seed_complete"
+          if ssh cpanel-prod "test -f '${MARKER}'"; then
+            echo "Seeders already applied — skipping."
+            exit 0
+          fi
+          echo "First deploy — running InitialSeeder..."
+          ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark db:seed InitialSeeder"
+          ssh cpanel-prod "touch '${MARKER}' && chmod 644 '${MARKER}'"
 
       - name: Set backend writable permissions
         env:
