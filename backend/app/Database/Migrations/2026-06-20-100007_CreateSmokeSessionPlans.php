@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeSessionPlans extends Migration
 {
@@ -18,8 +19,8 @@ class CreateSmokeSessionPlans extends Migration
             'approved_by'       => ['type' => 'BIGINT', 'unsigned' => true, 'null' => true],
             'approved_at'       => ['type' => 'TIMESTAMP', 'null' => true],
             'rejected_reason'   => ['type' => 'TEXT', 'null' => true],
-            'created_at'        => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
-            'updated_at'        => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'        => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
+            'updated_at'        => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('master_prompt_id');

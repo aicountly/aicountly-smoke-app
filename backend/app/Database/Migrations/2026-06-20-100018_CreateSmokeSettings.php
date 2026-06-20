@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeSettings extends Migration
 {
@@ -15,8 +16,8 @@ class CreateSmokeSettings extends Migration
             'description' => ['type' => 'TEXT', 'null' => true],
             'is_secret'   => ['type' => 'BOOLEAN', 'default' => false],
             'updated_by'  => ['type' => 'BIGINT', 'unsigned' => true, 'null' => true],
-            'updated_at'  => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
-            'created_at'  => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'updated_at'  => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
+            'created_at'  => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addUniqueKey('key');

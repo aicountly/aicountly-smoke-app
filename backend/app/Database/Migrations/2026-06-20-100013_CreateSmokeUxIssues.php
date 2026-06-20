@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeUxIssues extends Migration
 {
@@ -20,7 +21,7 @@ class CreateSmokeUxIssues extends Migration
             'recommendation'  => ['type' => 'TEXT', 'null' => true],
             'developer_prompt'=> ['type' => 'TEXT', 'null' => true],
             'evidence_json'   => ['type' => 'JSONB', 'null' => true],
-            'created_at'      => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'      => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('run_id');

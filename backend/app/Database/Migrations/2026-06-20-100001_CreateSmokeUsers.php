@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeUsers extends Migration
 {
@@ -19,8 +20,8 @@ class CreateSmokeUsers extends Migration
             'mfa_secret'      => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
             'last_login_at'   => ['type' => 'TIMESTAMP', 'null' => true],
             'last_login_ip'   => ['type' => 'VARCHAR', 'constraint' => 64, 'null' => true],
-            'created_at'      => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
-            'updated_at'      => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'      => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
+            'updated_at'      => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addUniqueKey('email');

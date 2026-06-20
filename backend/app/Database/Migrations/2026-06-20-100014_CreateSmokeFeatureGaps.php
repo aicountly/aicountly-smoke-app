@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeFeatureGaps extends Migration
 {
@@ -22,7 +23,7 @@ class CreateSmokeFeatureGaps extends Migration
             'developer_prompt'  => ['type' => 'TEXT', 'null' => true],
             'notes'             => ['type' => 'TEXT', 'null' => true],
             'sources_json'      => ['type' => 'JSONB', 'null' => true],
-            'created_at'        => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'        => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('run_id');

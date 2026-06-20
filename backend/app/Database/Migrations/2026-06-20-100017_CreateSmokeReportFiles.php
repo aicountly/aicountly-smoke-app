@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeReportFiles extends Migration
 {
@@ -16,7 +17,7 @@ class CreateSmokeReportFiles extends Migration
             'size_bytes' => ['type' => 'BIGINT', 'null' => true],
             'sha256'     => ['type' => 'VARCHAR', 'constraint' => 128, 'null' => true],
             'kind'       => ['type' => 'VARCHAR', 'constraint' => 32, 'default' => 'evidence'],
-            'created_at' => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at' => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('report_id');

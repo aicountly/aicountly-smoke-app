@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeTargetProfiles extends Migration
 {
@@ -28,8 +29,8 @@ class CreateSmokeTargetProfiles extends Migration
             'status'                   => ['type' => 'VARCHAR', 'constraint' => 32, 'default' => 'active'],
             'created_by'               => ['type' => 'BIGINT', 'unsigned' => true, 'null' => true],
             'updated_by'               => ['type' => 'BIGINT', 'unsigned' => true, 'null' => true],
-            'created_at'               => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
-            'updated_at'               => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'               => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
+            'updated_at'               => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('product_name');

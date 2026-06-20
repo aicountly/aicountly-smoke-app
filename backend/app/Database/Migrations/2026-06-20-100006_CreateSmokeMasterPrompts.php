@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeMasterPrompts extends Migration
 {
@@ -18,8 +19,8 @@ class CreateSmokeMasterPrompts extends Migration
             'parsed_objective_json' => ['type' => 'JSONB', 'null' => true],
             'brain_response_json'   => ['type' => 'JSONB', 'null' => true],
             'status'                => ['type' => 'VARCHAR', 'constraint' => 32, 'default' => 'draft'],
-            'created_at'            => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
-            'updated_at'            => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'            => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
+            'updated_at'            => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('user_id');

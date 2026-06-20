@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeUserRoles extends Migration
 {
@@ -11,7 +12,7 @@ class CreateSmokeUserRoles extends Migration
         $this->forge->addField([
             'user_id'     => ['type' => 'BIGINT', 'unsigned' => true, 'null' => false],
             'role_id'     => ['type' => 'BIGINT', 'unsigned' => true, 'null' => false],
-            'assigned_at' => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'assigned_at' => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
             'assigned_by' => ['type' => 'BIGINT', 'unsigned' => true, 'null' => true],
         ]);
         $this->forge->addPrimaryKey(['user_id', 'role_id']);

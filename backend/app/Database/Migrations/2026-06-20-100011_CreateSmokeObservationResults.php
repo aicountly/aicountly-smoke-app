@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeObservationResults extends Migration
 {
@@ -20,7 +21,7 @@ class CreateSmokeObservationResults extends Migration
             'console_errors_json' => ['type' => 'JSONB', 'null' => true],
             'network_errors_json' => ['type' => 'JSONB', 'null' => true],
             'performance_json'    => ['type' => 'JSONB', 'null' => true],
-            'captured_at'         => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'captured_at'         => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('run_id');

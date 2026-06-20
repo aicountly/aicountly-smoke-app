@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeAuditLogs extends Migration
 {
@@ -17,7 +18,7 @@ class CreateSmokeAuditLogs extends Migration
             'ip'           => ['type' => 'VARCHAR', 'constraint' => 64, 'null' => true],
             'user_agent'   => ['type' => 'VARCHAR', 'constraint' => 512, 'null' => true],
             'payload_json' => ['type' => 'JSONB', 'null' => true],
-            'created_at'   => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'   => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('user_id');

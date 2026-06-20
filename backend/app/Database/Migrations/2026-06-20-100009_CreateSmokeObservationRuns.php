@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeObservationRuns extends Migration
 {
@@ -23,8 +24,8 @@ class CreateSmokeObservationRuns extends Migration
             'completed_at'        => ['type' => 'TIMESTAMP', 'null' => true],
             'triggered_by'        => ['type' => 'BIGINT', 'unsigned' => true, 'null' => true],
             'reports_dir'         => ['type' => 'VARCHAR', 'constraint' => 512, 'null' => true],
-            'created_at'          => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
-            'updated_at'          => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'          => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
+            'updated_at'          => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addUniqueKey('run_code');

@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeCredentials extends Migration
 {
@@ -18,8 +19,8 @@ class CreateSmokeCredentials extends Migration
             'kind'               => ['type' => 'VARCHAR', 'constraint' => 32, 'default' => 'password'],
             'rotated_at'         => ['type' => 'TIMESTAMP', 'null' => true],
             'created_by'         => ['type' => 'BIGINT', 'unsigned' => true, 'null' => true],
-            'created_at'         => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
-            'updated_at'         => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'         => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
+            'updated_at'         => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('target_profile_id');

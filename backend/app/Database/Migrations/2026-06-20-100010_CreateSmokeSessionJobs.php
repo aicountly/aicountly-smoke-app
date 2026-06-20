@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeSessionJobs extends Migration
 {
@@ -20,8 +21,8 @@ class CreateSmokeSessionJobs extends Migration
             'attempts'        => ['type' => 'INTEGER', 'default' => 0],
             'max_attempts'    => ['type' => 'INTEGER', 'default' => 2],
             'last_error'      => ['type' => 'TEXT', 'null' => true],
-            'created_at'      => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
-            'updated_at'      => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'      => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
+            'updated_at'      => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey(['run_id', 'ordinal']);

@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeRoles extends Migration
 {
@@ -13,7 +14,7 @@ class CreateSmokeRoles extends Migration
             'code'        => ['type' => 'VARCHAR', 'constraint' => 64, 'null' => false],
             'name'        => ['type' => 'VARCHAR', 'constraint' => 128, 'null' => false],
             'description' => ['type' => 'TEXT', 'null' => true],
-            'created_at'  => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'  => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addUniqueKey('code');

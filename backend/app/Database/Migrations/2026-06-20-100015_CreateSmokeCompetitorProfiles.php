@@ -3,6 +3,7 @@
 namespace App\Database\Migrations;
 
 use CodeIgniter\Database\Migration;
+use CodeIgniter\Database\RawSql;
 
 class CreateSmokeCompetitorProfiles extends Migration
 {
@@ -16,8 +17,8 @@ class CreateSmokeCompetitorProfiles extends Migration
             'source_url'        => ['type' => 'VARCHAR', 'constraint' => 512, 'null' => true],
             'enabled'           => ['type' => 'BOOLEAN', 'default' => true],
             'notes'             => ['type' => 'TEXT', 'null' => true],
-            'created_at'        => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
-            'updated_at'        => ['type' => 'TIMESTAMP', 'default' => 'CURRENT_TIMESTAMP'],
+            'created_at'        => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
+            'updated_at'        => ['type' => 'TIMESTAMP', 'default' => new RawSql('CURRENT_TIMESTAMP')],
         ]);
         $this->forge->addPrimaryKey('id');
         $this->forge->addKey('product_name');
