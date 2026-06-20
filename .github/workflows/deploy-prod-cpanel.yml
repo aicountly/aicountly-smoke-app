@@ -5,8 +5,17 @@ name: Deploy to cPanel via SSH (manual Production)
 on:
   workflow_dispatch:
     inputs:
+      action:
+        description: What to run on production
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - migrate
+          - deploy-and-migrate
       target:
-        description: What to deploy
+        description: What to deploy (ignored for migrate-only)
         required: true
         default: full
         type: choice
@@ -15,11 +24,11 @@ on:
           - frontend
           - backend
           - worker
-      run_migrations:
-        description: Run `php spark migrate` on the server after backend deploy
+      confirm:
+        description: Type "migrate" when action includes database migrations
         required: false
-        default: false
-        type: boolean
+        default: ""
+        type: string
       dry_run:
         description: Preview rsync changes without uploading (--dry-run)
         required: false
@@ -36,12 +45,21 @@ env:
 
 jobs:
   deploy:
-    name: Rsync to cPanel (${{ inputs.target }})
+    name: ${{ inputs.action }} → cPanel (${{ inputs.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
+      - name: Confirm production migration
+        if: inputs.action == 'migrate' || inputs.action == 'deploy-and-migrate'
+        run: |
+          if [ "${{ inputs.confirm }}" != "migrate" ]; then
+            echo "::error::Confirmation failed. Type exactly: migrate"
+            exit 1
+          fi
+
       - name: Checkout
+        if: inputs.action != 'migrate'
         uses: actions/checkout@v4
 
       - name: Validate deploy secrets
@@ -56,14 +74,14 @@ jobs:
           echo "All required deploy secrets are present."
 
       - name: Setup Node.js
-        if: inputs.target == 'full' || inputs.target == 'frontend' || inputs.target == 'worker'
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'frontend' || inputs.target == 'worker')
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Setup PHP
-        if: inputs.target == 'full' || inputs.target == 'backend'
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'backend')
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
@@ -71,19 +89,19 @@ jobs:
           tools: composer:v2
 
       - name: Install Node dependencies
-        if: inputs.target == 'full' || inputs.target == 'frontend' || inputs.target == 'worker'
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'frontend' || inputs.target == 'worker')
         run: npm ci
 
       - name: Build frontend
-        if: inputs.target == 'full' || inputs.target == 'frontend'
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'frontend')
         run: npm run frontend:build
 
       - name: Build worker
-        if: inputs.target == 'full' || inputs.target == 'worker'
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'worker')
         run: npm run worker:build
 
       - name: Install backend dependencies (production)
-        if: inputs.target == 'full' || inputs.target == 'backend'
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'backend')
         working-directory: backend
         run: |
           composer config audit.block-insecure false
@@ -107,6 +125,7 @@ jobs:
           chmod 600 ~/.ssh/config
 
       - name: Ensure remote directories exist
+        if: inputs.action != 'migrate'
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
@@ -123,7 +142,7 @@ jobs:
             '${REMOTE_ROOT}/backend/writable/uploads'"
 
       - name: Rsync backend
-        if: inputs.target == 'full' || inputs.target == 'backend'
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'backend')
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
           RSYNC_DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
@@ -140,7 +159,7 @@ jobs:
             backend/ "cpanel-prod:${REMOTE_ROOT}/backend/"
 
       - name: Rsync frontend
-        if: inputs.target == 'full' || inputs.target == 'frontend'
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'frontend')
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
           RSYNC_DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
@@ -149,7 +168,7 @@ jobs:
             frontend/dist/ "cpanel-prod:${REMOTE_ROOT}/frontend/"
 
       - name: Rsync worker
-        if: inputs.target == 'full' || inputs.target == 'worker'
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'worker')
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
           RSYNC_DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
@@ -160,7 +179,7 @@ jobs:
             worker/package.json "cpanel-prod:${REMOTE_ROOT}/worker/package.json"
 
       - name: Rsync shared assets
-        if: inputs.target == 'full'
+        if: inputs.action != 'migrate' && inputs.target == 'full'
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
           RSYNC_DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
@@ -174,7 +193,7 @@ jobs:
             smoke-reports/.gitkeep "cpanel-prod:${REMOTE_ROOT}/smoke-reports/" || true
 
       - name: Install worker production dependencies on server
-        if: (inputs.target == 'full' || inputs.target == 'worker') && !inputs.dry_run
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'worker') && !inputs.dry_run
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
@@ -186,14 +205,18 @@ jobs:
             fi"
 
       - name: Run database migrations
-        if: inputs.run_migrations && (inputs.target == 'full' || inputs.target == 'backend') && !inputs.dry_run
+        if: |
+          !inputs.dry_run && (
+            inputs.action == 'migrate' ||
+            (inputs.action == 'deploy-and-migrate' && (inputs.target == 'full' || inputs.target == 'backend'))
+          )
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
           ssh cpanel-prod "cd '${REMOTE_ROOT}/backend' && php spark migrate --all --no-interaction"
 
       - name: Set backend writable permissions
-        if: (inputs.target == 'full' || inputs.target == 'backend') && !inputs.dry_run
+        if: inputs.action != 'migrate' && (inputs.target == 'full' || inputs.target == 'backend') && !inputs.dry_run
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
@@ -204,18 +227,20 @@ jobs:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
           {
-            echo "## cPanel deploy summary"
+            echo "## cPanel production summary"
             echo ""
             echo "| Setting | Value |"
             echo "|---|---|"
+            echo "| Action | \`${{ inputs.action }}\` |"
             echo "| Target | \`${{ inputs.target }}\` |"
             echo "| Dry run | \`${{ inputs.dry_run }}\` |"
-            echo "| Migrations | \`${{ inputs.run_migrations }}\` |"
             echo "| Remote root | \`${REMOTE_ROOT}\` |"
             echo ""
             if [ "${{ inputs.dry_run }}" = "true" ]; then
               echo "> Dry run only — no files were changed on the server."
+            elif [ "${{ inputs.action }}" = "migrate" ]; then
+              echo "> Migrations finished. Verify the app on production."
             else
-              echo "> Deploy finished. Verify the app on production."
+              echo "> Finished. Verify the app on production."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
