@@ -16,6 +16,10 @@ class JwtAuthFilter implements FilterInterface
     public function before(RequestInterface $request, $arguments = null)
     {
         $auth = $request->getHeaderLine('Authorization');
+        if ($auth === '') {
+            // Apache/CGI often drops Authorization before PHP; .htaccess sets this env var.
+            $auth = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
+        }
         if ($auth === '' || stripos($auth, 'Bearer ') !== 0) {
             return $this->unauthorized('Missing bearer token');
         }

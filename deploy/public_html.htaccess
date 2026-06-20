@@ -4,6 +4,10 @@ Options -Indexes
     RewriteEngine On
     RewriteBase /
 
+    # Pass Authorization through to PHP (stripped by default on CGI/FastCGI).
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
     # CodeIgniter API — backend deployed to api/ (public/ is the front controller)
     RewriteRule ^api/v1/(.*)$ api/public/index.php/api/v1/$1 [L,QSA,NC]
     RewriteRule ^api/v1/?$ api/public/index.php/api/v1 [L,QSA,NC]
