@@ -4,26 +4,26 @@
  * Front controller for smoke.aicountly.org backend.
  */
 
+use CodeIgniter\Boot;
+use Config\Paths;
+
+$minPhpVersion = '8.2';
+if (version_compare(PHP_VERSION, $minPhpVersion, '<')) {
+    header('HTTP/1.1 503 Service Unavailable.', true, 503);
+    echo 'Your PHP version must be ' . $minPhpVersion . ' or higher. Current: ' . PHP_VERSION;
+    exit(1);
+}
+
 define('FCPATH', __DIR__ . DIRECTORY_SEPARATOR);
 
-$pathsConfig = realpath(__DIR__ . '/../app/Config/Paths.php');
-if ($pathsConfig === false || ! is_file($pathsConfig)) {
-    header('Content-Type: text/plain; charset=UTF-8');
-    http_response_code(500);
-    echo "Paths config missing.\n";
-    exit;
+if (getcwd() . DIRECTORY_SEPARATOR !== FCPATH) {
+    chdir(FCPATH);
 }
 
-require $pathsConfig;
-$paths = new Config\Paths();
+require FCPATH . '../app/Config/Paths.php';
 
-$bootstrap = rtrim($paths->systemDirectory, '\\/ ') . DIRECTORY_SEPARATOR . 'bootstrap.php';
-if (! is_file($bootstrap)) {
-    header('Content-Type: text/plain; charset=UTF-8');
-    http_response_code(500);
-    echo "CodeIgniter bootstrap missing. Run `composer install` in backend/.\n";
-    exit;
-}
+$paths = new Paths();
 
-$app = require $bootstrap;
-$app->run();
+require $paths->systemDirectory . '/Boot.php';
+
+exit(Boot::bootWeb($paths));

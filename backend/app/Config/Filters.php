@@ -8,7 +8,7 @@ use App\Filters\JwtAuthFilter;
 use App\Filters\ProductionGuardFilter;
 use App\Filters\RbacFilter;
 use App\Filters\WorkerTokenFilter;
-use CodeIgniter\Config\BaseConfig;
+use CodeIgniter\Config\Filters as BaseFilters;
 use CodeIgniter\Filters\Cors;
 use CodeIgniter\Filters\CSRF;
 use CodeIgniter\Filters\DebugToolbar;
@@ -19,7 +19,7 @@ use CodeIgniter\Filters\PageCache;
 use CodeIgniter\Filters\PerformanceMetrics;
 use CodeIgniter\Filters\SecureHeaders;
 
-class Filters extends BaseConfig
+class Filters extends BaseFilters
 {
     public array $aliases = [
         'csrf'          => CSRF::class,

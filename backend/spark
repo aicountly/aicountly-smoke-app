@@ -2,23 +2,32 @@
 <?php
 
 /**
- * CodeIgniter 4.6 spark CLI bootstrap for smoke.aicountly.org.
+ * CodeIgniter 4 spark CLI bootstrap for smoke.aicountly.org.
  */
 
-define('FCPATH', __DIR__ . DIRECTORY_SEPARATOR . 'public' . DIRECTORY_SEPARATOR);
-define('HOMEPATH', __DIR__ . DIRECTORY_SEPARATOR);
+use CodeIgniter\Boot;
+use Config\Paths;
 
-chdir(__DIR__);
-
-$pathsConfig = realpath(__DIR__ . '/app/Config/Paths.php');
-if ($pathsConfig === false || ! is_file($pathsConfig)) {
-    fwrite(STDERR, "Paths config missing at app/Config/Paths.php\n");
-    exit(1);
+if (str_starts_with(PHP_SAPI, 'cgi')) {
+    exit("The cli tool is not supported when running php-cgi. It needs php-cli to function!\n\n");
 }
 
-require $pathsConfig;
-$paths = new Config\Paths();
+$minPhpVersion = '8.2';
+if (version_compare(PHP_VERSION, $minPhpVersion, '<')) {
+    exit('Your PHP version must be ' . $minPhpVersion . ' or higher. Current: ' . PHP_VERSION . "\n");
+}
 
-require $paths->systemDirectory . '/bootstrap.php';
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
 
-exit((new \CodeIgniter\CLI\Console())->run());
+define('FCPATH', __DIR__ . DIRECTORY_SEPARATOR . 'public' . DIRECTORY_SEPARATOR);
+
+chdir(FCPATH);
+
+require FCPATH . '../app/Config/Paths.php';
+
+$paths = new Paths();
+
+require $paths->systemDirectory . '/Boot.php';
+
+exit(Boot::bootSpark($paths));
