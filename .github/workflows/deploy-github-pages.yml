@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: github-pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   NODE_VERSION: "20"
@@ -68,6 +68,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       pages: write
       id-token: write
@@ -78,3 +79,8 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          # Default 10m is often too short when GitHub CDN purge is slow.
+          timeout: 1200000
+          error_count: 30
+          reporting_interval: 10000
