@@ -1,6 +1,7 @@
-name: Deploy to cPanel (Production)
+name: Deploy to cPanel via SSH (manual Production)
 
-# Manual production deploy only — never runs on push/PR.
+# Manual-only. Trigger via Actions UI → Run workflow.
+# Secrets: PROD_SSH_HOST, PROD_SSH_PORT, PROD_SSH_USER, PROD_REMOTE_ROOT, PROD_SSH_PRIVATE_KEY.
 on:
   workflow_dispatch:
     inputs:
@@ -26,8 +27,8 @@ on:
         type: boolean
 
 concurrency:
-  group: deploy-cpanel-production
-  cancel-in-progress: false
+  group: cpanel-deploy
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: "20"

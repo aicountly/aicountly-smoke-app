@@ -1,6 +1,7 @@
-name: cPanel — Run Migrations
+name: Run Migrations on cPanel via SSH (manual Production)
 
-# Manual database migration only. Does not deploy code.
+# Manual-only. Trigger via Actions UI → Run workflow. Does not deploy code.
+# Secrets: PROD_SSH_HOST, PROD_SSH_PORT, PROD_SSH_USER, PROD_REMOTE_ROOT, PROD_SSH_PRIVATE_KEY.
 on:
   workflow_dispatch:
     inputs:
@@ -10,8 +11,8 @@ on:
         type: string
 
 concurrency:
-  group: deploy-cpanel-production
-  cancel-in-progress: false
+  group: cpanel-deploy
+  cancel-in-progress: true
 
 jobs:
   migrate:
