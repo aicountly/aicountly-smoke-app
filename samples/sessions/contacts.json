@@ -1,0 +1,14 @@
+{
+  "product_name": "contacts",
+  "rationale": "Decomposed by contact lifecycle.",
+  "sessions": [
+    { "ordinal": 1, "name": "Login + Contact list",       "menu_path": "/", "expected_screens": 4 },
+    { "ordinal": 2, "name": "Organisations",              "menu_path": "/organisations", "expected_screens": 6 },
+    { "ordinal": 3, "name": "Person profiles",            "menu_path": "/people", "expected_screens": 6 },
+    { "ordinal": 4, "name": "Communication history",      "menu_path": "/comms", "expected_screens": 4 },
+    { "ordinal": 5, "name": "Segments / Tags",            "menu_path": "/segments", "expected_screens": 4 },
+    { "ordinal": 6, "name": "Pipeline & Deals",           "menu_path": "/pipeline", "expected_screens": 6 },
+    { "ordinal": 7, "name": "Import / Export / Enrich",   "menu_path": "/io", "expected_screens": 4 },
+    { "ordinal": 8, "name": "Settings",                   "menu_path": "/settings", "expected_screens": 4 }
+  ]
+}

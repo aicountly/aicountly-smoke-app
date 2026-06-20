@@ -1,0 +1,15 @@
+{
+  "product_name": "hrms",
+  "rationale": "HRMS is decomposed by people-process modules.",
+  "sessions": [
+    { "ordinal": 1, "name": "Login + Dashboard",   "menu_path": "/", "description": "Land on the HRMS dashboard.", "expected_screens": 4 },
+    { "ordinal": 2, "name": "Employees",           "menu_path": "/employees", "description": "Employee directory, profile, documents.", "expected_screens": 8 },
+    { "ordinal": 3, "name": "Attendance & Shifts", "menu_path": "/attendance", "description": "Daily attendance, regularization, shift planner.", "expected_screens": 8 },
+    { "ordinal": 4, "name": "Leave",               "menu_path": "/leave", "description": "Leave types, balances, approvals.", "expected_screens": 6 },
+    { "ordinal": 5, "name": "Payroll",             "menu_path": "/payroll", "description": "Pay structure, run, payslips, statutory.", "expected_screens": 8 },
+    { "ordinal": 6, "name": "Performance",         "menu_path": "/performance", "description": "Reviews, goals, feedback, 1:1.", "expected_screens": 6 },
+    { "ordinal": 7, "name": "Recruitment & Onboarding", "menu_path": "/hire", "description": "Vacancies, candidates, offers, onboarding.", "expected_screens": 6 },
+    { "ordinal": 8, "name": "Reports",             "menu_path": "/reports", "description": "Headcount, payroll cost, attrition.", "expected_screens": 6 },
+    { "ordinal": 9, "name": "Settings",            "menu_path": "/settings", "description": "Org chart, locations, policies, roles.", "expected_screens": 6 }
+  ]
+}

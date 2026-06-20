@@ -1,0 +1,77 @@
+#--------------------------------------------------------------------
+# CodeIgniter 4.6 environment for smoke.aicountly.org backend
+# Copy this file to `.env` (in this same backend/ directory) and fill in.
+#--------------------------------------------------------------------
+
+CI_ENVIRONMENT = development
+app.baseURL = 'http://localhost:8080/'
+app.indexPage = ''
+
+#--------------------------------------------------------------------
+# DATABASE
+#--------------------------------------------------------------------
+
+database.default.hostname = 127.0.0.1
+database.default.port     = 5432
+database.default.database = smoke_aicountly
+database.default.username = smoke_user
+database.default.password = change_me
+database.default.DBDriver = Postgre
+database.default.DBPrefix =
+database.default.charset  = utf8
+
+#--------------------------------------------------------------------
+# AUTH / JWT
+#--------------------------------------------------------------------
+
+JWT_SECRET        = replace_me_with_64_byte_hex_secret
+JWT_ACCESS_TTL    = 86400
+JWT_REFRESH_TTL   = 2592000
+JWT_ISSUER        = smoke.aicountly.org
+
+#--------------------------------------------------------------------
+# VAULT
+#--------------------------------------------------------------------
+
+SMOKE_VAULT_KEY         = 0000000000000000000000000000000000000000000000000000000000000000
+SMOKE_VAULT_KEY_VERSION = 1
+
+#--------------------------------------------------------------------
+# AI BRAIN
+#--------------------------------------------------------------------
+
+BRAIN_DEFAULT         = gemini
+BRAIN_PARALLEL        = openai,perplexity
+BRAIN_TIMEOUT_SECONDS = 60
+
+OPENAI_API_KEY     =
+OPENAI_MODEL       = gpt-4o-mini
+OPENAI_BASE_URL    = https://api.openai.com/v1
+
+PERPLEXITY_API_KEY = 
+PERPLEXITY_MODEL   = sonar-pro
+PERPLEXITY_BASE_URL= https://api.perplexity.ai
+
+GEMINI_API_KEY     =
+GEMINI_MODEL       = gemini-2.5-pro
+GEMINI_BASE_URL    = https://generativelanguage.googleapis.com/v1beta
+
+#--------------------------------------------------------------------
+# WORKER
+#--------------------------------------------------------------------
+
+WORKER_SHARED_TOKEN  = replace_me_with_long_random_string
+WORKER_BACKEND_URL   = http://localhost:8080/api/v1
+WORKER_POLL_INTERVAL = 2500
+
+#--------------------------------------------------------------------
+# REPORTS
+#--------------------------------------------------------------------
+
+REPORTS_DIR = ../smoke-reports
+
+#--------------------------------------------------------------------
+# CORS
+#--------------------------------------------------------------------
+
+CORS_ALLOW_ORIGINS = http://localhost:5173,http://127.0.0.1:5173

@@ -1,0 +1,14 @@
+Walk every menu of contacts.aicountly.com. Observe contact list, organisations,
+person-org mapping, communication history, segmentation, tags, lead pipeline,
+notes, attachments, contact enrichment and import/export.
+
+Compare with HubSpot CRM, Pipedrive, Zoho CRM, Folk and Affinity for:
+- enrichment from public sources
+- duplicate detection and merge
+- email & call logging
+- timeline of interactions
+- relationship strength scoring
+- mobile experience
+
+Flag UX gaps, theme inconsistencies, broken screens and missing features.
+Generate module-wise reports plus a final consolidated report. Observer mode.

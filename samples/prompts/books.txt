@@ -1,0 +1,24 @@
+Walk every menu of books.aicountly.com (target environment as configured in
+the profile). Observe UI, layout, theme, menus, sub-menus, screens, buttons,
+forms, tables, filters, reports, exports, print/download, breadcrumbs, help
+text, search and keyboard shortcuts.
+
+Identify:
+- missing features compared to Tally, Busy, Zoho Books, QuickBooks and Indian
+  GST/accounting tools (e.g. e-invoice, GSTR filing, e-way bill, bank
+  reconciliation, recurring invoices, multi-currency, multi-branch, audit
+  trail, fixed asset register, project costing);
+- old/inconsistent UI pages or screens not aligned with the AICOUNTLY
+  green-white modern SaaS theme;
+- broken screens, console errors, network/API failures, slow pages;
+- UX gaps such as unclear empty states, missing filters, tables overflowing
+  on smaller widths, modals that don't fit, missing breadcrumbs, duplicate
+  buttons and missing keyboard-first flow.
+
+Produce module-wise session reports (Sales, Purchase, Banking, Inventory,
+Reports, GST, Accounting, Settings, etc.) and one consolidated product
+intelligence report at the end. Include a quick-wins list, a missing-feature
+roadmap and a developer prompt for each recommendation.
+
+Stay strictly in observer mode. Do not submit forms, post journals, or alter
+any data.

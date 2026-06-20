@@ -1,0 +1,220 @@
+name: Deploy to cPanel (Production)
+
+# Manual production deploy only — never runs on push/PR.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: What to deploy
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - frontend
+          - backend
+          - worker
+      run_migrations:
+        description: Run `php spark migrate` on the server after backend deploy
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: Preview rsync changes without uploading (--dry-run)
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-cpanel-production
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "20"
+  PHP_VERSION: "8.2"
+
+jobs:
+  deploy:
+    name: Rsync to cPanel (${{ inputs.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate deploy secrets
+        run: |
+          missing=0
+          if [ -z "${{ secrets.PROD_SSH_HOST }}" ]; then echo "::error::Missing repository secret: PROD_SSH_HOST"; missing=1; fi
+          if [ -z "${{ secrets.PROD_SSH_PORT }}" ]; then echo "::error::Missing repository secret: PROD_SSH_PORT"; missing=1; fi
+          if [ -z "${{ secrets.PROD_SSH_USER }}" ]; then echo "::error::Missing repository secret: PROD_SSH_USER"; missing=1; fi
+          if [ -z "${{ secrets.PROD_SSH_PRIVATE_KEY }}" ]; then echo "::error::Missing repository secret: PROD_SSH_PRIVATE_KEY"; missing=1; fi
+          if [ -z "${{ secrets.PROD_REMOTE_ROOT }}" ]; then echo "::error::Missing repository secret: PROD_REMOTE_ROOT"; missing=1; fi
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+          echo "All required deploy secrets are present."
+
+      - name: Setup Node.js
+        if: inputs.target == 'full' || inputs.target == 'frontend' || inputs.target == 'worker'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Setup PHP
+        if: inputs.target == 'full' || inputs.target == 'backend'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, intl, curl, openssl
+          tools: composer:v2
+
+      - name: Install Node dependencies
+        if: inputs.target == 'full' || inputs.target == 'frontend' || inputs.target == 'worker'
+        run: npm ci
+
+      - name: Build frontend
+        if: inputs.target == 'full' || inputs.target == 'frontend'
+        run: npm run frontend:build
+
+      - name: Build worker
+        if: inputs.target == 'full' || inputs.target == 'worker'
+        run: npm run worker:build
+
+      - name: Install backend dependencies (production)
+        if: inputs.target == 'full' || inputs.target == 'backend'
+        working-directory: backend
+        run: |
+          composer config audit.block-insecure false
+          composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.PROD_SSH_PORT }}" "${{ secrets.PROD_SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config <<EOF
+          Host cpanel-prod
+            HostName ${{ secrets.PROD_SSH_HOST }}
+            Port ${{ secrets.PROD_SSH_PORT }}
+            User ${{ secrets.PROD_SSH_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Ensure remote directories exist
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          ssh cpanel-prod "mkdir -p \
+            '${REMOTE_ROOT}/backend' \
+            '${REMOTE_ROOT}/frontend' \
+            '${REMOTE_ROOT}/worker' \
+            '${REMOTE_ROOT}/samples' \
+            '${REMOTE_ROOT}/smoke-reports' \
+            '${REMOTE_ROOT}/migrations' \
+            '${REMOTE_ROOT}/backend/writable/cache' \
+            '${REMOTE_ROOT}/backend/writable/logs' \
+            '${REMOTE_ROOT}/backend/writable/session' \
+            '${REMOTE_ROOT}/backend/writable/uploads'"
+
+      - name: Rsync backend
+        if: inputs.target == 'full' || inputs.target == 'backend'
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+          RSYNC_DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          rsync -avz --delete ${RSYNC_DRY_RUN} \
+            --exclude '.env' \
+            --exclude '.git/' \
+            --exclude 'tests/' \
+            --exclude 'writable/cache/*' \
+            --exclude 'writable/logs/*' \
+            --exclude 'writable/session/*' \
+            --exclude 'writable/uploads/*' \
+            --exclude 'writable/debugbar/*' \
+            backend/ "cpanel-prod:${REMOTE_ROOT}/backend/"
+
+      - name: Rsync frontend
+        if: inputs.target == 'full' || inputs.target == 'frontend'
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+          RSYNC_DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          rsync -avz --delete ${RSYNC_DRY_RUN} \
+            frontend/dist/ "cpanel-prod:${REMOTE_ROOT}/frontend/"
+
+      - name: Rsync worker
+        if: inputs.target == 'full' || inputs.target == 'worker'
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+          RSYNC_DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          rsync -avz --delete ${RSYNC_DRY_RUN} \
+            worker/dist/ "cpanel-prod:${REMOTE_ROOT}/worker/dist/"
+          rsync -avz ${RSYNC_DRY_RUN} \
+            worker/package.json "cpanel-prod:${REMOTE_ROOT}/worker/package.json"
+
+      - name: Rsync shared assets
+        if: inputs.target == 'full'
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+          RSYNC_DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          rsync -avz ${RSYNC_DRY_RUN} \
+            samples/ "cpanel-prod:${REMOTE_ROOT}/samples/"
+          rsync -avz ${RSYNC_DRY_RUN} \
+            migrations/ "cpanel-prod:${REMOTE_ROOT}/migrations/"
+          rsync -avz ${RSYNC_DRY_RUN} \
+            --exclude '*/' \
+            smoke-reports/.gitkeep "cpanel-prod:${REMOTE_ROOT}/smoke-reports/" || true
+
+      - name: Install worker production dependencies on server
+        if: (inputs.target == 'full' || inputs.target == 'worker') && !inputs.dry_run
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          ssh cpanel-prod "cd '${REMOTE_ROOT}/worker' && \
+            if command -v npm >/dev/null 2>&1; then \
+              npm ci --omit=dev --ignore-scripts 2>/dev/null || npm install --omit=dev --ignore-scripts; \
+            else \
+              echo 'npm not found on server — install Node on cPanel or deploy worker from a VPS.'; \
+            fi"
+
+      - name: Run database migrations
+        if: inputs.run_migrations && (inputs.target == 'full' || inputs.target == 'backend') && !inputs.dry_run
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          ssh cpanel-prod "cd '${REMOTE_ROOT}/backend' && php spark migrate --all --no-interaction"
+
+      - name: Set backend writable permissions
+        if: (inputs.target == 'full' || inputs.target == 'backend') && !inputs.dry_run
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          ssh cpanel-prod "chmod -R ug+rwx '${REMOTE_ROOT}/backend/writable' || true"
+
+      - name: Deploy summary
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          {
+            echo "## cPanel deploy summary"
+            echo ""
+            echo "| Setting | Value |"
+            echo "|---|---|"
+            echo "| Target | \`${{ inputs.target }}\` |"
+            echo "| Dry run | \`${{ inputs.dry_run }}\` |"
+            echo "| Migrations | \`${{ inputs.run_migrations }}\` |"
+            echo "| Remote root | \`${REMOTE_ROOT}\` |"
+            echo ""
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "> Dry run only — no files were changed on the server."
+            else
+              echo "> Deploy finished. Verify the app on production."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

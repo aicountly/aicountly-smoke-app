@@ -1,0 +1,14 @@
+{
+  "product_name": "calendar",
+  "rationale": "Calendar app decomposed by view + workflow.",
+  "sessions": [
+    { "ordinal": 1, "name": "Login + Today",       "menu_path": "/", "expected_screens": 4 },
+    { "ordinal": 2, "name": "Day / Week / Month",  "menu_path": "/views", "expected_screens": 4 },
+    { "ordinal": 3, "name": "Events & Reminders",  "menu_path": "/events", "expected_screens": 6 },
+    { "ordinal": 4, "name": "Follow-ups",          "menu_path": "/follow-ups", "expected_screens": 4 },
+    { "ordinal": 5, "name": "Team Schedule",       "menu_path": "/teams", "expected_screens": 4 },
+    { "ordinal": 6, "name": "AI Priority",         "menu_path": "/ai", "expected_screens": 4 },
+    { "ordinal": 7, "name": "Integrations",        "menu_path": "/integrations", "expected_screens": 4 },
+    { "ordinal": 8, "name": "Settings",            "menu_path": "/settings", "expected_screens": 4 }
+  ]
+}

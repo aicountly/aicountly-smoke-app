@@ -1,0 +1,31 @@
+{
+  "name": "aicountly-smoke-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "smoke.aicountly.org - Internal AICOUNTLY Smoke & Product Intelligence Agent portal",
+  "workspaces": [
+    "frontend",
+    "worker"
+  ],
+  "scripts": {
+    "smoke:observe": "npm --workspace worker run start",
+    "smoke:run-session": "npm --workspace worker run run-session --",
+    "smoke:books": "npm --workspace worker run enqueue -- --product=books",
+    "smoke:hrms": "npm --workspace worker run enqueue -- --product=hrms",
+    "smoke:report": "npm --workspace worker run report --",
+    "frontend:dev": "npm --workspace frontend run dev",
+    "frontend:build": "npm --workspace frontend run build",
+    "worker:dev": "npm --workspace worker run dev",
+    "worker:build": "npm --workspace worker run build",
+    "backend:serve": "php backend/spark serve",
+    "backend:migrate": "php backend/spark migrate",
+    "backend:seed": "php backend/spark db:seed InitialSeeder",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "license": "UNLICENSED"
+}

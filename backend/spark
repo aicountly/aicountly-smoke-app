@@ -1,0 +1,24 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * CodeIgniter 4.6 spark CLI bootstrap for smoke.aicountly.org.
+ */
+
+define('FCPATH', __DIR__ . DIRECTORY_SEPARATOR . 'public' . DIRECTORY_SEPARATOR);
+define('HOMEPATH', __DIR__ . DIRECTORY_SEPARATOR);
+
+chdir(__DIR__);
+
+$pathsConfig = realpath(__DIR__ . '/app/Config/Paths.php');
+if ($pathsConfig === false || ! is_file($pathsConfig)) {
+    fwrite(STDERR, "Paths config missing at app/Config/Paths.php\n");
+    exit(1);
+}
+
+require $pathsConfig;
+$paths = new Config\Paths();
+
+require $paths->systemDirectory . '/bootstrap.php';
+
+exit((new \CodeIgniter\CLI\Console())->run());

@@ -1,0 +1,41 @@
+{
+  "product_name": "contacts",
+  "competitors": [
+    {
+      "name": "HubSpot CRM",
+      "source_url": "https://www.hubspot.com/products/crm",
+      "features": [
+        "contacts", "companies", "deals", "tickets", "activities",
+        "email sync", "calendar sync", "tasks", "lists / segments",
+        "lead scoring", "duplicate management", "import / export",
+        "mobile app", "automation", "snippets / templates"
+      ]
+    },
+    {
+      "name": "Pipedrive",
+      "source_url": "https://www.pipedrive.com",
+      "features": [
+        "pipeline view", "deal probability", "activity reminders",
+        "email sync", "duplicate detection", "smart contact data",
+        "lead inbox", "products catalog"
+      ]
+    },
+    {
+      "name": "Zoho CRM",
+      "source_url": "https://www.zoho.com/crm",
+      "features": [
+        "leads", "accounts", "contacts", "deals", "campaigns",
+        "workflows", "approvals", "blueprint", "ai assistant zia",
+        "social integrations"
+      ]
+    },
+    {
+      "name": "Folk",
+      "source_url": "https://folk.app",
+      "features": [
+        "groups", "tags", "interaction history",
+        "linkedin enrichment", "shared address book"
+      ]
+    }
+  ]
+}

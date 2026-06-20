@@ -1,0 +1,18 @@
+Walk every menu of auditor.aicountly.com per the configured profile.
+Observe engagement setup, planning, risk assessment, controls evaluation,
+sampling, documentation, working papers, review notes, queries, completion
+checklists, finalisation, reports and archives.
+
+Compare with audit workflow tools (CaseWare, AuditDesktop, Suralink, Wolters
+Kluwer Audit Management, ICAI's CASE) for:
+- engagement letter and acceptance workflow
+- standardised audit programs and procedures
+- materiality and sampling
+- documentation and indexing
+- review hierarchy and supervisor sign-off
+- exception/observation tracking
+- compliance with SA standards
+
+Flag UX gaps, old themes, missing breadcrumbs, missing filters, missing
+exports, broken screens. Produce module-wise reports and one final
+consolidated report. Observer mode only.

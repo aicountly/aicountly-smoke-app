@@ -1,0 +1,18 @@
+Walk every menu of hrms.aicountly.com (per profile environment). Observe
+employees, attendance, leave, payroll, statutory compliance, performance,
+recruitment, onboarding, exits, reports and settings.
+
+Compare with Keka, Zoho People, greytHR, BambooHR and Darwinbox for:
+- self-service employee portal completeness
+- payroll engine flexibility (multi-state PT, ESI, PF, gratuity, LWF, TDS)
+- attendance & shift planning
+- leave policies, comp-off, sandwich leave
+- performance reviews and 1:1s
+- onboarding and document management
+- offer letter / e-signature workflows
+- analytics dashboards
+
+Identify UX gaps (filters, exports, breadcrumbs, mobile responsiveness),
+old-theme pages, broken screens, console/network errors. Produce module-wise
+session reports and one final consolidated report. Read-only observation; no
+form submission.

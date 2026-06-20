@@ -1,0 +1,71 @@
+name: cPanel — Run Migrations
+
+# Manual database migration only. Does not deploy code.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type "migrate" to confirm running migrations on production
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-cpanel-production
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Run backend migrations on cPanel
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Confirm production migration
+        run: |
+          if [ "${{ inputs.confirm }}" != "migrate" ]; then
+            echo "::error::Confirmation failed. Input must be exactly: migrate"
+            exit 1
+          fi
+
+      - name: Validate deploy secrets
+        run: |
+          missing=0
+          if [ -z "${{ secrets.PROD_SSH_HOST }}" ]; then echo "::error::Missing repository secret: PROD_SSH_HOST"; missing=1; fi
+          if [ -z "${{ secrets.PROD_SSH_PORT }}" ]; then echo "::error::Missing repository secret: PROD_SSH_PORT"; missing=1; fi
+          if [ -z "${{ secrets.PROD_SSH_USER }}" ]; then echo "::error::Missing repository secret: PROD_SSH_USER"; missing=1; fi
+          if [ -z "${{ secrets.PROD_SSH_PRIVATE_KEY }}" ]; then echo "::error::Missing repository secret: PROD_SSH_PRIVATE_KEY"; missing=1; fi
+          if [ -z "${{ secrets.PROD_REMOTE_ROOT }}" ]; then echo "::error::Missing repository secret: PROD_REMOTE_ROOT"; missing=1; fi
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.PROD_SSH_PORT }}" "${{ secrets.PROD_SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config <<EOF
+          Host cpanel-prod
+            HostName ${{ secrets.PROD_SSH_HOST }}
+            Port ${{ secrets.PROD_SSH_PORT }}
+            User ${{ secrets.PROD_SSH_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Run migrations
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          ssh cpanel-prod "cd '${REMOTE_ROOT}/backend' && php spark migrate --all --no-interaction"
+
+      - name: Migration summary
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          {
+            echo "## Migration summary"
+            echo ""
+            echo "Ran \`php spark migrate --all\` on \`${REMOTE_ROOT}/backend\`."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,16 @@
+{
+  "product_name": "auditor",
+  "rationale": "Audit work is decomposed by audit-cycle phase.",
+  "sessions": [
+    { "ordinal": 1, "name": "Login + Engagements list", "menu_path": "/", "expected_screens": 4 },
+    { "ordinal": 2, "name": "Engagement setup & acceptance", "menu_path": "/engagement", "expected_screens": 6 },
+    { "ordinal": 3, "name": "Risk assessment & planning", "menu_path": "/risk", "expected_screens": 6 },
+    { "ordinal": 4, "name": "Controls evaluation", "menu_path": "/controls", "expected_screens": 6 },
+    { "ordinal": 5, "name": "Sampling", "menu_path": "/sampling", "expected_screens": 4 },
+    { "ordinal": 6, "name": "Documentation / working papers", "menu_path": "/docs", "expected_screens": 8 },
+    { "ordinal": 7, "name": "Review notes & queries", "menu_path": "/review", "expected_screens": 4 },
+    { "ordinal": 8, "name": "Completion & finalisation", "menu_path": "/finalisation", "expected_screens": 4 },
+    { "ordinal": 9, "name": "Reports & archives", "menu_path": "/reports", "expected_screens": 6 },
+    { "ordinal": 10, "name": "Settings", "menu_path": "/settings", "expected_screens": 4 }
+  ]
+}

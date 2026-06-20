@@ -1,0 +1,15 @@
+{
+  "product_name": "books",
+  "rationale": "Books is decomposed by accounting module so each report is precise and module-owned.",
+  "sessions": [
+    { "ordinal": 1,  "name": "Login + Dashboard",      "menu_path": "/", "description": "Land on dashboard, capture KPIs and global controls.", "expected_screens": 4 },
+    { "ordinal": 2,  "name": "Sales / Invoices",       "menu_path": "/sales", "description": "Sales invoices, quotations, credit notes, recurring.", "expected_screens": 8 },
+    { "ordinal": 3,  "name": "Purchase / Bills",       "menu_path": "/purchase", "description": "Purchase orders, bills, debit notes, expense claims.", "expected_screens": 8 },
+    { "ordinal": 4,  "name": "Banking & Reconcile",    "menu_path": "/banking", "description": "Bank accounts, statements, reconciliation, transfers.", "expected_screens": 6 },
+    { "ordinal": 5,  "name": "Inventory",              "menu_path": "/inventory", "description": "Items, stock movements, adjustments, valuation, BOM.", "expected_screens": 6 },
+    { "ordinal": 6,  "name": "GST",                    "menu_path": "/gst", "description": "GSTR-1/3B, e-invoice, e-way bill, ITC.", "expected_screens": 6 },
+    { "ordinal": 7,  "name": "Reports & Filters",      "menu_path": "/reports", "description": "P&L, BS, ledgers, ageing, day book, drill-down.", "expected_screens": 8 },
+    { "ordinal": 8,  "name": "Accounting / Journal",   "menu_path": "/accounting", "description": "Journal entries, period close, audit trail.", "expected_screens": 6 },
+    { "ordinal": 9,  "name": "Settings & Configuration","menu_path": "/settings", "description": "Org, branches, FY, taxes, templates, users, permissions.", "expected_screens": 6 }
+  ]
+}

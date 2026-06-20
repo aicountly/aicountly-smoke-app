@@ -1,0 +1,44 @@
+{
+  "product_name": "hrms",
+  "competitors": [
+    {
+      "name": "Keka",
+      "source_url": "https://www.keka.com",
+      "features": [
+        "employee directory", "attendance", "leave", "payroll", "form 16",
+        "tds engine", "performance reviews", "okrs", "1:1 meetings",
+        "expense claims", "travel", "engagement surveys", "exit checklist",
+        "onboarding", "offer letter", "esignature", "asset management",
+        "document vault", "hrms mobile app"
+      ]
+    },
+    {
+      "name": "Zoho People",
+      "source_url": "https://www.zoho.com/people",
+      "features": [
+        "employee profile", "leave tracker", "shift scheduler",
+        "timesheet", "attendance regularization", "performance",
+        "self-service portal", "case management", "training",
+        "lms", "policy library", "goals & reviews", "approvals workflow"
+      ]
+    },
+    {
+      "name": "greytHR",
+      "source_url": "https://www.greythr.com",
+      "features": [
+        "payroll", "statutory compliance", "income tax", "pf", "esi", "pt",
+        "lwf", "gratuity", "form 24q", "form 16", "leave", "attendance",
+        "self-service", "expense claims", "geo attendance"
+      ]
+    },
+    {
+      "name": "Darwinbox",
+      "source_url": "https://darwinbox.com",
+      "features": [
+        "ai chatbot", "okrs", "talent acquisition", "lms",
+        "succession planning", "rewards & recognition", "pulse surveys",
+        "comp planning", "global payroll"
+      ]
+    }
+  ]
+}

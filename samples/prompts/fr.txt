@@ -1,0 +1,16 @@
+Walk every menu of fr.aicountly.com (financial reporting). Observe master
+data, mapping, trial balance import, schedule III templates (Indian Companies
+Act), notes to accounts, cash flow, comparatives, consolidation, group
+reporting, IND-AS / IFRS adjustments, signing, archives.
+
+Compare with financial-statement preparation tools (Caseware Financials,
+DataSnipper, MSCI ESG Manager, MyMSME, IRIS Carbon) for:
+- Schedule III adherence
+- notes library and disclosures
+- consolidation workflow
+- comparative period management
+- export to PDF/Word/XBRL
+- review trail
+
+Identify UX, theme, broken screens and missing features. Produce module-wise
+reports and a final consolidated report. Read-only observation.

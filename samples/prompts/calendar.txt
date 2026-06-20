@@ -1,0 +1,15 @@
+Walk every menu of calendar.aicountly.com. Observe day/week/month views,
+events, reminders, follow-ups, meeting preparation, team availability,
+delegation, recurring events, integrations (Google/Outlook), AI priority
+suggestions, mobile responsiveness.
+
+Compare with Google Calendar, Microsoft Outlook, Reclaim.ai, Motion, Cron and
+Sunsama for:
+- AI prioritisation and rescheduling
+- focus time blocks
+- meeting prep and notes
+- follow-up reminders for stakeholders
+- shared team calendars and round-robin scheduling
+
+Flag UX gaps, missing keyboard shortcuts, missing filters and missing exports.
+Module-wise reports and a final consolidated report. Read-only.

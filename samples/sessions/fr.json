@@ -1,0 +1,16 @@
+{
+  "product_name": "fr",
+  "rationale": "Financial reporting is decomposed by reporting workflow stages.",
+  "sessions": [
+    { "ordinal": 1, "name": "Login + Reports list", "menu_path": "/", "expected_screens": 4 },
+    { "ordinal": 2, "name": "Master data & mapping", "menu_path": "/masters", "expected_screens": 6 },
+    { "ordinal": 3, "name": "Trial balance import", "menu_path": "/trial-balance", "expected_screens": 4 },
+    { "ordinal": 4, "name": "Schedule III templates", "menu_path": "/schedule-iii", "expected_screens": 6 },
+    { "ordinal": 5, "name": "Notes to accounts", "menu_path": "/notes", "expected_screens": 6 },
+    { "ordinal": 6, "name": "Cash flow & comparatives", "menu_path": "/cashflow", "expected_screens": 4 },
+    { "ordinal": 7, "name": "Consolidation", "menu_path": "/consolidation", "expected_screens": 4 },
+    { "ordinal": 8, "name": "IND-AS / IFRS adjustments", "menu_path": "/ind-as", "expected_screens": 4 },
+    { "ordinal": 9, "name": "Reports / Export / XBRL", "menu_path": "/exports", "expected_screens": 4 },
+    { "ordinal":10, "name": "Settings", "menu_path": "/settings", "expected_screens": 4 }
+  ]
+}

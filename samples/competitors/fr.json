@@ -1,0 +1,30 @@
+{
+  "product_name": "fr",
+  "competitors": [
+    {
+      "name": "CaseWare Financials",
+      "source_url": "https://www.caseware.com",
+      "features": [
+        "schedule iii", "ind-as", "notes library", "trial balance import",
+        "consolidation", "comparatives", "cash flow", "xbrl export",
+        "audit trail", "review hierarchy"
+      ]
+    },
+    {
+      "name": "IRIS Carbon",
+      "source_url": "https://iriscarbon.com",
+      "features": [
+        "xbrl tagging", "esef", "ifrs taxonomy", "review notes",
+        "version history", "anchored exports"
+      ]
+    },
+    {
+      "name": "DataSnipper",
+      "source_url": "https://datasnipper.com",
+      "features": [
+        "ai extraction", "tickmarks", "reconciliation",
+        "automation rules", "documentation linking"
+      ]
+    }
+  ]
+}

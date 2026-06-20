@@ -1,0 +1,49 @@
+{
+  "product_name": "books",
+  "competitors": [
+    {
+      "name": "Tally Prime",
+      "source_url": "https://tallysolutions.com",
+      "notes": "Industry standard in India for SMB accounting.",
+      "features": [
+        "voucher entry", "ledger", "stock summary", "purchase orders",
+        "sales orders", "gst returns", "e-invoice", "e-way bill",
+        "bank reconciliation", "multi-currency", "multi-branch", "audit trail",
+        "tds", "tcs", "fixed asset register", "budgets", "scenarios",
+        "payroll module", "cost centres", "drill down", "remote access"
+      ]
+    },
+    {
+      "name": "Zoho Books",
+      "source_url": "https://www.zoho.com/books",
+      "features": [
+        "invoices", "estimates", "recurring invoices", "credit notes",
+        "expenses", "vendor credits", "bills", "purchase orders",
+        "bank reconciliation", "chart of accounts", "manual journals",
+        "fixed assets", "budgeting", "project tracking", "time tracking",
+        "client portal", "e-invoice", "gstr-1", "gstr-3b", "tds", "tcs",
+        "multi currency", "branches", "audit trail", "api / webhooks"
+      ]
+    },
+    {
+      "name": "QuickBooks Online",
+      "source_url": "https://quickbooks.intuit.com",
+      "features": [
+        "invoices", "estimates", "expenses", "bill pay", "bank feeds",
+        "reconciliation", "chart of accounts", "journal entries",
+        "fixed assets", "inventory", "purchase orders", "1099 / tds",
+        "mileage tracking", "projects", "time tracking", "budgets",
+        "audit log", "rule based categorisation", "mobile receipt scan"
+      ]
+    },
+    {
+      "name": "Busy Accounting",
+      "source_url": "https://busy.in",
+      "features": [
+        "voucher", "stock", "gst", "e-invoice", "e-way bill", "tds",
+        "branch accounting", "production / bom", "broker management",
+        "multi-godown", "trf inward outward", "reorder management"
+      ]
+    }
+  ]
+}
