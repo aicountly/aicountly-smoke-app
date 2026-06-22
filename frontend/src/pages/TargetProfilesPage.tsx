@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { SAAS_PRODUCTS, SAAS_PRODUCT_SLUGS, type SaasProductOption } from '@/lib/products';
 
 type TargetProfile = {
   id: number;
@@ -18,10 +19,7 @@ type TargetProfile = {
   status: string;
 };
 
-const PRODUCTS = [
-  'sandbox', 'gh-books', 'books', 'gh-hrms', 'hrms',
-  'auditor', 'fr', 'secretarial', 'calendar', 'contacts', 'other',
-];
+
 const ENVIRONMENTS = [
   { v: 'sandbox',                label: 'Sandbox' },
   { v: 'gh_staging',             label: 'GH / Staging' },
@@ -79,7 +77,7 @@ export function TargetProfilesPage() {
             {(data?.data ?? []).map((p) => (
               <tr key={p.id} className="border-t border-ink-200">
                 <td className="px-4 py-2 font-medium">{p.profile_name}</td>
-                <td>{p.product_name}</td>
+                <td>{SAAS_PRODUCTS.find((x) => x.slug === p.product_name)?.label ?? p.product_name}</td>
                 <td>
                   <span className={'badge-' + (p.environment.startsWith('production') ? 'danger' : 'brand')}>
                     {p.environment}
@@ -128,6 +126,11 @@ function ProfileForm({ value, onChange, onSubmit, loading }: {
   onSubmit: () => void;
   loading: boolean;
 }) {
+  const productOptions: SaasProductOption[] = [...SAAS_PRODUCTS];
+  if (value.product_name && !SAAS_PRODUCT_SLUGS.includes(value.product_name as typeof SAAS_PRODUCT_SLUGS[number])) {
+    productOptions.unshift({ slug: value.product_name, label: `${value.product_name} (legacy)` });
+  }
+
   function bind<K extends keyof typeof value>(k: K) {
     return {
       value: (value[k] ?? '') as string,
@@ -143,7 +146,7 @@ function ProfileForm({ value, onChange, onSubmit, loading }: {
           <label className="label">Product</label>
           <select className="input" required {...bind('product_name')}>
             <option value="">Select...</option>
-            {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
+            {productOptions.map((p) => <option key={p.slug} value={p.slug}>{p.label}</option>)}
           </select>
         </div>
         <div>

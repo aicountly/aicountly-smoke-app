@@ -4,14 +4,11 @@ namespace App\Controllers;
 
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Database;
+use Config\Products;
 use Config\Services;
 
 class TargetProfilesController extends BaseController
 {
-    private const PRODUCTS = [
-        'sandbox', 'gh-books', 'books', 'gh-hrms', 'hrms',
-        'auditor', 'fr', 'secretarial', 'calendar', 'contacts', 'other',
-    ];
     private const ENVIRONMENTS = [
         'sandbox', 'gh_staging', 'production_readonly', 'production_restricted',
     ];
@@ -154,7 +151,7 @@ class TargetProfilesController extends BaseController
                 }
             }
         }
-        if (! empty($body['product_name']) && ! in_array($body['product_name'], self::PRODUCTS, true)) {
+        if (! empty($body['product_name']) && ! in_array($body['product_name'], Products::slugs(), true)) {
             return 'Unknown product_name';
         }
         if (! empty($body['environment']) && ! in_array($body['environment'], self::ENVIRONMENTS, true)) {

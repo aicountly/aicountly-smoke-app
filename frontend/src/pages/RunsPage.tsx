@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { SAAS_PRODUCTS } from '@/lib/products';
 
 type Run = {
   id: number;
@@ -42,7 +43,7 @@ export function RunsPage() {
           <label className="label">Product</label>
           <select className="input" value={filters.product_name ?? ''} onChange={(e) => setF('product_name', e.target.value)}>
             <option value="">All</option>
-            {['books','hrms','auditor','fr','secretarial','calendar','contacts','sandbox','gh-books','gh-hrms','other'].map((p) => <option key={p} value={p}>{p}</option>)}
+            {SAAS_PRODUCTS.map((p) => <option key={p.slug} value={p.slug}>{p.label}</option>)}
           </select>
         </div>
         <div>
