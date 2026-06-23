@@ -39,9 +39,13 @@ export function TargetProfilesPage() {
     queryFn: async () => (await api.get('/target-profiles')).data,
   });
 
-  const createMut = useMutation({
-    mutationFn: async (body: Partial<TargetProfile> & { password?: string }) =>
-      (await api.post('/target-profiles', body)).data,
+  const saveMut = useMutation({
+    mutationFn: async (form: Partial<TargetProfile> & { password?: string }) => {
+      const { id, password, ...rest } = form;
+      const body = { ...rest, ...(password ? { password } : {}) };
+      if (id) return (await api.put(`/target-profiles/${id}`, body)).data;
+      return (await api.post('/target-profiles', body)).data;
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['target-profiles'] });
       setDrawerOpen(false);
@@ -131,8 +135,8 @@ export function TargetProfilesPage() {
             <ProfileForm
               value={edit}
               onChange={setEdit}
-              onSubmit={() => createMut.mutate(edit)}
-              loading={createMut.isPending}
+              onSubmit={() => saveMut.mutate(edit)}
+              loading={saveMut.isPending}
             />
           </div>
         </div>
@@ -192,7 +196,9 @@ function ProfileForm({ value, onChange, onSubmit, loading }: {
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!value.allow_safe_demo} onChange={(e) => onChange({ ...value, allow_safe_demo: e.target.checked })} /> Allow safe demo</label>
       </div>
 
-      <button className="btn-primary" type="submit" disabled={loading}>{loading ? 'Saving...' : 'Save profile'}</button>
+      <button className="btn-primary" type="submit" disabled={loading}>
+        {loading ? 'Saving...' : value.id ? 'Update profile' : 'Save profile'}
+      </button>
     </form>
   );
 }
