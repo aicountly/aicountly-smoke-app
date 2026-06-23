@@ -41,7 +41,7 @@ class TargetProfilesController extends BaseController
     public function create(): ResponseInterface
     {
         $body = $this->jsonBody();
-        $err = $this->validate($body, true);
+        $err = $this->validateProfileInput($body, true);
         if ($err) {
             return $this->jsonError('invalid_request', $err, 400);
         }
@@ -92,7 +92,7 @@ class TargetProfilesController extends BaseController
             return $this->jsonError('not_found', 'Profile not found', 404);
         }
         $body = $this->jsonBody();
-        $err = $this->validate($body, false);
+        $err = $this->validateProfileInput($body, false);
         if ($err) {
             return $this->jsonError('invalid_request', $err, 400);
         }
@@ -142,7 +142,7 @@ class TargetProfilesController extends BaseController
         return $this->jsonOk(['ok' => true]);
     }
 
-    private function validate(array $body, bool $strict): ?string
+    private function validateProfileInput(array $body, bool $strict): ?string
     {
         if ($strict) {
             foreach (['profile_name', 'product_name', 'environment', 'base_url', 'login_url', 'username'] as $f) {
