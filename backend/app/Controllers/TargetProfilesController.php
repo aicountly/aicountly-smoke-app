@@ -20,6 +20,7 @@ class TargetProfilesController extends BaseController
             ->select('id, profile_name, product_name, environment, base_url, login_url, username,
                       observer_mode, read_only, production_restriction, allow_safe_demo, status,
                       created_by, updated_by, created_at, updated_at')
+            ->where('status !=', 'archived')
             ->orderBy('product_name', 'ASC')
             ->orderBy('profile_name', 'ASC')
             ->get()

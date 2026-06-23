@@ -30,6 +30,7 @@ const ENVIRONMENTS = [
 export function TargetProfilesPage() {
   const qc = useQueryClient();
   const canEdit = useAuthStore((s) => s.hasRole('owner', 'product_reviewer'));
+  const canDelete = useAuthStore((s) => s.hasRole('owner'));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [edit, setEdit] = useState<Partial<TargetProfile> & { password?: string }>({});
 
@@ -46,6 +47,11 @@ export function TargetProfilesPage() {
       setDrawerOpen(false);
       setEdit({});
     },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async (id: number) => (await api.delete(`/target-profiles/${id}`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['target-profiles'] }),
   });
 
   return (
@@ -87,9 +93,24 @@ export function TargetProfilesPage() {
                 <td>{p.username}</td>
                 <td><span className="badge-neutral">{p.status}</span></td>
                 <td className="text-right pr-4">
-                  {canEdit && (
-                    <button className="btn-secondary" onClick={() => { setEdit(p); setDrawerOpen(true); }}>Edit</button>
-                  )}
+                  <div className="flex justify-end gap-2">
+                    {canEdit && (
+                      <button className="btn-secondary" onClick={() => { setEdit(p); setDrawerOpen(true); }}>Edit</button>
+                    )}
+                    {canDelete && (
+                      <button
+                        className="btn-danger"
+                        disabled={deleteMut.isPending}
+                        onClick={() => {
+                          if (confirm(`Delete profile "${p.profile_name}"? This cannot be undone.`)) {
+                            deleteMut.mutate(p.id);
+                          }
+                        }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
