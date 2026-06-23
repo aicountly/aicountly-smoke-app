@@ -81,7 +81,7 @@ export function DashboardPage() {
           <ul className="text-sm mt-2 space-y-2 max-h-64 overflow-auto">
             {(data?.recent_reports ?? []).map((r) => (
               <li key={r.id} className="flex justify-between">
-                <Link to={`/reports`} className="truncate hover:underline">{r.title}</Link>
+                <Link to={`/reports?id=${r.id}`} className="truncate hover:underline">{r.title}</Link>
                 <span className="text-ink-500 text-xs ml-3">{r.product_name}</span>
               </li>
             ))}

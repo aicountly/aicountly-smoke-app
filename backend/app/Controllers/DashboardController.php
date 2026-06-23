@@ -27,7 +27,7 @@ class DashboardController extends BaseController
             ->getRowArray();
 
         $byProduct = $db->table('smoke_reports r')
-            ->select('run.product_name AS product_name, AVG(COALESCE(r.maturity_score,0)) AS maturity_avg, AVG(COALESCE(r.ux_score,0)) AS ux_avg, COUNT(*) AS reports')
+            ->select('run.product_name AS product_name, AVG(COALESCE(r.maturity_score,0)) AS maturity_avg, AVG(COALESCE(r.ux_score,0)) AS ux_avg, COUNT(*) AS reports', false)
             ->join('smoke_observation_runs run', 'run.id = r.run_id')
             ->where('r.kind', 'final')
             ->groupBy('run.product_name')

@@ -33,7 +33,7 @@ class FeatureGapsController extends BaseController
     {
         $db = Database::connect();
         $rows = $db->table('smoke_feature_gaps')
-            ->select('product_name, expected_feature, BOOL_OR(observed) AS observed_any, MAX(severity) AS severity')
+            ->select('product_name, expected_feature, BOOL_OR(observed) AS observed_any, MAX(severity) AS severity', false)
             ->groupBy(['product_name', 'expected_feature'])
             ->orderBy('product_name', 'ASC')
             ->orderBy('expected_feature', 'ASC')

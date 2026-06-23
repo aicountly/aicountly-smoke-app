@@ -1,6 +1,7 @@
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { openReport } from '@/lib/reports';
 
 type RunDetail = {
   data: { id: number; run_code: string; product_name: string; environment: string; status: string; reports_dir: string };
@@ -59,8 +60,8 @@ export function RunDetailPage() {
                 <div className="text-xs text-ink-500">kind: {r.kind} &middot; UX {r.ux_score} &middot; maturity {r.maturity_score}</div>
               </div>
               <div className="flex gap-2">
-                <a className="btn-secondary" href={`/api/v1/reports/${r.id}/html`} target="_blank" rel="noreferrer">HTML</a>
-                <a className="btn-secondary" href={`/api/v1/reports/${r.id}/json`} target="_blank" rel="noreferrer">JSON</a>
+                <button type="button" className="btn-secondary" onClick={() => openReport(r.id, 'html')}>HTML</button>
+                <button type="button" className="btn-secondary" onClick={() => openReport(r.id, 'json')}>JSON</button>
               </div>
             </li>
           ))}

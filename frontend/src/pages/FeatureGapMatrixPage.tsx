@@ -4,7 +4,7 @@ import { api } from '@/lib/api';
 type Row = { product_name: string; expected_feature: string; observed_any: boolean; severity: string };
 
 export function FeatureGapMatrixPage() {
-  const { data } = useQuery<{ data: Row[] }>({
+  const { data, isLoading, isError } = useQuery<{ data: Row[] }>({
     queryKey: ['feature-gap-matrix'],
     queryFn: async () => (await api.get('/feature-gap-matrix')).data,
   });
@@ -21,7 +21,13 @@ export function FeatureGapMatrixPage() {
         <h1 className="text-xl font-semibold">Feature Gap Matrix</h1>
         <p className="text-sm text-ink-500">Aggregated across all observation runs.</p>
       </div>
-      {Object.entries(grouped).map(([product, rows]) => (
+      {isLoading && (
+        <div className="card p-6 text-center text-ink-500 text-sm">Loading feature gap data...</div>
+      )}
+      {isError && (
+        <div className="card p-6 text-center text-red-700 text-sm">Failed to load feature gap matrix.</div>
+      )}
+      {!isLoading && !isError && Object.entries(grouped).map(([product, rows]) => (
         <div key={product} className="card p-4">
           <div className="font-semibold mb-2">{product}</div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -35,8 +41,8 @@ export function FeatureGapMatrixPage() {
           </div>
         </div>
       ))}
-      {Object.keys(grouped).length === 0 && (
-        <div className="card p-6 text-center text-ink-500 text-sm">No feature gap data yet.</div>
+      {!isLoading && !isError && Object.keys(grouped).length === 0 && (
+        <div className="card p-6 text-center text-ink-500 text-sm">No feature gap data yet. Complete an observation run to populate the matrix.</div>
       )}
     </div>
   );
