@@ -2,6 +2,7 @@
 
 namespace App\Services\Vault;
 
+use CodeIgniter\Database\RawSql;
 use Config\Database;
 use RuntimeException;
 
@@ -92,9 +93,9 @@ class CredentialVault
         $existing = $db->table('smoke_credentials')->where('target_profile_id', $targetProfileId)->get()->getRow();
         $row = [
             'target_profile_id' => $targetProfileId,
-            'ciphertext'        => $bundle['ciphertext'],
-            'nonce'             => $bundle['nonce'],
-            'auth_tag'          => $bundle['auth_tag'],
+            'ciphertext'        => $this->pgByteaLiteral($bundle['ciphertext']),
+            'nonce'             => $this->pgByteaLiteral($bundle['nonce']),
+            'auth_tag'          => $this->pgByteaLiteral($bundle['auth_tag']),
             'key_version'       => $bundle['key_version'],
             'kind'              => $kind,
             'rotated_at'        => date('Y-m-d H:i:s'),
@@ -118,10 +119,31 @@ class CredentialVault
             return null;
         }
         return $this->decrypt(
-            is_resource($row->ciphertext) ? stream_get_contents($row->ciphertext) : (string) $row->ciphertext,
-            is_resource($row->nonce)      ? stream_get_contents($row->nonce)      : (string) $row->nonce,
-            is_resource($row->auth_tag)   ? stream_get_contents($row->auth_tag)   : (string) $row->auth_tag,
+            $this->readBinary($row->ciphertext),
+            $this->readBinary($row->nonce),
+            $this->readBinary($row->auth_tag),
             (int) $row->key_version,
         );
+    }
+
+    /** PostgreSQL BYTEA hex literal — CI4 pg_escape_literal rejects raw binary. */
+    private function pgByteaLiteral(string $bytes): RawSql
+    {
+        return new RawSql("'\\x" . bin2hex($bytes) . "'");
+    }
+
+    private function readBinary(mixed $value): string
+    {
+        if (is_resource($value)) {
+            $value = stream_get_contents($value);
+        }
+        $value = (string) $value;
+        if (str_starts_with($value, '\\x')) {
+            $decoded = hex2bin(substr($value, 2));
+            if ($decoded !== false) {
+                return $decoded;
+            }
+        }
+        return $value;
     }
 }
