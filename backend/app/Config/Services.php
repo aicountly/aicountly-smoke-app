@@ -5,6 +5,7 @@ namespace Config;
 use App\Services\Audit\AuditLogger;
 use App\Services\Auth\JwtService;
 use App\Services\Auth\RbacService;
+use App\Services\ConsoleIdentityService;
 use App\Services\Brain\BrainEnsemble;
 use App\Services\Brain\Adapters\DeterministicAdapter;
 use App\Services\Brain\Adapters\GeminiAdapter;
@@ -103,5 +104,13 @@ class Services extends BaseService
             return self::getSharedInstance('searchAdapter');
         }
         return new PerplexitySearchAdapter();
+    }
+
+    public static function consoleIdentity(bool $getShared = true): ConsoleIdentityService
+    {
+        if ($getShared) {
+            return self::getSharedInstance('consoleIdentity');
+        }
+        return new ConsoleIdentityService();
     }
 }

@@ -9,6 +9,9 @@ $routes->get('health', 'HealthController::index');
 
 $routes->group('v1', static function (RouteCollection $routes): void {
     // ---- Auth (public + authenticated) -----------------------------------
+    $routes->get('auth/sso-callback',    'AuthController::ssoCallback');
+    $routes->post('auth/controller-sso', 'AuthController::controllerSso');
+    $routes->post('auth/console-session','AuthController::consoleSession');
     $routes->post('auth/login',          'AuthController::login');
     $routes->post('auth/refresh',        'AuthController::refresh');
     $routes->group('auth', ['filter' => 'jwt'], static function (RouteCollection $routes): void {

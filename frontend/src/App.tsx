@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
-import { RequireAuth } from '@/components/auth/RequireAuth';
-import { LoginPage } from '@/pages/LoginPage';
+import { useAuthBootstrap } from '@/hooks/useAuthBootstrap';
+import { ControllerGate } from '@/pages/ControllerGate';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { TargetProfilesPage } from '@/pages/TargetProfilesPage';
 import { NewObservationPage } from '@/pages/NewObservationPage';
@@ -13,19 +13,37 @@ import { FeatureGapMatrixPage } from '@/pages/FeatureGapMatrixPage';
 import { CompetitorBenchmarksPage } from '@/pages/CompetitorBenchmarksPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AuditLogsPage } from '@/pages/AuditLogsPage';
+import { useAuthStore } from '@/store/auth';
 
 export default function App() {
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
+  const { loading, ssoPending, gateReason, gateMessage, retryAuth } = useAuthBootstrap();
+
+  if (loading || ssoPending) {
+    return (
+      <div className="grid h-screen place-items-center text-sm text-ink-500">
+        {ssoPending ? 'Signing you in from Console…' : 'Loading Smoke Portal…'}
+      </div>
+    );
+  }
+
+  if (!accessToken || !user) {
+    return (
+      <ControllerGate
+        gateReason={gateReason}
+        gateMessage={gateMessage}
+        retryAuth={retryAuth}
+        ssoPending={ssoPending}
+      />
+    );
+  }
+
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route
-        path="/"
-        element={
-          <RequireAuth>
-            <AppShell />
-          </RequireAuth>
-        }
-      >
+      <Route path="/login" element={<Navigate to="/" replace />} />
+
+      <Route path="/" element={<AppShell />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="profiles" element={<TargetProfilesPage />} />

@@ -1,5 +1,7 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import clsx from 'clsx';
+import { api } from '@/lib/api';
+import { redirectToConsoleLogin } from '@/lib/consoleAuth';
 import { useAuthStore } from '@/store/auth';
 import { ProductionBanner } from '@/components/layout/ProductionBanner';
 
@@ -17,8 +19,18 @@ const NAV: Array<{ to: string; label: string; roles?: string[] }> = [
 
 export function AppShell() {
   const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
+  const logoutStore = useAuthStore((s) => s.logout);
   const location = useLocation();
+
+  async function logout() {
+    try {
+      await api.post('/auth/logout');
+    } catch {
+      /* ignore */
+    }
+    logoutStore();
+    redirectToConsoleLogin();
+  }
 
   return (
     <div className="min-h-screen flex bg-ink-50">
