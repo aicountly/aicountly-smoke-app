@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import clsx from 'clsx';
 import { api } from '@/lib/api';
-import { redirectToConsoleLogin } from '@/lib/consoleAuth';
+import { redirectToConsoleLoginAfterSignOut } from '@/lib/consoleAuth';
 import { useAuthStore } from '@/store/auth';
 import { ProductionBanner } from '@/components/layout/ProductionBanner';
 import { AppLauncher } from '@/components/layout/AppLauncher';
@@ -30,7 +30,7 @@ export function AppShell() {
       /* ignore */
     }
     logoutStore();
-    redirectToConsoleLogin();
+    await redirectToConsoleLoginAfterSignOut();
   }
 
   return (
