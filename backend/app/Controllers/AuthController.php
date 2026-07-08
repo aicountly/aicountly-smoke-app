@@ -72,14 +72,60 @@ class AuthController extends BaseController
             return $this->jsonError('not_found', 'User no longer exists', 404);
         }
         return $this->jsonOk([
-            'id'             => (int) $row->id,
-            'email'          => $row->email,
-            'full_name'      => $row->full_name,
-            'roles'          => Services::rbac()->rolesForUser((int) $row->id),
-            'status'         => $row->status,
-            'must_rotate_pw' => (bool) $row->must_rotate_pw,
-            'last_login_at'  => $row->last_login_at,
+            'id'              => (int) $row->id,
+            'email'           => $row->email,
+            'full_name'       => $row->full_name,
+            'roles'           => Services::rbac()->rolesForUser((int) $row->id),
+            'status'          => $row->status,
+            'must_rotate_pw'  => (bool) $row->must_rotate_pw,
+            'last_login_at'   => $row->last_login_at,
+            'controller_apps' => $this->controllerAppsForRequest(),
         ]);
+    }
+
+    public function controllerAppsLauncher(): ResponseInterface
+    {
+        $u = $this->user();
+        if (! $u) {
+            return $this->jsonError('unauthorized', 'Not authenticated.', 401);
+        }
+
+        $apps = $this->controllerAppsForRequest();
+        if ($apps === []) {
+            return $this->jsonError(
+                'console_required',
+                'Console session required for Top Controller Apps. Sign in at console.aicountly.org first.',
+                401,
+            );
+        }
+
+        return $this->jsonOk(['apps' => $apps]);
+    }
+
+    public function ssoLaunchUrl(): ResponseInterface
+    {
+        $u = $this->user();
+        if (! $u) {
+            return $this->jsonError('unauthorized', 'Not authenticated.', 401);
+        }
+
+        $appCode = strtolower(trim((string) ($this->request->getGet('app_code') ?? '')));
+        if ($appCode === '') {
+            return $this->jsonError('invalid_request', 'app_code query parameter is required.', 422);
+        }
+
+        $consoleToken = $this->consoleTokenFromRequest();
+        if ($consoleToken === '') {
+            return $this->jsonError('console_required', 'Console session required to launch controller apps.', 401);
+        }
+
+        $data = Services::consoleIdentity()->getSsoLaunchUrl($consoleToken, $appCode);
+        $redirectUrl = trim((string) ($data['redirect_url'] ?? ''));
+        if ($redirectUrl === '') {
+            return $this->jsonError('upstream_error', 'Console did not return a launch URL for this app.', 502);
+        }
+
+        return $this->jsonOk(['redirect_url' => $redirectUrl]);
     }
 
     public function changePassword(): ResponseInterface
@@ -118,7 +164,7 @@ class AuthController extends BaseController
                 return $this->ssoCallbackHtml('Smoke Portal is not configured for Console SSO yet.', 503);
             }
 
-            $token = trim((string) ($this->request->getGet('token') ?? ''));
+            $token = trim((string) ($this->request->getGet('token') ?? $this->request->getGet('sesskey') ?? ''));
             if ($token === '') {
                 return $this->ssoCallbackHtml('Missing SSO token. Open Smoke again from Console Top Controller Apps.', 400);
             }
@@ -288,13 +334,57 @@ class AuthController extends BaseController
             'token_type'    => 'Bearer',
             'expires_in'    => (int) env('JWT_ACCESS_TTL', 86400),
             'user'          => [
-                'id'             => (int) $user->id,
-                'email'          => $user->email,
-                'full_name'      => $user->full_name,
-                'roles'          => $roles,
-                'must_rotate_pw' => (bool) $user->must_rotate_pw,
+                'id'              => (int) $user->id,
+                'email'           => $user->email,
+                'full_name'       => $user->full_name,
+                'roles'           => $roles,
+                'must_rotate_pw'  => (bool) $user->must_rotate_pw,
+                'controller_apps' => $this->normalizeLauncherApps(
+                    is_array($identity['controller_apps'] ?? null) ? $identity['controller_apps'] : [],
+                ),
             ],
         ];
+    }
+
+    /**
+     * @return list<array<string,mixed>>
+     */
+    private function controllerAppsForRequest(): array
+    {
+        $consoleToken = $this->consoleTokenFromRequest();
+        if ($consoleToken === '') {
+            return [];
+        }
+
+        $data = Services::consoleIdentity()->getLauncherApps($consoleToken);
+        if (! is_array($data)) {
+            return [];
+        }
+
+        return $this->normalizeLauncherApps(
+            is_array($data['apps'] ?? null) ? $data['apps'] : [],
+        );
+    }
+
+    private function consoleTokenFromRequest(): string
+    {
+        return trim((string) ($this->request->getCookie(ConsoleIdentityService::cookieName()) ?? ''));
+    }
+
+    /**
+     * @param list<array<string,mixed>> $apps
+     * @return list<array<string,mixed>>
+     */
+    private function normalizeLauncherApps(array $apps): array
+    {
+        $current = strtolower(trim((string) env('CONTROLLER_APP_CODE', 'smoke')));
+
+        return array_values(array_map(static function (array $app) use ($current): array {
+            $code = strtolower(trim((string) ($app['code'] ?? '')));
+            $app['is_current'] = $code === $current;
+
+            return $app;
+        }, $apps));
     }
 
     /**

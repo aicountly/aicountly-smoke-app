@@ -17,6 +17,8 @@ $routes->group('v1', static function (RouteCollection $routes): void {
     $routes->group('auth', ['filter' => 'jwt'], static function (RouteCollection $routes): void {
         $routes->post('logout',         'AuthController::logout');
         $routes->get('me',              'AuthController::me');
+        $routes->get('controller-apps/launcher', 'AuthController::controllerAppsLauncher');
+        $routes->get('sso/launch-url',  'AuthController::ssoLaunchUrl');
         $routes->post('change-password','AuthController::changePassword');
     });
 

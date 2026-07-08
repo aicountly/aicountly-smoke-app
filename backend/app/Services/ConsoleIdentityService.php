@@ -45,6 +45,37 @@ class ConsoleIdentityService
         );
     }
 
+    public function getLauncherApps(string $consoleToken): ?array
+    {
+        $consoleToken = trim($consoleToken);
+        if ($consoleToken === '') {
+            return null;
+        }
+
+        $appCode = strtolower(trim((string) env('CONTROLLER_APP_CODE', 'smoke')));
+
+        return $this->requestJsonGet(
+            '/auth/controller-apps/launcher',
+            $appCode !== '' ? ['app_code' => $appCode] : [],
+            $consoleToken,
+        );
+    }
+
+    public function getSsoLaunchUrl(string $consoleToken, string $appCode): ?array
+    {
+        $consoleToken = trim($consoleToken);
+        $appCode       = strtolower(trim($appCode));
+        if ($consoleToken === '' || $appCode === '') {
+            return null;
+        }
+
+        return $this->requestJsonGet(
+            '/auth/sso/launch-url',
+            ['app_code' => $appCode],
+            $consoleToken,
+        );
+    }
+
     /**
      * @param array<string,mixed> $payload
      * @param list<string> $headers
@@ -77,6 +108,51 @@ class ConsoleIdentityService
 
         if ($raw === false || $status < 200 || $status >= 300) {
             log_message('error', 'Console identity request failed HTTP ' . $status . ' for ' . $path);
+
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
+        if (! is_array($decoded) || empty($decoded['success']) || ! is_array($decoded['data'] ?? null)) {
+            return null;
+        }
+
+        return $decoded['data'];
+    }
+
+    /**
+     * @param array<string,string> $query
+     * @return array<string,mixed>|null
+     */
+    private function requestJsonGet(string $path, array $query, string $bearerToken): ?array
+    {
+        $apiBase = rtrim((string) env('CONSOLE_API_URL', 'https://console.aicountly.org/api'), '/');
+        $url     = $apiBase . $path;
+        if ($query !== []) {
+            $url .= '?' . http_build_query($query);
+        }
+
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return null;
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_HTTPGET        => true,
+            CURLOPT_HTTPHEADER     => [
+                'Accept: application/json',
+                'Authorization: Bearer ' . $bearerToken,
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 15,
+        ]);
+
+        $raw    = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($raw === false || $status < 200 || $status >= 300) {
+            log_message('error', 'Console identity GET failed HTTP ' . $status . ' for ' . $path);
 
             return null;
         }

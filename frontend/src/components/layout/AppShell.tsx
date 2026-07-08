@@ -4,6 +4,7 @@ import { api } from '@/lib/api';
 import { redirectToConsoleLogin } from '@/lib/consoleAuth';
 import { useAuthStore } from '@/store/auth';
 import { ProductionBanner } from '@/components/layout/ProductionBanner';
+import { AppLauncher } from '@/components/layout/AppLauncher';
 
 const NAV: Array<{ to: string; label: string; roles?: string[] }> = [
   { to: '/dashboard',             label: 'Dashboard' },
@@ -69,6 +70,7 @@ export function AppShell() {
         <header className="h-14 bg-white border-b border-ink-200 flex items-center justify-between px-6">
           <div className="text-sm text-ink-500">{location.pathname}</div>
           <div className="flex items-center gap-3">
+            <AppLauncher initialApps={user?.controller_apps} />
             <div className="text-right text-xs leading-tight">
               <div className="font-medium text-ink-800">{user?.full_name ?? 'Guest'}</div>
               <div className="text-ink-500">{user?.roles.join(', ')}</div>

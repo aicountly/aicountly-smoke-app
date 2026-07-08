@@ -1,12 +1,23 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+export type ControllerApp = {
+  code: string;
+  name: string;
+  subtitle?: string;
+  icon?: string;
+  base_url?: string;
+  is_current?: boolean;
+  can_open?: boolean;
+};
+
 export type SmokeUser = {
   id: number;
   email: string;
   full_name: string;
   roles: string[];
   must_rotate_pw?: boolean;
+  controller_apps?: ControllerApp[];
 };
 
 type State = {
