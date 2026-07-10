@@ -1,8 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
+import {
+  CheckCircle,
+  Flame,
+  Hammer,
+  LayoutGrid,
+  Megaphone,
+  Shield,
+  Ticket,
+  Users,
+} from 'lucide-react';
 import * as controllerAccess from '@/lib/controllerAccess';
 import type { ControllerApp } from '@/lib/controllerAccess';
 import { useAuthStore } from '@/store/auth';
+
+const ICONS: Record<string, typeof LayoutGrid> = {
+  'layout-grid': LayoutGrid,
+  shield: Shield,
+  'check-circle': CheckCircle,
+  flame: Flame,
+  users: Users,
+  megaphone: Megaphone,
+  hammer: Hammer,
+  ticket: Ticket,
+};
 
 function GridIcon({ className }: { className?: string }) {
   return (
@@ -15,12 +36,9 @@ function GridIcon({ className }: { className?: string }) {
   );
 }
 
-function AppBadge({ name }: { name: string }) {
-  return (
-    <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-brand-100 text-[10px] font-bold text-brand-700">
-      {name.slice(0, 1).toUpperCase()}
-    </span>
-  );
+function AppIcon({ name }: { name?: string }) {
+  const Icon = (name && ICONS[name]) || LayoutGrid;
+  return <Icon size={18} className="text-brand-600" aria-hidden />;
 }
 
 type AppLauncherProps = {
@@ -208,7 +226,7 @@ export function AppLauncher({ initialApps = [] }: AppLauncherProps) {
                       className={commonClass}
                       onClick={(event) => handleTileClick(event, app)}
                     >
-                      <AppBadge name={app.name} />
+                      <AppIcon name={app.icon} />
                       <p className="m-0 text-sm font-semibold text-ink-900">{app.name}</p>
                       {app.subtitle ? <p className="m-0 text-xs leading-snug text-ink-500">{app.subtitle}</p> : null}
                     </a>
@@ -223,7 +241,7 @@ export function AppLauncher({ initialApps = [] }: AppLauncherProps) {
                     className={commonClass}
                     onClick={() => void openApp(app)}
                   >
-                    <AppBadge name={app.name} />
+                    <AppIcon name={app.icon} />
                     <p className="m-0 text-sm font-semibold text-ink-900">{app.name}</p>
                     {app.subtitle ? <p className="m-0 text-xs leading-snug text-ink-500">{app.subtitle}</p> : null}
                     {launchingCode === app.code ? (
