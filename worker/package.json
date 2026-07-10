@@ -5,18 +5,19 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "start": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "observe": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "run-session": "tsx src/cli/runSession.ts",
     "enqueue": "tsx src/cli/enqueue.ts",
     "report": "tsx src/cli/rebuildReport.ts",
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "playwright:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
     "axios": "^1.7.7",
-    "dotenv": "^16.4.5",
     "playwright": "^1.46.0"
   },
   "devDependencies": {
