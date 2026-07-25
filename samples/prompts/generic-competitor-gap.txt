@@ -1,0 +1,8 @@
+Walk every menu of the target app. For each module, compare features against the
+leading competitors in this product category (use the Competitor Benchmarks data where
+available). List missing features, partial implementations and areas where competitors
+offer a clearly better workflow.
+
+Include UX gaps, theme inconsistencies and broken screens. Produce module-wise session
+reports, a missing-feature roadmap and developer prompts for each recommendation.
+Observer mode only.

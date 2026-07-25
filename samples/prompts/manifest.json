@@ -1,0 +1,83 @@
+{
+  "samples": [
+    {
+      "id": "books-full",
+      "label": "Smart Books — Full product intelligence",
+      "description": "UI/UX audit vs Tally, Zoho Books; GST gaps; module-wise reports.",
+      "product": "books",
+      "file": "books.txt"
+    },
+    {
+      "id": "hrms-full",
+      "label": "HRMS — Full product intelligence",
+      "description": "Payroll, attendance, compliance vs Keka, Zoho People, greytHR.",
+      "product": "hrms",
+      "file": "hrms.txt"
+    },
+    {
+      "id": "contacts-full",
+      "label": "Contacts — Full product intelligence",
+      "description": "CRM features vs HubSpot, Pipedrive, Zoho CRM.",
+      "product": "contacts",
+      "file": "contacts.txt"
+    },
+    {
+      "id": "calendar-full",
+      "label": "Calendar — Full product intelligence",
+      "description": "Scheduling vs Google Calendar, Outlook, Reclaim.ai.",
+      "product": "calendar",
+      "file": "calendar.txt"
+    },
+    {
+      "id": "auditor-full",
+      "label": "Auditor — Full product intelligence",
+      "description": "Audit workflow vs CaseWare, Suralink, ICAI CASE.",
+      "product": "auditor",
+      "file": "auditor.txt"
+    },
+    {
+      "id": "fr-full",
+      "label": "Financial Reporting — Full product intelligence",
+      "description": "Schedule III, IND-AS/IFRS vs Caseware, IRIS Carbon.",
+      "product": "fr",
+      "file": "fr.txt"
+    },
+    {
+      "id": "secretarial-full",
+      "label": "Secretarial — Full product intelligence",
+      "description": "MCA compliance vs Suvit, ComplianceMantra, Resolute.",
+      "product": "secretarial",
+      "file": "secretarial.txt"
+    },
+    {
+      "id": "generic-nav-sweep",
+      "label": "Quick navigation sweep",
+      "description": "Screenshot every menu and list visible navigation items.",
+      "file": "generic-nav-sweep.txt"
+    },
+    {
+      "id": "generic-ui-theme",
+      "label": "UI/UX & theme consistency audit",
+      "description": "Flag old-theme pages, layout issues and UX gaps.",
+      "file": "generic-ui-theme.txt"
+    },
+    {
+      "id": "generic-errors",
+      "label": "Errors, API failures & slow pages",
+      "description": "Capture console errors, failed requests and performance issues.",
+      "file": "generic-errors.txt"
+    },
+    {
+      "id": "generic-competitor-gap",
+      "label": "Competitor feature gap analysis",
+      "description": "Compare against industry leaders and list missing features.",
+      "file": "generic-competitor-gap.txt"
+    },
+    {
+      "id": "generic-reports-settings",
+      "label": "Reports, exports & settings review",
+      "description": "Deep-dive on reports, filters, exports and configuration screens.",
+      "file": "generic-reports-settings.txt"
+    }
+  ]
+}

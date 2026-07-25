@@ -11,6 +11,7 @@ use App\Services\Brain\Adapters\DeterministicAdapter;
 use App\Services\Brain\Adapters\GeminiAdapter;
 use App\Services\Brain\Adapters\OpenAIAdapter;
 use App\Services\Brain\Adapters\PerplexityAdapter;
+use App\Services\Planner\MasterPromptSampleCatalog;
 use App\Services\Planner\SessionPlanner;
 use App\Services\Reports\FinalReportBuilder;
 use App\Services\Reports\SessionReportBuilder;
@@ -72,6 +73,14 @@ class Services extends BaseService
             return self::getSharedInstance('planner');
         }
         return new SessionPlanner(self::brain());
+    }
+
+    public static function promptSamples(bool $getShared = true): MasterPromptSampleCatalog
+    {
+        if ($getShared) {
+            return self::getSharedInstance('promptSamples');
+        }
+        return new MasterPromptSampleCatalog();
     }
 
     public static function runner(bool $getShared = true): RunOrchestrator

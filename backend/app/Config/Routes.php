@@ -61,6 +61,7 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->put('target-profiles/(:num)/credentials',   'CredentialsController::rotate/$1', ['filter' => 'rbac:owner,product_reviewer']);
 
         // Master prompts + planning
+        $routes->get('master-prompt-samples',    'MasterPromptsController::samples');
         $routes->post('master-prompts',          'MasterPromptsController::create', ['filter' => 'rbac:owner,product_reviewer']);
         $routes->get('master-prompts/(:num)',    'MasterPromptsController::show/$1');
 

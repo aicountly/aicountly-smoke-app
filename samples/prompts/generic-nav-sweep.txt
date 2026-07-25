@@ -1,0 +1,6 @@
+Walk every main menu and submenu of the target app (per the configured profile).
+Capture a screenshot of each screen. List all visible menu items, broken links, blank
+pages and 404 errors. Note any menus that are hidden, disabled or require permissions
+you cannot access in observer mode.
+
+Stay strictly in observer mode. Do not submit forms or alter any data.

@@ -1,0 +1,7 @@
+Focus on Reports, Settings and Configuration modules across the target app. For
+each report screen observe available filters, date ranges, export/print/download options,
+drill-down behaviour and empty states. For settings, walk every configuration screen
+read-only and note missing options compared to typical SaaS products in this category.
+
+Flag old-theme pages, missing exports and broken screens. Module-wise reports plus one
+consolidated summary. No form submission.

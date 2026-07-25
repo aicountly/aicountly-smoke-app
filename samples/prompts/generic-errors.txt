@@ -1,0 +1,6 @@
+Walk every module of the target app and capture console errors, failed network/API
+requests and pages that load slowly (over 3 seconds). Flag broken screens, blank states
+caused by JS errors and missing error handling.
+
+Document each issue with the menu path, screenshot and error details. Produce module-wise
+reports and one consolidated reliability report. Read-only observation.

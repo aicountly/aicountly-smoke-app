@@ -1,10 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import { useProductionContext } from '@/store/productionContext';
 
 type Profile = { id: number; profile_name: string; product_name: string; environment: string };
+
+type MasterPromptSample = {
+  id: string;
+  label: string;
+  description: string;
+  product?: string;
+  prompt: string;
+};
+
+type SamplesResponse = {
+  recommended: MasterPromptSample[];
+  other: MasterPromptSample[];
+};
 
 export function NewObservationPage() {
   const navigate = useNavigate();
@@ -19,8 +32,33 @@ export function NewObservationPage() {
   const [title, setTitle] = useState('Observation - ' + new Date().toISOString().slice(0, 10));
   const [environment, setEnvironment] = useState('sandbox');
   const [prompt, setPrompt] = useState('');
+  const [sampleId, setSampleId] = useState('');
 
   const profile = profiles?.data?.find((p) => p.id === profileId) ?? null;
+
+  const { data: samples } = useQuery<SamplesResponse>({
+    queryKey: ['master-prompt-samples', profile?.product_name ?? ''],
+    queryFn: async () =>
+      (await api.get('/master-prompt-samples', {
+        params: profile?.product_name ? { product_name: profile.product_name } : undefined,
+      })).data,
+  });
+
+  const recommended = samples?.recommended ?? [];
+  const other = samples?.other ?? [];
+  const allSamples = useMemo(() => [...recommended, ...other], [recommended, other]);
+  const selectedSample = allSamples.find((s) => s.id === sampleId);
+
+  const applySample = (id: string) => {
+    setSampleId(id);
+    if (!id) return;
+    const sample = allSamples.find((s) => s.id === id);
+    if (!sample) return;
+    setPrompt(sample.prompt);
+    if (sample.product) {
+      setTitle(`${sample.label} - ${new Date().toISOString().slice(0, 10)}`);
+    }
+  };
 
   useEffect(() => {
     if (profile) setEnvironment(profile.environment);
@@ -80,12 +118,46 @@ export function NewObservationPage() {
         </div>
 
         <div>
-          <label className="label">Master Prompt</label>
+          <div className="flex flex-wrap items-end justify-between gap-3 mb-1">
+            <label className="label mb-0">Master Prompt</label>
+            <div className="min-w-[min(100%,280px)] flex-1 sm:flex-none">
+              <label className="sr-only" htmlFor="prompt-sample">Sample prompt</label>
+              <select
+                id="prompt-sample"
+                className="input text-ink-600"
+                value={sampleId}
+                onChange={(e) => applySample(e.target.value)}
+                disabled={allSamples.length === 0}
+              >
+                <option value="">
+                  {allSamples.length === 0 ? 'Loading samples...' : 'Choose a sample prompt...'}
+                </option>
+                {recommended.length > 0 && (
+                  <optgroup label={`Recommended for ${profile?.profile_name ?? 'this profile'}`}>
+                    {recommended.map((s) => (
+                      <option key={s.id} value={s.id}>{s.label}</option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label={recommended.length > 0 ? 'Other samples' : 'Sample prompts'}>
+                  {other.map((s) => (
+                    <option key={s.id} value={s.id}>{s.label}</option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+          </div>
+          {selectedSample?.description && (
+            <p className="text-xs text-ink-500 mb-2">{selectedSample.description}</p>
+          )}
           <textarea
             className="input min-h-[160px] font-mono"
             placeholder="e.g. Walk every menu of books.aicountly.com, observe UI/UX, list missing features vs Tally + Zoho Books, flag old-theme pages, suggest improvements."
             value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
+            onChange={(e) => {
+              setPrompt(e.target.value);
+              if (sampleId) setSampleId('');
+            }}
           />
         </div>
 

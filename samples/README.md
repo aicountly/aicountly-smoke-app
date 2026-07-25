@@ -6,8 +6,10 @@ brain has no provider configured.
 
 ## Folders
 
-- `prompts/` &mdash; example master prompts you can paste into the
-  *New Observation* form per AICOUNTLY product.
+- `prompts/` &mdash; example master prompts for the *New Observation* form.
+  Listed via `GET /api/v1/master-prompt-samples` (metadata in `manifest.json`,
+  text in `*.txt`). Edit these files on the server and redeploy `samples/` to
+  update the dropdown without rebuilding the frontend.
 - `sessions/` &mdash; per-product fallback session plans used by the
   `DeterministicAdapter` when no AI provider is configured.
 - `competitors/` &mdash; per-product competitor feature lists. Loaded into

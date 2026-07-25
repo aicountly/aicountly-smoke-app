@@ -1,0 +1,7 @@
+Audit UI and UX across every module of the target app. Focus on visual consistency
+with the AICOUNTLY green-white modern SaaS theme. Flag old/inconsistent pages, unclear
+empty states, missing breadcrumbs, table overflow on smaller widths, modals that do not
+fit, duplicate buttons, missing filters and missing keyboard shortcuts.
+
+Produce module-wise session reports with screenshots and a consolidated quick-wins list.
+Observer mode only — no form submission.

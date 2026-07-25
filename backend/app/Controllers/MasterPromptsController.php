@@ -8,6 +8,18 @@ use Config\Services;
 
 class MasterPromptsController extends BaseController
 {
+    public function samples(): ResponseInterface
+    {
+        $product = trim((string) ($this->request->getGet('product_name') ?? ''));
+        $grouped = Services::promptSamples()->forProduct($product !== '' ? $product : null);
+
+        return $this->jsonOk([
+            'recommended' => $grouped['recommended'],
+            'other'       => $grouped['other'],
+            'data'        => array_merge($grouped['recommended'], $grouped['other']),
+        ]);
+    }
+
     public function create(): ResponseInterface
     {
         $body = $this->jsonBody();
