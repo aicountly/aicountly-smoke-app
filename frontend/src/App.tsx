@@ -13,6 +13,7 @@ import { FeatureGapMatrixPage } from '@/pages/FeatureGapMatrixPage';
 import { CompetitorBenchmarksPage } from '@/pages/CompetitorBenchmarksPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AuditLogsPage } from '@/pages/AuditLogsPage';
+import { UsersPage } from '@/pages/UsersPage';
 import { useAuthStore } from '@/store/auth';
 
 export default function App() {
@@ -55,6 +56,7 @@ export default function App() {
         <Route path="feature-gap-matrix" element={<FeatureGapMatrixPage />} />
         <Route path="competitor-benchmarks" element={<CompetitorBenchmarksPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="users" element={<UsersPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

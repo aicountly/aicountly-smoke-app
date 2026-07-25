@@ -15,6 +15,7 @@ const NAV: Array<{ to: string; label: string; roles?: string[] }> = [
   { to: '/feature-gap-matrix',    label: 'Feature Gap Matrix' },
   { to: '/competitor-benchmarks', label: 'Competitor Benchmarks', roles: ['owner', 'product_reviewer'] },
   { to: '/settings',              label: 'Settings', roles: ['owner', 'product_reviewer'] },
+  { to: '/users',                 label: 'Users', roles: ['owner'] },
   { to: '/audit-logs',            label: 'Audit Logs', roles: ['owner', 'product_reviewer', 'auditor_viewer'] },
 ];
 

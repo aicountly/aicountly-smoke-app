@@ -69,7 +69,11 @@ npm run smoke:observe
 | `npm run observe` | Dev poll loop via tsx (no build required) |
 | `npm run dev` | Dev poll loop with file watch |
 | `npm run run-session` | Run one leased session, then exit |
+| `npm run enqueue -- --product=books` | Start a run from the latest approved plan (`POST /worker/enqueue`) |
 | `npm run playwright:install` | Download Chromium + OS deps |
+
+AI enrichment during a session calls `POST /worker/brain/invoke` (shared token);
+provider keys stay on the PHP API only.
 
 ## Environment variables
 

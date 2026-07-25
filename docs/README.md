@@ -125,22 +125,20 @@ After `php spark db:seed InitialSeeder` you will have:
 | `developer_viewer` | View reports only                                                           |
 | `auditor_viewer`   | View only reports flagged `auditor_visible`                                  |
 
-The seeder also creates an initial Owner:
+Access is via **Console SSO** (local email/password login is disabled). The
+seeder may still create a bootstrap Owner row for DB/role wiring:
 
 ```
 email:    owner@aicountly.local
-password: ChangeMe!2026   (force-rotate on first login)
+password: ChangeMe!2026
 ```
 
-Log in, change the password, then create real users from `/audit-logs` is
-disabled — use the (deferred) `/users` admin page in v1 by inserting rows
-directly via `php spark db:seed` extensions or by hitting `POST
-/api/v1/users` from the Owner account.
+Owners manage portal users and roles from the `/users` page (or `POST /api/v1/users`).
 
 ## 6. The workflow
 
 ```
-Login (smoke.aicountly.org)
+Console SSO → smoke.aicountly.org
    |
    v
 Create / select Target App Profile  (owner / product_reviewer)
@@ -222,8 +220,8 @@ smoke-reports/
 ```bash
 npm run smoke:observe                    # start worker poll loop
 npm run smoke:run-session -- --session=42
-npm run smoke:books                      # enqueue all approved books sessions
-npm run smoke:hrms
+npm run smoke:books                      # start run from latest approved books plan
+npm run smoke:hrms                       # same for hrms (requires worker token + approved plan)
 npm run smoke:report -- --run-id=17
 ```
 

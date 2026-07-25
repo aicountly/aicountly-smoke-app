@@ -36,6 +36,8 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->post('reports',               'WorkerController::recordReport');
         $routes->post('runs/(:num)/finalize',  'WorkerController::finalizeRun/$1');
         $routes->post('logs',                 'WorkerController::appendLog');
+        $routes->post('brain/invoke',          'WorkerController::brainInvoke');
+        $routes->post('enqueue',               'WorkerController::enqueue');
     });
 
     // ---- All other endpoints require JWT ---------------------------------

@@ -6,10 +6,8 @@ use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 
 /**
- * Generic brain invocation endpoint used by the worker (for in-task UX/feature-
- * gap enrichment) and by the portal for debugging. Authenticated via JWT +
- * RBAC at the route level, and via WorkerTokenFilter for the worker-callback
- * version under /worker/* (handled by WorkerController).
+ * Portal/debug brain invocation (JWT + RBAC).
+ * Worker enrichment uses POST /worker/brain/invoke (WorkerController::brainInvoke).
  */
 class BrainController extends BaseController
 {

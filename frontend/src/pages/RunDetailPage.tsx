@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { openReport } from '@/lib/reports';
+import { useAuthStore } from '@/store/auth';
 
 type RunLog = {
   id: number;
@@ -47,14 +48,38 @@ function logLevelClass(level: string): string {
 export function RunDetailPage() {
   const { id } = useParams();
   const runId = Number(id);
+  const qc = useQueryClient();
+  const canCancel = useAuthStore((s) => s.hasRole('owner', 'product_reviewer'));
   const logEndRef = useRef<HTMLDivElement>(null);
   const [lastLogId, setLastLogId] = useState(0);
   const [logs, setLogs] = useState<RunLog[]>([]);
+  const [detailTab, setDetailTab] = useState<'inventory' | 'ux' | 'gaps'>('inventory');
 
   const { data } = useQuery<RunDetail>({
     queryKey: ['run', runId],
     queryFn: async () => (await api.get(`/runs/${runId}`)).data,
     refetchInterval: 3000,
+  });
+
+  const cancelMut = useMutation({
+    mutationFn: async () => (await api.post(`/runs/${runId}/cancel`, {})).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['run', runId] }),
+  });
+
+  const inventoryQ = useQuery<{ data: Array<Record<string, unknown>> }>({
+    queryKey: ['run-inventory', runId],
+    queryFn: async () => (await api.get(`/runs/${runId}/inventory`)).data,
+    enabled: runId > 0 && detailTab === 'inventory',
+  });
+  const uxQ = useQuery<{ data: Array<Record<string, unknown>> }>({
+    queryKey: ['run-ux', runId],
+    queryFn: async () => (await api.get(`/runs/${runId}/ux-issues`)).data,
+    enabled: runId > 0 && detailTab === 'ux',
+  });
+  const gapsQ = useQuery<{ data: Array<Record<string, unknown>> }>({
+    queryKey: ['run-gaps', runId],
+    queryFn: async () => (await api.get(`/runs/${runId}/feature-gaps`)).data,
+    enabled: runId > 0 && detailTab === 'gaps',
   });
 
   const logsQuery = useQuery<{ data: RunLog[] }>({
@@ -87,15 +112,31 @@ export function RunDetailPage() {
 
   const showWorkerAlert = !data.worker.online && ['queued', 'running'].includes(data.data.status);
 
+  const cancellable = canCancel && ['queued', 'running'].includes(data.data.status);
+
   return (
     <div className="space-y-4 max-w-5xl">
-      <div>
-        <h1 className="text-xl font-semibold font-mono">{data.data.run_code}</h1>
-        <p className="text-sm text-ink-500">
-          {data.data.product_name} &middot; {data.data.environment} &middot;{' '}
-          <span className="badge-brand">{data.data.status}</span>
-          {' '}&middot; {data.data.sessions_done}/{data.data.sessions_total} done
-        </p>
+      <div className="flex justify-between items-start gap-4">
+        <div>
+          <h1 className="text-xl font-semibold font-mono">{data.data.run_code}</h1>
+          <p className="text-sm text-ink-500">
+            {data.data.product_name} &middot; {data.data.environment} &middot;{' '}
+            <span className="badge-brand">{data.data.status}</span>
+            {' '}&middot; {data.data.sessions_done}/{data.data.sessions_total} done
+          </p>
+        </div>
+        {cancellable && (
+          <button
+            type="button"
+            className="btn-danger"
+            disabled={cancelMut.isPending}
+            onClick={() => {
+              if (confirm('Cancel this run and all queued/leased jobs?')) cancelMut.mutate();
+            }}
+          >
+            {cancelMut.isPending ? 'Cancelling…' : 'Cancel run'}
+          </button>
+        )}
       </div>
 
       {showWorkerAlert && (
@@ -188,6 +229,73 @@ pm2 start npm --name smoke-worker -- start`}
             </li>
           )}
         </ul>
+      </div>
+
+      <div className="card overflow-hidden">
+        <div className="px-4 py-2 bg-ink-50 text-ink-600 text-sm font-semibold flex gap-3">
+          {([
+            ['inventory', 'UI inventory'],
+            ['ux', 'UX issues'],
+            ['gaps', 'Feature gaps'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className={detailTab === key ? 'text-brand-700 underline' : 'text-ink-500 hover:text-ink-800'}
+              onClick={() => setDetailTab(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="p-4 text-sm max-h-80 overflow-y-auto">
+          {detailTab === 'inventory' && (
+            <ul className="space-y-2">
+              {(inventoryQ.data?.data ?? []).map((row, i) => (
+                <li key={i} className="border-b border-ink-100 pb-2">
+                  <span className="badge-neutral mr-2">{String(row.kind ?? '')}</span>
+                  <span className="font-medium">{String(row.label ?? '')}</span>
+                  {row.url ? <div className="text-xs text-ink-500 font-mono truncate">{String(row.url)}</div> : null}
+                </li>
+              ))}
+              {!inventoryQ.isLoading && (inventoryQ.data?.data?.length ?? 0) === 0 && (
+                <li className="text-ink-500">No inventory captured yet.</li>
+              )}
+            </ul>
+          )}
+          {detailTab === 'ux' && (
+            <ul className="space-y-2">
+              {(uxQ.data?.data ?? []).map((row, i) => (
+                <li key={i} className="border-b border-ink-100 pb-2">
+                  <div className="flex gap-2 items-center">
+                    <span className="badge-warning">{String(row.severity ?? '')}</span>
+                    <span className="font-medium">{String(row.title ?? '')}</span>
+                  </div>
+                  {row.description ? <p className="text-ink-600 mt-1">{String(row.description)}</p> : null}
+                </li>
+              ))}
+              {!uxQ.isLoading && (uxQ.data?.data?.length ?? 0) === 0 && (
+                <li className="text-ink-500">No UX issues recorded yet.</li>
+              )}
+            </ul>
+          )}
+          {detailTab === 'gaps' && (
+            <ul className="space-y-2">
+              {(gapsQ.data?.data ?? []).map((row, i) => (
+                <li key={i} className="border-b border-ink-100 pb-2">
+                  <div className="flex gap-2 items-center">
+                    <span className="badge-neutral">{String(row.severity ?? '')}</span>
+                    <span className="font-medium">{String(row.expected_feature ?? '')}</span>
+                  </div>
+                  {row.recommendation ? <p className="text-ink-600 mt-1">{String(row.recommendation)}</p> : null}
+                </li>
+              ))}
+              {!gapsQ.isLoading && (gapsQ.data?.data?.length ?? 0) === 0 && (
+                <li className="text-ink-500">No feature gaps recorded yet.</li>
+              )}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );

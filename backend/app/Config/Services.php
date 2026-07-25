@@ -19,6 +19,7 @@ use App\Services\Runner\RunLogService;
 use App\Services\Runner\RunOrchestrator;
 use App\Services\Runner\WorkerStatusService;
 use App\Services\Search\PerplexitySearchAdapter;
+use App\Services\Settings\SettingsStore;
 use App\Services\Vault\CredentialVault;
 use CodeIgniter\Config\BaseService;
 
@@ -56,6 +57,14 @@ class Services extends BaseService
         return new CredentialVault();
     }
 
+    public static function settings(bool $getShared = true): SettingsStore
+    {
+        if ($getShared) {
+            return self::getSharedInstance('settings');
+        }
+        return new SettingsStore();
+    }
+
     public static function brain(bool $getShared = true): BrainEnsemble
     {
         if ($getShared) {
@@ -66,6 +75,7 @@ class Services extends BaseService
             new PerplexityAdapter(),
             new GeminiAdapter(),
             new DeterministicAdapter(),
+            self::settings(),
         );
     }
 

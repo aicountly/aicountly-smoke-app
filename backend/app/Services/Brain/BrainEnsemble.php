@@ -7,6 +7,7 @@ use App\Services\Brain\Adapters\DeterministicAdapter;
 use App\Services\Brain\Adapters\GeminiAdapter;
 use App\Services\Brain\Adapters\OpenAIAdapter;
 use App\Services\Brain\Adapters\PerplexityAdapter;
+use App\Services\Settings\SettingsStore;
 use Throwable;
 
 /**
@@ -18,8 +19,8 @@ use Throwable;
  *              top). Gemini's output is the single source of truth.
  *
  * If no provider is configured, the DeterministicAdapter is used so the rest of
- * the portal stays functional. The configured providers can be overridden via
- * the smoke_settings keys `brain.parallel_providers` and `brain.default_arbiter`.
+ * the portal stays functional. Provider selection is driven by smoke_settings
+ * keys `brain.parallel_providers` and `brain.default_arbiter`.
  */
 class BrainEnsemble
 {
@@ -28,6 +29,7 @@ class BrainEnsemble
         private PerplexityAdapter $perplexity,
         private GeminiAdapter $gemini,
         private DeterministicAdapter $deterministic,
+        private SettingsStore $settings,
     ) {}
 
     /**
@@ -46,6 +48,7 @@ class BrainEnsemble
             'product'        => $context['product']     ?? 'unknown',
             'environment'    => $context['environment'] ?? 'sandbox',
             'temperature'    => $context['temperature'] ?? 0.2,
+            'timeout'        => $this->settings->getInt('brain.timeout_seconds', 60),
         ];
 
         $parallel = $this->parallelMembers();
@@ -89,13 +92,25 @@ class BrainEnsemble
     /** @return BrainAdapterInterface[] */
     private function parallelMembers(): array
     {
+        $wanted = $this->settings->getStringList('brain.parallel_providers', ['openai', 'perplexity']);
+        $byName = [
+            'openai'        => $this->openai,
+            'perplexity'    => $this->perplexity,
+            'gemini'        => $this->gemini,
+            'deterministic' => $this->deterministic,
+        ];
+
         $configured = [];
-        if ($this->openai->isConfigured()) {
-            $configured[] = $this->openai;
+        foreach ($wanted as $name) {
+            $adapter = $byName[$name] ?? null;
+            if (! $adapter) {
+                continue;
+            }
+            if ($adapter instanceof DeterministicAdapter || (method_exists($adapter, 'isConfigured') && $adapter->isConfigured())) {
+                $configured[] = $adapter;
+            }
         }
-        if ($this->perplexity->isConfigured()) {
-            $configured[] = $this->perplexity;
-        }
+
         if ($configured === []) {
             $configured[] = $this->deterministic;
         }
@@ -104,7 +119,13 @@ class BrainEnsemble
 
     private function arbiter(): BrainAdapterInterface
     {
-        return $this->gemini;
+        $name = strtolower($this->settings->getString('brain.default_arbiter', 'gemini'));
+        return match ($name) {
+            'openai'        => $this->openai,
+            'perplexity'    => $this->perplexity,
+            'deterministic' => $this->deterministic,
+            default         => $this->gemini,
+        };
     }
 
     private function arbitrateWithGemini(

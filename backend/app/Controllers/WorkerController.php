@@ -9,7 +9,7 @@ use Config\Services;
 /**
  * Worker-side endpoints. Authenticated via WorkerTokenFilter (X-Worker-Token).
  * Never use JWT here. Also never include AI provider keys -- the worker calls
- * /worker/brain to delegate council inference back through PHP.
+ * /worker/brain/invoke to delegate council inference back through PHP.
  */
 class WorkerController extends BaseController
 {
@@ -188,5 +188,77 @@ class WorkerController extends BaseController
             is_array($body['context'] ?? null) ? $body['context'] : [],
         );
         return $this->jsonOk(['ok' => true]);
+    }
+
+    /**
+     * Delegate council inference so the worker never holds provider API keys.
+     */
+    public function brainInvoke(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $task = (string) ($body['task'] ?? 'plan');
+        $sys  = (string) ($body['system_prompt'] ?? '');
+        $usr  = (string) ($body['user_prompt']   ?? '');
+        $ctx  = (array)  ($body['context']       ?? []);
+
+        if ($sys === '' || $usr === '') {
+            return $this->jsonError('invalid_request', 'system_prompt and user_prompt are required.', 400);
+        }
+
+        $result = Services::brain()->invoke($task, $sys, $usr, $ctx);
+        return $this->jsonOk(['data' => $result]);
+    }
+
+    /**
+     * CLI convenience: find the latest approved session plan for a product
+     * (active target profile) and start an observation run.
+     */
+    public function enqueue(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $product = strtolower(trim((string) ($body['product'] ?? '')));
+        $planId  = (int) ($body['plan_id'] ?? 0);
+        $db = Database::connect();
+
+        if ($planId <= 0) {
+            if ($product === '') {
+                return $this->jsonError('invalid_request', 'product or plan_id is required.', 400);
+            }
+            $row = $db->table('smoke_session_plans sp')
+                ->select('sp.id')
+                ->join('smoke_master_prompts mp', 'mp.id = sp.master_prompt_id')
+                ->join('smoke_target_profiles tp', 'tp.id = mp.target_profile_id')
+                ->where('sp.status', 'approved')
+                ->where('tp.status', 'active')
+                ->where('tp.product_name', $product)
+                ->orderBy('sp.approved_at', 'DESC')
+                ->orderBy('sp.id', 'DESC')
+                ->limit(1)
+                ->get()
+                ->getRow();
+            if (! $row) {
+                return $this->jsonError(
+                    'not_found',
+                    "No approved session plan found for active product=\"{$product}\". Approve a plan in the portal first.",
+                    404,
+                );
+            }
+            $planId = (int) $row->id;
+        } else {
+            $plan = $db->table('smoke_session_plans')->where('id', $planId)->get()->getRow();
+            if (! $plan) {
+                return $this->jsonError('not_found', 'Session plan not found', 404);
+            }
+            if ($plan->status !== 'approved') {
+                return $this->jsonError('precondition_failed', 'Plan must be approved before starting a run.', 412);
+            }
+        }
+
+        $run = Services::runner()->startRun($planId, null);
+        Services::audit()->record('worker.enqueue', 'smoke_observation_runs', (string) ($run['id'] ?? ''), null, [
+            'plan_id' => $planId,
+            'product' => $product,
+        ]);
+        return $this->jsonOk(['data' => $run], 201);
     }
 }
