@@ -11,6 +11,35 @@ type RunLog = {
   level: string;
   message: string;
   created_at: string;
+  session_id?: number | null;
+};
+
+type SessionRow = {
+  id: number;
+  ordinal: number;
+  name: string;
+  status: string;
+  job_id: number | null;
+  job_status: string | null;
+  attempts: number;
+  last_error: string | null;
+  leased_by: string | null;
+};
+
+type SessionDetail = {
+  session: SessionRow & { description?: string; menu_path?: string };
+  logs: RunLog[];
+  results: Array<{
+    id: number;
+    screen_url: string;
+    screen_title: string;
+    module_name: string;
+    has_screenshot: boolean;
+    screenshot_url: string | null;
+    captured_at?: string;
+    created_at?: string;
+  }>;
+  reports: Array<{ id: number; kind: string; title: string; ux_score: number; maturity_score: number }>;
 };
 
 type RunDetail = {
@@ -25,16 +54,7 @@ type RunDetail = {
     sessions_failed: number;
     reports_dir: string;
   };
-  sessions: Array<{
-    id: number;
-    ordinal: number;
-    name: string;
-    status: string;
-    job_status: string | null;
-    attempts: number;
-    last_error: string | null;
-    leased_by: string | null;
-  }>;
+  sessions: SessionRow[];
   reports: Array<{ id: number; kind: string; title: string; html_path: string; ux_score: number; maturity_score: number; auditor_visible: boolean }>;
   worker: { online: boolean; queued_jobs: number; active_leases: number; last_seen_at: string | null; message: string };
 };
@@ -45,15 +65,171 @@ function logLevelClass(level: string): string {
   return 'text-emerald-200';
 }
 
+function ScreenshotThumb({ runId, resultId, title }: { runId: number; resultId: number; title: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [err, setErr] = useState(false);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get(`/runs/${runId}/results/${resultId}/screenshot`, { responseType: 'blob' });
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(res.data as Blob);
+        setSrc(objectUrl);
+      } catch {
+        if (!cancelled) setErr(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [runId, resultId]);
+
+  if (err) return <div className="text-xs text-ink-500">Screenshot unavailable</div>;
+  if (!src) return <div className="h-40 bg-ink-100 animate-pulse rounded" />;
+
+  return (
+    <a href={src} target="_blank" rel="noreferrer" className="block">
+      <img src={src} alt={title || 'Screenshot'} className="w-full max-h-80 object-contain rounded border border-ink-200 bg-ink-50" />
+    </a>
+  );
+}
+
+function SessionLogDrawer({
+  runId,
+  sessionId,
+  sessionName,
+  onClose,
+}: {
+  runId: number;
+  sessionId: number;
+  sessionName: string;
+  onClose: () => void;
+}) {
+  const { data, isLoading, refetch, isFetching } = useQuery<SessionDetail>({
+    queryKey: ['session-detail', runId, sessionId],
+    queryFn: async () => (await api.get(`/runs/${runId}/sessions/${sessionId}`)).data,
+    refetchInterval: 3000,
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-ink-900/40" onClick={onClose}>
+      <div
+        className="h-full w-full max-w-2xl bg-white shadow-xl flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-ink-200 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs text-ink-500 uppercase tracking-wide">Session log</div>
+            <h2 className="text-lg font-semibold">{sessionName}</h2>
+            {data?.session && (
+              <p className="text-xs text-ink-500 mt-0.5">
+                status <span className="badge-neutral">{data.session.status}</span>
+                {' '}&middot; job <span className="badge-neutral">{data.session.job_status ?? '—'}</span>
+                {' '}&middot; attempts {data.session.attempts}
+              </p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary" onClick={() => refetch()} disabled={isFetching}>
+              Refresh
+            </button>
+            <button type="button" className="btn-secondary" onClick={onClose}>Close</button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {isLoading && <div className="text-sm text-ink-500">Loading session log…</div>}
+
+          {data?.session.last_error && (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {data.session.last_error}
+            </div>
+          )}
+
+          <section>
+            <h3 className="text-sm font-semibold text-ink-700 mb-2">
+              Log lines ({data?.logs.length ?? 0})
+            </h3>
+            <div className="bg-ink-900 text-ink-100 font-mono text-xs max-h-64 overflow-y-auto p-3 space-y-1 rounded">
+              {(data?.logs.length ?? 0) === 0 && (
+                <div className="text-ink-400">No log lines for this session yet.</div>
+              )}
+              {(data?.logs ?? []).map((l) => (
+                <div key={l.id} className="whitespace-pre-wrap break-words">
+                  <span className="text-ink-500">{l.created_at}</span>{' '}
+                  <span className="text-ink-400">[{l.source}/{l.level}]</span>{' '}
+                  <span className={logLevelClass(l.level)}>{l.message}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-sm font-semibold text-ink-700 mb-2">
+              Screenshots ({data?.results.filter((r) => r.has_screenshot).length ?? 0})
+            </h3>
+            {(data?.results.length ?? 0) === 0 && (
+              <p className="text-sm text-ink-500">No screens captured yet for this session.</p>
+            )}
+            <div className="space-y-4">
+              {(data?.results ?? []).map((r) => (
+                <div key={r.id} className="rounded border border-ink-200 p-3 space-y-2">
+                  <div className="flex justify-between gap-2 text-sm">
+                    <div>
+                      <div className="font-medium">{r.screen_title || r.module_name || `Screen #${r.id}`}</div>
+                      {r.screen_url && <div className="text-xs text-ink-500 font-mono truncate">{r.screen_url}</div>}
+                    </div>
+                    <div className="text-xs text-ink-500 whitespace-nowrap">{r.captured_at ?? r.created_at ?? ''}</div>
+                  </div>
+                  {r.has_screenshot ? (
+                    <ScreenshotThumb runId={runId} resultId={r.id} title={r.screen_title} />
+                  ) : (
+                    <div className="text-xs text-ink-500">No screenshot file for this screen.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {(data?.reports.length ?? 0) > 0 && (
+            <section>
+              <h3 className="text-sm font-semibold text-ink-700 mb-2">Session reports</h3>
+              <ul className="space-y-2">
+                {data!.reports.map((r) => (
+                  <li key={r.id} className="flex justify-between items-center text-sm border border-ink-200 rounded px-3 py-2">
+                    <div>
+                      <div className="font-medium">{r.title}</div>
+                      <div className="text-xs text-ink-500">UX {r.ux_score} · maturity {r.maturity_score}</div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="button" className="btn-secondary" onClick={() => openReport(r.id, 'html')}>HTML</button>
+                      <button type="button" className="btn-secondary" onClick={() => openReport(r.id, 'json')}>JSON</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function RunDetailPage() {
   const { id } = useParams();
   const runId = Number(id);
   const qc = useQueryClient();
-  const canCancel = useAuthStore((s) => s.hasRole('owner', 'product_reviewer'));
+  const canOperate = useAuthStore((s) => s.hasRole('owner', 'product_reviewer'));
   const logEndRef = useRef<HTMLDivElement>(null);
   const [lastLogId, setLastLogId] = useState(0);
   const [logs, setLogs] = useState<RunLog[]>([]);
   const [detailTab, setDetailTab] = useState<'inventory' | 'ux' | 'gaps'>('inventory');
+  const [logSession, setLogSession] = useState<{ id: number; name: string } | null>(null);
 
   const { data } = useQuery<RunDetail>({
     queryKey: ['run', runId],
@@ -64,6 +240,17 @@ export function RunDetailPage() {
   const cancelMut = useMutation({
     mutationFn: async () => (await api.post(`/runs/${runId}/cancel`, {})).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['run', runId] }),
+  });
+
+  const rerunMut = useMutation({
+    mutationFn: async (sessionId: number) =>
+      (await api.post(`/runs/${runId}/sessions/${sessionId}/rerun`, {})).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['run', runId] });
+      if (logSession) {
+        qc.invalidateQueries({ queryKey: ['session-detail', runId, logSession.id] });
+      }
+    },
   });
 
   const inventoryQ = useQuery<{ data: Array<Record<string, unknown>> }>({
@@ -111,8 +298,13 @@ export function RunDetailPage() {
   if (!data) return <div className="text-sm text-ink-500">Loading...</div>;
 
   const showWorkerAlert = !data.worker.online && ['queued', 'running'].includes(data.data.status);
+  const cancellable = canOperate && ['queued', 'running'].includes(data.data.status);
 
-  const cancellable = canCancel && ['queued', 'running'].includes(data.data.status);
+  function canRerun(s: SessionRow): boolean {
+    if (!canOperate) return false;
+    if (!s.job_id) return false;
+    return s.job_status !== 'leased';
+  }
 
   return (
     <div className="space-y-4 max-w-5xl">
@@ -190,7 +382,16 @@ pm2 start npm --name smoke-worker -- start`}
         <div className="px-4 py-2 bg-ink-50 text-ink-600 text-sm font-semibold">Sessions</div>
         <table className="w-full text-sm">
           <thead className="text-ink-500 text-left text-xs">
-            <tr><th className="px-4 py-1">#</th><th>Name</th><th>Status</th><th>Job</th><th>Attempts</th><th>Worker</th><th>Last error</th></tr>
+            <tr>
+              <th className="px-4 py-1">#</th>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Job</th>
+              <th>Attempts</th>
+              <th>Worker</th>
+              <th>Last error</th>
+              <th className="px-4 py-1 text-right">Actions</th>
+            </tr>
           </thead>
           <tbody>
             {data.sessions.map((s) => (
@@ -202,10 +403,42 @@ pm2 start npm --name smoke-worker -- start`}
                 <td>{s.attempts}</td>
                 <td className="text-xs text-ink-500">{s.leased_by ?? '—'}</td>
                 <td className="text-xs text-red-700 truncate max-w-xs">{s.last_error ?? ''}</td>
+                <td className="px-4 py-2 text-right whitespace-nowrap">
+                  <button
+                    type="button"
+                    className="text-brand-700 hover:underline text-xs font-medium mr-3"
+                    onClick={() => setLogSession({ id: s.id, name: s.name })}
+                  >
+                    View log
+                  </button>
+                  {canRerun(s) ? (
+                    <button
+                      type="button"
+                      className="text-brand-700 hover:underline text-xs font-medium disabled:opacity-40"
+                      disabled={rerunMut.isPending}
+                      onClick={() => {
+                        if (confirm(`Re-run session "${s.name}"? It will be queued again for the worker.`)) {
+                          rerunMut.mutate(s.id);
+                        }
+                      }}
+                    >
+                      Re-run
+                    </button>
+                  ) : (
+                    <span className="text-xs text-ink-400" title={s.job_status === 'leased' ? 'Wait until the worker finishes' : undefined}>
+                      {s.job_status === 'leased' ? 'Running…' : ''}
+                    </span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {rerunMut.isError && (
+          <div className="px-4 py-2 text-xs text-red-700 border-t border-ink-200">
+            Re-run failed. {(rerunMut.error as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Try again.'}
+          </div>
+        )}
       </div>
 
       <div className="card overflow-hidden">
@@ -297,6 +530,15 @@ pm2 start npm --name smoke-worker -- start`}
           )}
         </div>
       </div>
+
+      {logSession && (
+        <SessionLogDrawer
+          runId={runId}
+          sessionId={logSession.id}
+          sessionName={logSession.name}
+          onClose={() => setLogSession(null)}
+        />
+      )}
     </div>
   );
 }

@@ -48,4 +48,19 @@ class RunLogService
 
         return $q->get()->getResultArray();
     }
+
+    /**
+     * @return list<array<string,mixed>>
+     */
+    public function forSession(int $runId, int $sessionId, int $limit = 1000): array
+    {
+        $db = Database::connect();
+        return $db->table('smoke_run_logs')
+            ->where('run_id', $runId)
+            ->where('session_id', $sessionId)
+            ->orderBy('id', 'ASC')
+            ->limit(max(1, min(2000, $limit)))
+            ->get()
+            ->getResultArray();
+    }
 }

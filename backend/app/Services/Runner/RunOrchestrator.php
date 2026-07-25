@@ -282,6 +282,106 @@ class RunOrchestrator
         }
     }
 
+    /**
+     * Re-queue a single session job so the worker picks it up again.
+     *
+     * @return array{ok:bool, job_id:int, session_id:int, run_id:int}
+     */
+    public function rerunSession(int $runId, int $sessionId, ?int $triggeredBy = null): array
+    {
+        $db = Database::connect();
+        $run = $db->table('smoke_observation_runs')->where('id', $runId)->get()->getRow();
+        if (! $run) {
+            throw new RuntimeException('Run not found.');
+        }
+
+        $session = $db->table('smoke_sessions')
+            ->where('id', $sessionId)
+            ->where('plan_id', $run->plan_id)
+            ->get()
+            ->getRow();
+        if (! $session) {
+            throw new RuntimeException('Session does not belong to this run.');
+        }
+
+        $job = $db->table('smoke_session_jobs')
+            ->where('run_id', $runId)
+            ->where('session_id', $sessionId)
+            ->get()
+            ->getRow();
+        if (! $job) {
+            throw new RuntimeException('No job found for this session in the run.');
+        }
+        if ($job->status === 'leased') {
+            throw new RuntimeException('Session is currently leased by a worker. Wait for it to finish or expire.');
+        }
+
+        $prevJobStatus = (string) $job->status;
+        $prevSessionStatus = (string) $session->status;
+        $now = date('Y-m-d H:i:s');
+        $maxAttempts = max(1, (int) env('WORKER_MAX_RETRIES', 2) + 1);
+
+        $db->table('smoke_session_jobs')->where('id', $job->id)->update([
+            'status'           => 'queued',
+            'attempts'         => 0,
+            'max_attempts'     => $maxAttempts,
+            'leased_by'        => null,
+            'leased_at'        => null,
+            'lease_expires_at' => null,
+            'last_error'       => null,
+            'updated_at'       => $now,
+        ]);
+
+        $db->table('smoke_sessions')->where('id', $sessionId)->update([
+            'status'        => 'pending',
+            'started_at'    => null,
+            'completed_at'  => null,
+            'error_message' => null,
+            'updated_at'    => $now,
+        ]);
+
+        // Adjust roll-up counters when re-running a previously finished session.
+        if ($prevSessionStatus === 'done' || $prevJobStatus === 'done') {
+            $db->query(
+                'UPDATE smoke_observation_runs SET sessions_done = GREATEST(sessions_done - 1, 0), updated_at = ? WHERE id = ?',
+                [$now, $runId],
+            );
+        } elseif ($prevSessionStatus === 'failed' || $prevJobStatus === 'failed') {
+            $db->query(
+                'UPDATE smoke_observation_runs SET sessions_failed = GREATEST(sessions_failed - 1, 0), updated_at = ? WHERE id = ?',
+                [$now, $runId],
+            );
+        }
+
+        $db->table('smoke_observation_runs')->where('id', $runId)->update([
+            'status'       => 'running',
+            'completed_at' => null,
+            'updated_at'   => $now,
+        ]);
+
+        Services::runLog()->append(
+            $runId,
+            $sessionId,
+            (int) $job->id,
+            'system',
+            'info',
+            sprintf('Session "%s" manually re-queued for another observation pass', (string) $session->name),
+            ['previous_job_status' => $prevJobStatus, 'previous_session_status' => $prevSessionStatus],
+        );
+
+        Services::audit()->record('runs.rerun_session', 'smoke_sessions', (string) $sessionId, $triggeredBy, [
+            'run_id' => $runId,
+            'job_id' => (int) $job->id,
+        ]);
+
+        return [
+            'ok'         => true,
+            'job_id'     => (int) $job->id,
+            'session_id' => $sessionId,
+            'run_id'     => $runId,
+        ];
+    }
+
     public function finalizeRunIfDone(int $runId): void
     {
         $db = Database::connect();

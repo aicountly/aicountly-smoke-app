@@ -46,7 +46,7 @@ class ObservationRunsController extends BaseController
             return $this->jsonError('not_found', 'Run not found', 404);
         }
         $sessions = $db->table('smoke_sessions s')
-            ->select('s.*, j.status AS job_status, j.attempts, j.last_error, j.leased_by, j.leased_at, j.lease_expires_at')
+            ->select('s.*, j.id AS job_id, j.status AS job_status, j.attempts, j.last_error, j.leased_by, j.leased_at, j.lease_expires_at')
             ->join('smoke_session_jobs j', 'j.session_id = s.id AND j.run_id = ' . (int) $id, 'left')
             ->where('s.plan_id', $run['plan_id'])
             ->orderBy('s.ordinal', 'ASC')
@@ -93,5 +93,103 @@ class ObservationRunsController extends BaseController
         ]);
         Services::audit()->record('runs.cancel', 'smoke_observation_runs', (string) $id, $this->user()?->id);
         return $this->jsonOk(['ok' => true]);
+    }
+
+    /**
+     * Full session log: worker log lines + captured screens/results + session reports.
+     */
+    public function sessionDetail(int $id, int $sessionId): ResponseInterface
+    {
+        $db = Database::connect();
+        $run = $db->table('smoke_observation_runs')->where('id', $id)->get()->getRowArray();
+        if (! $run) {
+            return $this->jsonError('not_found', 'Run not found', 404);
+        }
+        $session = $db->table('smoke_sessions s')
+            ->select('s.*, j.id AS job_id, j.status AS job_status, j.attempts, j.last_error, j.leased_by, j.leased_at, j.lease_expires_at')
+            ->join('smoke_session_jobs j', 'j.session_id = s.id AND j.run_id = ' . (int) $id, 'left')
+            ->where('s.id', $sessionId)
+            ->where('s.plan_id', $run['plan_id'])
+            ->get()
+            ->getRowArray();
+        if (! $session) {
+            return $this->jsonError('not_found', 'Session not found on this run', 404);
+        }
+
+        $logs = Services::runLog()->forSession($id, $sessionId);
+        $results = $db->table('smoke_observation_results')
+            ->where('run_id', $id)
+            ->where('session_id', $sessionId)
+            ->orderBy('id', 'ASC')
+            ->get()
+            ->getResultArray();
+
+        foreach ($results as &$row) {
+            $path = (string) ($row['screenshot_path'] ?? '');
+            $row['has_screenshot'] = $path !== '' && is_file($path);
+            $row['screenshot_url'] = $row['has_screenshot']
+                ? "/runs/{$id}/results/{$row['id']}/screenshot"
+                : null;
+            // Never expose absolute server paths to the browser.
+            unset($row['screenshot_path']);
+        }
+        unset($row);
+
+        $reports = $db->table('smoke_reports')
+            ->where('run_id', $id)
+            ->where('session_id', $sessionId)
+            ->orderBy('id', 'DESC')
+            ->get()
+            ->getResultArray();
+
+        return $this->jsonOk([
+            'session' => $session,
+            'logs'    => $logs,
+            'results' => $results,
+            'reports' => $reports,
+        ]);
+    }
+
+    public function resultScreenshot(int $id, int $resultId): ResponseInterface
+    {
+        $db = Database::connect();
+        $row = $db->table('smoke_observation_results')
+            ->where('id', $resultId)
+            ->where('run_id', $id)
+            ->get()
+            ->getRowArray();
+        if (! $row) {
+            return $this->jsonError('not_found', 'Result not found', 404);
+        }
+        $path = (string) ($row['screenshot_path'] ?? '');
+        if ($path === '' || ! is_file($path)) {
+            return $this->jsonError('not_found', 'Screenshot file missing', 404);
+        }
+
+        $mime = 'image/png';
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if ($ext === 'jpg' || $ext === 'jpeg') {
+            $mime = 'image/jpeg';
+        } elseif ($ext === 'webp') {
+            $mime = 'image/webp';
+        }
+
+        return $this->response
+            ->setStatusCode(200)
+            ->setHeader('Content-Type', $mime)
+            ->setHeader('Cache-Control', 'private, max-age=300')
+            ->setBody((string) file_get_contents($path));
+    }
+
+    public function rerunSession(int $id, int $sessionId): ResponseInterface
+    {
+        try {
+            $result = Services::runner()->rerunSession($id, $sessionId, $this->user()?->id);
+            return $this->jsonOk(['data' => $result]);
+        } catch (\RuntimeException $e) {
+            $msg = $e->getMessage();
+            $code = str_contains($msg, 'not found') || str_contains($msg, 'does not belong') ? 404 : 409;
+            return $this->jsonError('rerun_failed', $msg, $code);
+        }
     }
 }

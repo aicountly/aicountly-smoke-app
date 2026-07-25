@@ -87,6 +87,9 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->get('runs',                     'ObservationRunsController::index');
         $routes->get('runs/(:num)',              'ObservationRunsController::show/$1');
         $routes->get('runs/(:num)/logs',         'ObservationRunsController::logs/$1');
+        $routes->get('runs/(:num)/sessions/(:num)', 'ObservationRunsController::sessionDetail/$1/$2');
+        $routes->post('runs/(:num)/sessions/(:num)/rerun', 'ObservationRunsController::rerunSession/$1/$2', ['filter' => 'rbac:owner,product_reviewer']);
+        $routes->get('runs/(:num)/results/(:num)/screenshot', 'ObservationRunsController::resultScreenshot/$1/$2');
         $routes->get('runs/code/(:segment)',     'ObservationRunsController::showByCode/$1');
         $routes->post('runs/(:num)/cancel',      'ObservationRunsController::cancel/$1', ['filter' => 'rbac:owner,product_reviewer']);
 
