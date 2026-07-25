@@ -35,6 +35,7 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->post('feature-gaps',          'WorkerController::recordFeatureGap');
         $routes->post('reports',               'WorkerController::recordReport');
         $routes->post('runs/(:num)/finalize',  'WorkerController::finalizeRun/$1');
+        $routes->post('logs',                 'WorkerController::appendLog');
     });
 
     // ---- All other endpoints require JWT ---------------------------------
@@ -83,6 +84,7 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         // Observation runs
         $routes->get('runs',                     'ObservationRunsController::index');
         $routes->get('runs/(:num)',              'ObservationRunsController::show/$1');
+        $routes->get('runs/(:num)/logs',         'ObservationRunsController::logs/$1');
         $routes->get('runs/code/(:segment)',     'ObservationRunsController::showByCode/$1');
         $routes->post('runs/(:num)/cancel',      'ObservationRunsController::cancel/$1', ['filter' => 'rbac:owner,product_reviewer']);
 

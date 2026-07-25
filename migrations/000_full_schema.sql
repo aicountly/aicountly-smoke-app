@@ -176,6 +176,21 @@ CREATE TABLE smoke_session_jobs (
 CREATE INDEX idx_smoke_session_jobs_run ON smoke_session_jobs(run_id, ordinal);
 CREATE INDEX idx_smoke_session_jobs_status ON smoke_session_jobs(status);
 
+-- 10b smoke_run_logs
+CREATE TABLE smoke_run_logs (
+    id           BIGSERIAL PRIMARY KEY,
+    run_id       BIGINT REFERENCES smoke_observation_runs(id) ON DELETE CASCADE,
+    session_id   BIGINT,
+    job_id       BIGINT,
+    source       VARCHAR(32) NOT NULL DEFAULT 'system',
+    level        VARCHAR(16) NOT NULL DEFAULT 'info',
+    message      TEXT NOT NULL,
+    context_json JSONB,
+    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_smoke_run_logs_run ON smoke_run_logs(run_id, created_at);
+CREATE INDEX idx_smoke_run_logs_created ON smoke_run_logs(created_at);
+
 -- 11 smoke_observation_results
 CREATE TABLE smoke_observation_results (
     id                  BIGSERIAL PRIMARY KEY,

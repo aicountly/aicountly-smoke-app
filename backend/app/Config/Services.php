@@ -15,7 +15,9 @@ use App\Services\Planner\MasterPromptSampleCatalog;
 use App\Services\Planner\SessionPlanner;
 use App\Services\Reports\FinalReportBuilder;
 use App\Services\Reports\SessionReportBuilder;
+use App\Services\Runner\RunLogService;
 use App\Services\Runner\RunOrchestrator;
+use App\Services\Runner\WorkerStatusService;
 use App\Services\Search\PerplexitySearchAdapter;
 use App\Services\Vault\CredentialVault;
 use CodeIgniter\Config\BaseService;
@@ -89,6 +91,22 @@ class Services extends BaseService
             return self::getSharedInstance('runner');
         }
         return new RunOrchestrator();
+    }
+
+    public static function runLog(bool $getShared = true): RunLogService
+    {
+        if ($getShared) {
+            return self::getSharedInstance('runLog');
+        }
+        return new RunLogService();
+    }
+
+    public static function workerStatus(bool $getShared = true): WorkerStatusService
+    {
+        if ($getShared) {
+            return self::getSharedInstance('workerStatus');
+        }
+        return new WorkerStatusService();
     }
 
     public static function sessionReport(bool $getShared = true): SessionReportBuilder

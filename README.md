@@ -28,7 +28,8 @@ npm --workspace frontend install
 npm --workspace worker install && npx playwright install chromium --with-deps
 npm run backend:serve      # :8080
 npm run frontend:dev       # :5173
-npm run smoke:observe      # worker
+cp worker/.env.example worker/.env
+npm run smoke:observe      # worker (dev poll loop)
 ```
 
 ## Workflow

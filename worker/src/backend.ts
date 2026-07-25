@@ -113,3 +113,14 @@ export async function recordReport(payload: Record<string, unknown>): Promise<nu
 export async function finalizeRun(runId: number): Promise<void> {
   await backend.post(`/worker/runs/${runId}/finalize`, {});
 }
+
+export async function appendLog(payload: {
+  run_id?: number;
+  session_id?: number;
+  job_id?: number;
+  level?: 'info' | 'warn' | 'error';
+  message: string;
+  context?: Record<string, unknown>;
+}): Promise<void> {
+  await backend.post('/worker/logs', { source: 'worker', ...payload });
+}

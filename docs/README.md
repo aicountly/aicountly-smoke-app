@@ -61,6 +61,7 @@ npm --workspace frontend install
 # 4. worker
 npm --workspace worker install
 npx playwright install chromium --with-deps
+cp worker/.env.example worker/.env   # set WORKER_SHARED_TOKEN + WORKER_BACKEND_URL
 ```
 
 ### Generating secrets
@@ -88,11 +89,30 @@ npm run backend:serve
 npm run frontend:dev
 
 # Terminal 3 — observer worker (long-running poll loop)
+cp worker/.env.example worker/.env   # WORKER_BACKEND_URL=http://localhost:8080/api/v1
 npm run smoke:observe
 ```
 
 The portal lives at <http://localhost:5173>. The backend API at
 <http://localhost:8080/api/v1>.
+
+### Production worker (cPanel)
+
+The worker is **not** started by deploy. On the server:
+
+```bash
+cd ${PROD_REMOTE_ROOT}/worker
+cp .env.example .env
+# WORKER_BACKEND_URL=https://smoke.aicountly.org/api/v1
+# WORKER_SHARED_TOKEN=<same as api/.env>
+npm install --omit=dev
+npx playwright install-deps chromium   # once, as root
+npx playwright install chromium
+pm2 start npm --name smoke-worker -- start
+pm2 save
+```
+
+See [`worker/README.md`](../worker/README.md) for full setup.
 
 ## 5. Bootstrap roles & first user
 

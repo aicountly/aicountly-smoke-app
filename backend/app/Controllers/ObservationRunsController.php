@@ -46,14 +46,27 @@ class ObservationRunsController extends BaseController
             return $this->jsonError('not_found', 'Run not found', 404);
         }
         $sessions = $db->table('smoke_sessions s')
-            ->select('s.*, j.status AS job_status, j.attempts, j.last_error')
+            ->select('s.*, j.status AS job_status, j.attempts, j.last_error, j.leased_by, j.leased_at, j.lease_expires_at')
             ->join('smoke_session_jobs j', 'j.session_id = s.id AND j.run_id = ' . (int) $id, 'left')
             ->where('s.plan_id', $run['plan_id'])
             ->orderBy('s.ordinal', 'ASC')
             ->get()
             ->getResultArray();
         $reports = $db->table('smoke_reports')->where('run_id', $id)->get()->getResultArray();
-        return $this->jsonOk(['data' => $run, 'sessions' => $sessions, 'reports' => $reports]);
+        $worker = Services::workerStatus()->snapshot();
+        return $this->jsonOk(['data' => $run, 'sessions' => $sessions, 'reports' => $reports, 'worker' => $worker]);
+    }
+
+    public function logs(int $id): ResponseInterface
+    {
+        $db = Database::connect();
+        $run = $db->table('smoke_observation_runs')->where('id', $id)->get()->getRowArray();
+        if (! $run) {
+            return $this->jsonError('not_found', 'Run not found', 404);
+        }
+        $afterId = (int) ($this->request->getGet('after_id') ?? 0);
+        $logs = Services::runLog()->forRun($id, $afterId > 0 ? $afterId : null);
+        return $this->jsonOk(['data' => $logs]);
     }
 
     public function showByCode(string $code): ResponseInterface

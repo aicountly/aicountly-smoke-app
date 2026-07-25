@@ -77,6 +77,16 @@ class RunOrchestrator
             'environment'=> $masterPrompt->environment,
         ]);
 
+        Services::runLog()->append(
+            $runId,
+            null,
+            null,
+            'system',
+            'info',
+            sprintf('Run %s queued with %d session(s). Waiting for worker to lease jobs.', $runCode, count($sessions)),
+            ['product' => $profile->product_name, 'environment' => $masterPrompt->environment],
+        );
+
         return [
             'id'             => $runId,
             'run_code'       => $runCode,
@@ -90,6 +100,7 @@ class RunOrchestrator
     public function leaseNextJob(string $workerId, int $leaseSeconds = 600): ?array
     {
         $db = Database::connect();
+        $this->requeueExpiredLeases();
         $db->transStart();
 
         $row = $db->query(
@@ -116,9 +127,16 @@ class RunOrchestrator
             'updated_at'       => $now,
         ]);
 
-        $db->table('smoke_observation_runs')->where('id', $row->run_id)->update([
+        $runRow = $db->table('smoke_observation_runs')->where('id', $row->run_id)->get()->getRow();
+        $runUpdate = ['status' => 'running', 'updated_at' => $now];
+        if ($runRow && empty($runRow->started_at)) {
+            $runUpdate['started_at'] = $now;
+        }
+        $db->table('smoke_observation_runs')->where('id', $row->run_id)->update($runUpdate);
+
+        $db->table('smoke_sessions')->where('id', $row->session_id)->update([
             'status'     => 'running',
-            'started_at' => 'COALESCE(started_at, NOW())',
+            'started_at' => $now,
             'updated_at' => $now,
         ]);
 
@@ -127,6 +145,16 @@ class RunOrchestrator
         $session = $db->table('smoke_sessions')->where('id', $row->session_id)->get()->getRowArray();
         $run     = $db->table('smoke_observation_runs')->where('id', $row->run_id)->get()->getRowArray();
         $profile = $run ? $db->table('smoke_target_profiles')->where('id', $run['target_profile_id'])->get()->getRowArray() : null;
+
+        Services::runLog()->append(
+            (int) $row->run_id,
+            (int) $row->session_id,
+            (int) $row->id,
+            'worker',
+            'info',
+            sprintf('Worker %s leased job for session "%s"', $workerId, (string) ($session['name'] ?? $row->session_id)),
+            ['worker_id' => $workerId, 'expires_at' => $expiry],
+        );
 
         return [
             'job_id'    => (int) $row->id,
@@ -156,6 +184,14 @@ class RunOrchestrator
             'completed_at' => $now,
             'updated_at'   => $now,
         ]);
+        Services::runLog()->append(
+            (int) $job->run_id,
+            (int) $job->session_id,
+            $jobId,
+            'worker',
+            'info',
+            'Session completed successfully',
+        );
         $db->query('UPDATE smoke_observation_runs SET sessions_done = sessions_done + 1, updated_at = NOW() WHERE id = ?', [$job->run_id]);
         $this->finalizeRunIfDone((int) $job->run_id);
     }
@@ -178,6 +214,14 @@ class RunOrchestrator
                 'last_error' => mb_substr($error, 0, 4000),
                 'updated_at' => $now,
             ]);
+            Services::runLog()->append(
+                (int) $job->run_id,
+                (int) $job->session_id,
+                $jobId,
+                'worker',
+                'warn',
+                'Session failed — re-queued for retry: ' . mb_substr($error, 0, 500),
+            );
         } else {
             $db->table('smoke_session_jobs')->where('id', $jobId)->update([
                 'status'     => 'failed',
@@ -190,8 +234,51 @@ class RunOrchestrator
                 'error_message'=> mb_substr($error, 0, 4000),
                 'updated_at'   => $now,
             ]);
+            Services::runLog()->append(
+                (int) $job->run_id,
+                (int) $job->session_id,
+                $jobId,
+                'worker',
+                'error',
+                'Session failed: ' . mb_substr($error, 0, 500),
+            );
             $db->query('UPDATE smoke_observation_runs SET sessions_failed = sessions_failed + 1, updated_at = NOW() WHERE id = ?', [$job->run_id]);
             $this->finalizeRunIfDone((int) $job->run_id);
+        }
+    }
+
+    private function requeueExpiredLeases(): void
+    {
+        $db = Database::connect();
+        $now = date('Y-m-d H:i:s');
+        $expired = $db->table('smoke_session_jobs')
+            ->where('status', 'leased')
+            ->where('lease_expires_at <', $now)
+            ->get()
+            ->getResult();
+
+        foreach ($expired as $job) {
+            $shouldRetry = (int) $job->attempts < (int) $job->max_attempts;
+            if ($shouldRetry) {
+                $db->table('smoke_session_jobs')->where('id', $job->id)->update([
+                    'status'           => 'queued',
+                    'leased_by'        => null,
+                    'leased_at'        => null,
+                    'lease_expires_at' => null,
+                    'last_error'       => 'Lease expired — re-queued',
+                    'updated_at'       => $now,
+                ]);
+                Services::runLog()->append(
+                    (int) $job->run_id,
+                    (int) $job->session_id,
+                    (int) $job->id,
+                    'system',
+                    'warn',
+                    'Job lease expired — returned to queue',
+                );
+            } else {
+                $this->markFailed((int) $job->id, 'Lease expired and max attempts reached');
+            }
         }
     }
 
@@ -213,6 +300,14 @@ class RunOrchestrator
             'completed_at' => date('Y-m-d H:i:s'),
             'updated_at'   => date('Y-m-d H:i:s'),
         ]);
+        Services::runLog()->append(
+            $runId,
+            null,
+            null,
+            'system',
+            $finalStatus === 'failed' ? 'error' : 'info',
+            sprintf('Run %s %s (%d done, %d failed)', $run->run_code, $finalStatus, (int) $run->sessions_done, (int) $run->sessions_failed),
+        );
         try {
             Services::finalReport()->build($runId);
         } catch (\Throwable $e) {

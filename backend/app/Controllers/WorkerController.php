@@ -170,4 +170,23 @@ class WorkerController extends BaseController
         Services::runner()->finalizeRunIfDone($runId);
         return $this->jsonOk(['ok' => true]);
     }
+
+    public function appendLog(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $message = trim((string) ($body['message'] ?? ''));
+        if ($message === '') {
+            return $this->jsonError('invalid_request', 'message is required.', 400);
+        }
+        Services::runLog()->append(
+            isset($body['run_id']) ? (int) $body['run_id'] : null,
+            isset($body['session_id']) ? (int) $body['session_id'] : null,
+            isset($body['job_id']) ? (int) $body['job_id'] : null,
+            (string) ($body['source'] ?? 'worker'),
+            (string) ($body['level'] ?? 'info'),
+            $message,
+            is_array($body['context'] ?? null) ? $body['context'] : [],
+        );
+        return $this->jsonOk(['ok' => true]);
+    }
 }

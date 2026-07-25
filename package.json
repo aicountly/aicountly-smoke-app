@@ -8,7 +8,7 @@
     "worker"
   ],
   "scripts": {
-    "smoke:observe": "npm --workspace worker run start",
+    "smoke:observe": "npm --workspace worker run observe",
     "smoke:run-session": "npm --workspace worker run run-session --",
     "smoke:books": "npm --workspace worker run enqueue -- --product=books",
     "smoke:hrms": "npm --workspace worker run enqueue -- --product=hrms",

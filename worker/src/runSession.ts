@@ -3,6 +3,7 @@ import { chromium, firefox, webkit, type Browser, type BrowserContext } from 'pl
 import { config } from './config.js';
 import {
   recordResult, recordInventory, recordUxIssues, recordFeatureGaps,
+  appendLog,
   type Job,
 } from './backend.js';
 import { login } from './auth/login.js';
@@ -47,7 +48,20 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   let inventoryCount = 0;
 
   try {
+    await appendLog({
+      run_id: job.run_id,
+      session_id: job.session.id,
+      job_id: job.job_id,
+      message: `Launching browser (${config.playwright.browser}, headless=${config.playwright.headless})`,
+    }).catch(() => {});
+
     await login(page, job.profile);
+    await appendLog({
+      run_id: job.run_id,
+      session_id: job.session.id,
+      job_id: job.job_id,
+      message: 'Login successful — scanning landing page',
+    }).catch(() => {});
 
     // Persist landing page observation
     await observeAndPersist(job, page, 'landing', reportsDir, screenshotsDir, allUx, allGaps, screenshots, () => {
@@ -57,6 +71,12 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     // Walk top-level menus relevant to this session
     const menus = await scanMenus(page);
     const targets = filterMenusForSession(menus, job);
+    await appendLog({
+      run_id: job.run_id,
+      session_id: job.session.id,
+      job_id: job.job_id,
+      message: `Found ${menus.length} menu item(s); visiting up to ${Math.min(targets.length, Math.max(4, job.session.expected_screens))} for this session`,
+    }).catch(() => {});
     for (const m of targets.slice(0, Math.max(4, job.session.expected_screens))) {
       const decision = evaluateClick(m.label, {
         destructiveAllowed: !!job.session.destructive_allowed,
@@ -77,8 +97,22 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
         await observeAndPersist(job, page, m.label, reportsDir, screenshotsDir, allUx, allGaps, screenshots, () => {
           screensObserved++;
         }, (n) => { inventoryCount += n; });
+        await appendLog({
+          run_id: job.run_id,
+          session_id: job.session.id,
+          job_id: job.job_id,
+          message: `Observed screen: ${m.label}`,
+        }).catch(() => {});
       } catch (err) {
-        console.warn(`[smoke-worker] menu visit failed (${m.label}):`, (err as Error).message);
+        const errMsg = (err as Error).message;
+        console.warn(`[smoke-worker] menu visit failed (${m.label}):`, errMsg);
+        await appendLog({
+          run_id: job.run_id,
+          session_id: job.session.id,
+          job_id: job.job_id,
+          level: 'warn',
+          message: `Menu visit failed (${m.label}): ${errMsg}`,
+        }).catch(() => {});
       }
     }
   } finally {

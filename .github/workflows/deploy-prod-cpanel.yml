@@ -153,7 +153,25 @@ jobs:
           rsync -avz --delete \
             worker/dist/ "cpanel-prod:${REMOTE_ROOT}/worker/dist/"
           rsync -avz \
-            worker/package.json "cpanel-prod:${REMOTE_ROOT}/worker/package.json"
+            worker/package.json \
+            worker/.env.example \
+            worker/README.md \
+            "cpanel-prod:${REMOTE_ROOT}/worker/"
+          rsync -avz \
+            worker/scripts/ "cpanel-prod:${REMOTE_ROOT}/worker/scripts/"
+
+      - name: Verify server worker/.env exists
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          if ! ssh cpanel-prod "test -f '${REMOTE_ROOT}/worker/.env'"; then
+            echo "::warning::${REMOTE_ROOT}/worker/.env not found on the server."
+            echo "Create it manually (copy worker/.env.example) — deploy never writes worker/.env."
+            echo "WORKER_SHARED_TOKEN must match api/.env. Then start with PM2: pm2 start npm --name smoke-worker -- start"
+          else
+            echo "Server worker/.env present (unchanged by deploy)."
+          fi
 
       - name: Rsync shared assets
         env:
@@ -193,9 +211,21 @@ jobs:
           REMOTE_ROOT="${REMOTE_ROOT%/}"
           ssh cpanel-prod "cd '${REMOTE_ROOT}/worker' && \
             if command -v npm >/dev/null 2>&1; then \
-              npm ci --omit=dev --ignore-scripts 2>/dev/null || npm install --omit=dev --ignore-scripts; \
+              npm install --omit=dev --ignore-scripts 2>/dev/null || npm ci --omit=dev --ignore-scripts 2>/dev/null || true; \
             else \
-              echo 'npm not found on server — install Node on cPanel or deploy worker from a VPS.'; \
+              echo 'npm not found on server — install Node on cPanel or run the worker on a VPS.'; \
+            fi"
+
+      - name: Install Playwright Chromium on server
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          ssh cpanel-prod "cd '${REMOTE_ROOT}/worker' && \
+            if command -v npx >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then \
+              npx playwright install chromium || echo '::warning::playwright install chromium failed — run manually on the server'; \
+            else \
+              echo 'npx/npm not found — install Playwright browsers manually after Node is available.'; \
             fi"
 
       - name: Run database migrations
@@ -258,7 +288,13 @@ jobs:
             echo "|---|---|"
             echo "| \`${REMOTE_ROOT}/\` | React portal (index.html) |"
             echo "| \`${REMOTE_ROOT}/api/\` | CodeIgniter API |"
-            echo "| \`${REMOTE_ROOT}/worker/\` | Playwright worker |"
+            echo "| \`${REMOTE_ROOT}/worker/\` | Playwright worker (PM2: \`npm start\`) |"
+            echo ""
+            echo "### Worker (one-time on server)"
+            echo ""
+            echo "1. \`cp worker/.env.example worker/.env\` and set \`WORKER_SHARED_TOKEN\` (same as \`api/.env\`)."
+            echo "2. \`npx playwright install-deps chromium\` (once, as root) then \`npx playwright install chromium\`."
+            echo "3. \`pm2 start npm --name smoke-worker -- start\` from \`${REMOTE_ROOT}/worker\`."
             echo ""
             echo "> Open https://smoke.aicountly.org/ — should show the login page, not a directory listing."
           } >> "$GITHUB_STEP_SUMMARY"
