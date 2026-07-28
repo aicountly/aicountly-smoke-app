@@ -22,10 +22,7 @@ export async function login(page: Page, profile: ProfileRow): Promise<void> {
       break;
   }
 
-  // Wait for app shell -- best-effort
-  try {
-    await page.waitForLoadState('networkidle', { timeout: 15000 });
-  } catch { /* non-fatal */ }
+  await assertLoggedIn(page, profile);
 }
 
 async function standardLogin(page: Page, profile: ProfileRow, password: string): Promise<void> {
@@ -36,6 +33,8 @@ async function standardLogin(page: Page, profile: ProfileRow, password: string):
     'input#email',
     'input#username',
     'input[autocomplete="username"]',
+    'input[placeholder*="email" i]',
+    'input[placeholder*="user" i]',
   ];
   const passSelectors = [
     'input[name="password"]',
@@ -45,30 +44,98 @@ async function standardLogin(page: Page, profile: ProfileRow, password: string):
   ];
   const submitSelectors = [
     'button[type="submit"]',
-    'button:has-text("Login")',
+    'button:has-text("SIGN IN")',
+    'button:has-text("Sign In")',
     'button:has-text("Sign in")',
+    'button:has-text("Log in")',
+    'button:has-text("Login")',
+    'button:has-text("Log In")',
     'input[type="submit"]',
+    'a:has-text("SIGN IN")',
   ];
 
+  let filledUser = false;
   for (const sel of userSelectors) {
-    if (await page.locator(sel).first().isVisible().catch(() => false)) {
-      await page.locator(sel).first().fill(profile.username);
+    const loc = page.locator(sel).first();
+    if (await loc.isVisible().catch(() => false)) {
+      await loc.fill(profile.username);
+      filledUser = true;
       break;
     }
   }
+  if (!filledUser) {
+    throw new Error('Login form: could not find username/email field.');
+  }
+
+  let filledPass = false;
   for (const sel of passSelectors) {
-    if (await page.locator(sel).first().isVisible().catch(() => false)) {
-      await page.locator(sel).first().fill(password);
+    const loc = page.locator(sel).first();
+    if (await loc.isVisible().catch(() => false)) {
+      await loc.fill(password);
+      filledPass = true;
       break;
     }
   }
+  if (!filledPass) {
+    throw new Error('Login form: could not find password field.');
+  }
+
+  const beforeUrl = page.url();
+  let clicked = false;
   for (const sel of submitSelectors) {
     const btn = page.locator(sel).first();
     if (await btn.isVisible().catch(() => false)) {
-      await btn.click();
-      return;
+      await Promise.all([
+        page.waitForLoadState('domcontentloaded', { timeout: 25_000 }).catch(() => {}),
+        btn.click(),
+      ]);
+      clicked = true;
+      break;
     }
   }
-  // fallback: press Enter
-  await page.keyboard.press('Enter');
+  if (!clicked) {
+    await page.keyboard.press('Enter');
+  }
+
+  // SPA apps often keep the document; wait for URL change and/or app shell.
+  await Promise.race([
+    page.waitForURL((url) => !isLoginUrl(url.href) && url.href !== beforeUrl, { timeout: 25_000 }),
+    page.waitForSelector(
+      'nav, aside, [role="navigation"], .sidebar, [class*="sidebar" i], [class*="sidenav" i], [class*="side-nav" i]',
+      { timeout: 25_000 },
+    ),
+  ]).catch(() => {});
+
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 12_000 });
+  } catch {
+    /* non-fatal */
+  }
+}
+
+async function assertLoggedIn(page: Page, profile: ProfileRow): Promise<void> {
+  const url = page.url();
+  const stillLogin = isLoginUrl(url);
+  const hasPassword = await page.locator('input[type="password"]').first().isVisible().catch(() => false);
+  const hasNav = await page
+    .locator('nav, aside, [role="navigation"], .sidebar, [class*="sidebar" i], [class*="sidenav" i]')
+    .first()
+    .isVisible()
+    .catch(() => false);
+
+  if (stillLogin || (hasPassword && !hasNav)) {
+    throw new Error(
+      `Login did not reach the app shell (still at ${url}). Check username/password for profile "${profile.profile_name}" and that the account can sign in.`,
+    );
+  }
+}
+
+function isLoginUrl(href: string): boolean {
+  try {
+    const u = new URL(href);
+    const p = u.pathname.toLowerCase();
+    return /login|signin|sign-in|auth|authenticate/.test(p);
+  } catch {
+    return /login|signin|sign-in/i.test(href);
+  }
 }

@@ -17,7 +17,7 @@ const RESTRICTED_TOKENS = [
   // additional safety terms
   'pay', 'payment', 'transfer', 'discard', 'archive', 'publish',
   'confirm', 'apply', 'assign', 'merge', 'split', 'lock', 'unlock',
-  'authorize', 'authorise', 'sign', 'process', 'run', 'execute',
+  'authorize', 'authorise', 'sign out', 'sign-off', 'e-sign', 'esign', 'process', 'execute',
   'deploy', 'release', 'activate', 'deactivate', 'enable', 'disable',
   'overwrite', 'replace', 'mark paid', 'mark complete', 'mark received',
   'cancel', 'void', 'refund', 'credit note', 'debit note', 'journal',
@@ -25,8 +25,9 @@ const RESTRICTED_TOKENS = [
   'finalize return', 'efile',
 ];
 
+// Word-boundary aware so short tokens like "pay" do not match "display".
 const RESTRICTED_REGEX = new RegExp(
-  '(' + RESTRICTED_TOKENS.map(escapeRe).join('|') + ')',
+  '\\b(' + RESTRICTED_TOKENS.map(escapeRe).join('|') + ')\\b',
   'i',
 );
 
