@@ -11,7 +11,10 @@ use Config\Database;
  */
 class SessionReportBuilder
 {
-    public function build(int $runId, int $sessionId, array $extra = []): array
+    /**
+     * @param bool $persistReport When false, only writes files (for rebuild of an existing row).
+     */
+    public function build(int $runId, int $sessionId, array $extra = [], bool $persistReport = true): array
     {
         $db   = Database::connect();
         $run  = $db->table('smoke_observation_runs')->where('id', $runId)->get()->getRowArray();
@@ -30,6 +33,13 @@ class SessionReportBuilder
             if (isset($severityCount[$s])) $severityCount[$s]++;
         }
 
+        $resolver = new ReportArtifactResolver();
+        $shotBasenames = [];
+        foreach ($results as $r) {
+            $resolved = $resolver->resolveFile((string) ($r['screenshot_path'] ?? ''), (string) ($run['reports_dir'] ?? ''));
+            $shotBasenames[] = $resolved ? basename($resolved) : basename((string) ($r['screenshot_path'] ?? ''));
+        }
+
         $reportData = [
             'run_code'          => $run['run_code'],
             'session_id'        => $sessionId,
@@ -45,12 +55,12 @@ class SessionReportBuilder
             'ux_issues'         => $ux,
             'feature_gaps'      => $gaps,
             'severity_summary'  => $severityCount,
-            'screenshots'       => array_map(static fn(array $r): string => (string) ($r['screenshot_path'] ?? ''), $results),
+            'screenshots'       => $shotBasenames,
             'extra'             => $extra,
             'generated_at'      => date(DATE_ATOM),
         ];
 
-        $dir = $this->ensureDir($run['reports_dir'] . '/sessions');
+        $dir = $resolver->ensureDir(rtrim((string) $run['reports_dir'], '/\\') . '/sessions');
         $base = $dir . '/' . sprintf('%02d', (int) $sess['ordinal']) . '-' . $this->slug($sess['name']);
         $jsonPath = $base . '.json';
         $htmlPath = $base . '.html';
@@ -62,33 +72,28 @@ class SessionReportBuilder
         $html = (new ReportRenderer())->render($tpl, $reportData);
         file_put_contents($htmlPath, $html);
 
-        $reportId = $this->insertReport([
-            'run_id'                => $runId,
-            'session_id'            => $sessionId,
-            'kind'                  => 'session',
-            'title'                 => 'Session report: ' . $sess['name'],
-            'severity_summary_json' => json_encode($severityCount),
-            'metrics_json'          => json_encode([
-                'screens_observed' => count($results),
-                'inventory_count'  => count($inv),
-                'ux_issues'        => count($ux),
-                'feature_gaps'     => count($gaps),
-            ]),
-            'maturity_score' => null,
-            'ux_score'       => $this->uxScore($severityCount, count($results) ?: 1),
-            'html_path'      => $htmlPath,
-            'json_path'      => $jsonPath,
-        ]);
+        $reportId = 0;
+        if ($persistReport) {
+            $reportId = $this->insertReport([
+                'run_id'                => $runId,
+                'session_id'            => $sessionId,
+                'kind'                  => 'session',
+                'title'                 => 'Session report: ' . $sess['name'],
+                'severity_summary_json' => json_encode($severityCount),
+                'metrics_json'          => json_encode([
+                    'screens_observed' => count($results),
+                    'inventory_count'  => count($inv),
+                    'ux_issues'        => count($ux),
+                    'feature_gaps'     => count($gaps),
+                ]),
+                'maturity_score' => null,
+                'ux_score'       => $this->uxScore($severityCount, count($results) ?: 1),
+                'html_path'      => $htmlPath,
+                'json_path'      => $jsonPath,
+            ]);
+        }
 
         return ['report_id' => $reportId, 'html_path' => $htmlPath, 'json_path' => $jsonPath];
-    }
-
-    private function ensureDir(string $path): string
-    {
-        if (! is_dir($path)) {
-            @mkdir($path, 0775, true);
-        }
-        return $path;
     }
 
     private function slug(string $s): string

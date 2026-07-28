@@ -55,7 +55,16 @@ type RunDetail = {
     reports_dir: string;
   };
   sessions: SessionRow[];
-  reports: Array<{ id: number; kind: string; title: string; html_path: string; ux_score: number; maturity_score: number; auditor_visible: boolean }>;
+  reports: Array<{
+    id: number;
+    kind: string;
+    title: string;
+    html_path: string;
+    ux_score: number;
+    maturity_score: number;
+    auditor_visible: boolean;
+    session_id?: number | null;
+  }>;
   worker: { online: boolean; queued_jobs: number; active_leases: number; last_seen_at: string | null; message: string };
 };
 
@@ -98,6 +107,29 @@ function ScreenshotThumb({ runId, resultId, title }: { runId: number; resultId: 
   );
 }
 
+type TimelineItem =
+  | { kind: 'log'; at: string; log: RunLog }
+  | { kind: 'screen'; at: string; result: SessionDetail['results'][number] };
+
+function buildSessionTimeline(detail: SessionDetail | undefined): TimelineItem[] {
+  if (!detail) return [];
+  const items: TimelineItem[] = [
+    ...detail.logs.map((log) => ({ kind: 'log' as const, at: log.created_at, log })),
+    ...detail.results.map((result) => ({
+      kind: 'screen' as const,
+      at: result.captured_at ?? result.created_at ?? '',
+      result,
+    })),
+  ];
+  return items.sort((a, b) => {
+    const ta = a.at ? Date.parse(a.at) : 0;
+    const tb = b.at ? Date.parse(b.at) : 0;
+    if (ta !== tb) return ta - tb;
+    if (a.kind !== b.kind) return a.kind === 'log' ? -1 : 1;
+    return 0;
+  });
+}
+
 function SessionLogDrawer({
   runId,
   sessionId,
@@ -109,11 +141,25 @@ function SessionLogDrawer({
   sessionName: string;
   onClose: () => void;
 }) {
-  const { data, isLoading, refetch, isFetching } = useQuery<SessionDetail>({
+  const [reportErr, setReportErr] = useState<string | null>(null);
+  const { data, isLoading, refetch, isFetching, isError, error } = useQuery<SessionDetail>({
     queryKey: ['session-detail', runId, sessionId],
     queryFn: async () => (await api.get(`/runs/${runId}/sessions/${sessionId}`)).data,
     refetchInterval: 3000,
   });
+
+  const timeline = buildSessionTimeline(data);
+  const shotCount = data?.results.filter((r) => r.has_screenshot).length ?? 0;
+
+  async function handleOpenReport(id: number, format: 'html' | 'json') {
+    setReportErr(null);
+    try {
+      await openReport(id, format);
+    } catch (e) {
+      const ax = e as { response?: { data?: { message?: string } }; message?: string };
+      setReportErr(ax?.response?.data?.message || ax?.message || `Failed to open ${format.toUpperCase()} report.`);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-ink-900/40" onClick={onClose}>
@@ -130,6 +176,8 @@ function SessionLogDrawer({
                 status <span className="badge-neutral">{data.session.status}</span>
                 {' '}&middot; job <span className="badge-neutral">{data.session.job_status ?? '—'}</span>
                 {' '}&middot; attempts {data.session.attempts}
+                {' '}&middot; {data.logs.length} log(s)
+                {' '}&middot; {shotCount} screenshot(s)
               </p>
             )}
           </div>
@@ -143,6 +191,11 @@ function SessionLogDrawer({
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {isLoading && <div className="text-sm text-ink-500">Loading session log…</div>}
+          {isError && (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              Failed to load session log. {(error as Error)?.message ?? 'Try again.'}
+            </div>
+          )}
 
           {data?.session.last_error && (
             <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -150,50 +203,11 @@ function SessionLogDrawer({
             </div>
           )}
 
-          <section>
-            <h3 className="text-sm font-semibold text-ink-700 mb-2">
-              Log lines ({data?.logs.length ?? 0})
-            </h3>
-            <div className="bg-ink-900 text-ink-100 font-mono text-xs max-h-64 overflow-y-auto p-3 space-y-1 rounded">
-              {(data?.logs.length ?? 0) === 0 && (
-                <div className="text-ink-400">No log lines for this session yet.</div>
-              )}
-              {(data?.logs ?? []).map((l) => (
-                <div key={l.id} className="whitespace-pre-wrap break-words">
-                  <span className="text-ink-500">{l.created_at}</span>{' '}
-                  <span className="text-ink-400">[{l.source}/{l.level}]</span>{' '}
-                  <span className={logLevelClass(l.level)}>{l.message}</span>
-                </div>
-              ))}
+          {reportErr && (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {reportErr}
             </div>
-          </section>
-
-          <section>
-            <h3 className="text-sm font-semibold text-ink-700 mb-2">
-              Screenshots ({data?.results.filter((r) => r.has_screenshot).length ?? 0})
-            </h3>
-            {(data?.results.length ?? 0) === 0 && (
-              <p className="text-sm text-ink-500">No screens captured yet for this session.</p>
-            )}
-            <div className="space-y-4">
-              {(data?.results ?? []).map((r) => (
-                <div key={r.id} className="rounded border border-ink-200 p-3 space-y-2">
-                  <div className="flex justify-between gap-2 text-sm">
-                    <div>
-                      <div className="font-medium">{r.screen_title || r.module_name || `Screen #${r.id}`}</div>
-                      {r.screen_url && <div className="text-xs text-ink-500 font-mono truncate">{r.screen_url}</div>}
-                    </div>
-                    <div className="text-xs text-ink-500 whitespace-nowrap">{r.captured_at ?? r.created_at ?? ''}</div>
-                  </div>
-                  {r.has_screenshot ? (
-                    <ScreenshotThumb runId={runId} resultId={r.id} title={r.screen_title} />
-                  ) : (
-                    <div className="text-xs text-ink-500">No screenshot file for this screen.</div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </section>
+          )}
 
           {(data?.reports.length ?? 0) > 0 && (
             <section>
@@ -206,14 +220,62 @@ function SessionLogDrawer({
                       <div className="text-xs text-ink-500">UX {r.ux_score} · maturity {r.maturity_score}</div>
                     </div>
                     <div className="flex gap-2">
-                      <button type="button" className="btn-secondary" onClick={() => openReport(r.id, 'html')}>HTML</button>
-                      <button type="button" className="btn-secondary" onClick={() => openReport(r.id, 'json')}>JSON</button>
+                      <button type="button" className="btn-secondary" onClick={() => handleOpenReport(r.id, 'html')}>HTML</button>
+                      <button type="button" className="btn-secondary" onClick={() => handleOpenReport(r.id, 'json')}>JSON</button>
                     </div>
                   </li>
                 ))}
               </ul>
             </section>
           )}
+
+          <section>
+            <h3 className="text-sm font-semibold text-ink-700 mb-2">
+              Action timeline ({timeline.length})
+            </h3>
+            <p className="text-xs text-ink-500 mb-3">
+              Every worker log line and every captured screen for this session, in order.
+            </p>
+            {timeline.length === 0 && !isLoading && (
+              <p className="text-sm text-ink-500">No log lines or screenshots for this session yet.</p>
+            )}
+            <div className="space-y-3">
+              {timeline.map((item) =>
+                item.kind === 'log' ? (
+                  <div
+                    key={`log-${item.log.id}`}
+                    className="rounded border border-ink-200 bg-ink-900 text-ink-100 font-mono text-xs px-3 py-2 whitespace-pre-wrap break-words"
+                  >
+                    <span className="text-ink-500">{item.log.created_at}</span>{' '}
+                    <span className="text-ink-400">[{item.log.source}/{item.log.level}]</span>{' '}
+                    <span className={logLevelClass(item.log.level)}>{item.log.message}</span>
+                  </div>
+                ) : (
+                  <div key={`screen-${item.result.id}`} className="rounded border border-brand-200 bg-brand-50/40 p-3 space-y-2">
+                    <div className="flex justify-between gap-2 text-sm">
+                      <div>
+                        <div className="text-[11px] uppercase tracking-wide text-brand-700 font-semibold">Screenshot / action</div>
+                        <div className="font-medium">
+                          {item.result.screen_title || item.result.module_name || `Screen #${item.result.id}`}
+                        </div>
+                        {item.result.screen_url && (
+                          <div className="text-xs text-ink-500 font-mono truncate">{item.result.screen_url}</div>
+                        )}
+                      </div>
+                      <div className="text-xs text-ink-500 whitespace-nowrap">
+                        {item.result.captured_at ?? item.result.created_at ?? ''}
+                      </div>
+                    </div>
+                    {item.result.has_screenshot ? (
+                      <ScreenshotThumb runId={runId} resultId={item.result.id} title={item.result.screen_title} />
+                    ) : (
+                      <div className="text-xs text-ink-500">No screenshot file for this screen.</div>
+                    )}
+                  </div>
+                ),
+              )}
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -230,6 +292,17 @@ export function RunDetailPage() {
   const [logs, setLogs] = useState<RunLog[]>([]);
   const [detailTab, setDetailTab] = useState<'inventory' | 'ux' | 'gaps'>('inventory');
   const [logSession, setLogSession] = useState<{ id: number; name: string } | null>(null);
+  const [reportErr, setReportErr] = useState<string | null>(null);
+
+  async function handleOpenReport(id: number, format: 'html' | 'json') {
+    setReportErr(null);
+    try {
+      await openReport(id, format);
+    } catch (e) {
+      const ax = e as { response?: { data?: { message?: string } }; message?: string };
+      setReportErr(ax?.response?.data?.message || ax?.message || `Failed to open ${format.toUpperCase()} report.`);
+    }
+  }
 
   const { data } = useQuery<RunDetail>({
     queryKey: ['run', runId],
@@ -406,8 +479,9 @@ pm2 start npm --name smoke-worker -- start`}
                 <td className="px-4 py-2 text-right whitespace-nowrap">
                   <button
                     type="button"
-                    className="text-brand-700 hover:underline text-xs font-medium mr-3"
+                    className="btn-secondary text-xs py-1 px-2 mr-2"
                     onClick={() => setLogSession({ id: s.id, name: s.name })}
+                    title="View session logs and screenshots for every action"
                   >
                     View log
                   </button>
@@ -443,16 +517,33 @@ pm2 start npm --name smoke-worker -- start`}
 
       <div className="card overflow-hidden">
         <div className="px-4 py-2 bg-ink-50 text-ink-600 text-sm font-semibold">Reports</div>
+        {reportErr && (
+          <div className="px-4 py-2 text-sm text-red-700 border-b border-red-100 bg-red-50">
+            {reportErr}
+          </div>
+        )}
         <ul className="divide-y divide-ink-200">
           {data.reports.map((r) => (
-            <li key={r.id} className="px-4 py-2 flex justify-between items-center">
-              <div>
+            <li key={r.id} className="px-4 py-2 flex justify-between items-center gap-3">
+              <div className="min-w-0">
                 <div className="font-medium">{r.title}</div>
                 <div className="text-xs text-ink-500">kind: {r.kind} &middot; UX {r.ux_score} &middot; maturity {r.maturity_score}</div>
               </div>
-              <div className="flex gap-2">
-                <button type="button" className="btn-secondary" onClick={() => openReport(r.id, 'html')}>HTML</button>
-                <button type="button" className="btn-secondary" onClick={() => openReport(r.id, 'json')}>JSON</button>
+              <div className="flex gap-2 shrink-0">
+                {r.session_id ? (
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs"
+                    onClick={() => {
+                      const sess = data.sessions.find((s) => s.id === r.session_id);
+                      setLogSession({ id: r.session_id!, name: sess?.name ?? r.title });
+                    }}
+                  >
+                    View log
+                  </button>
+                ) : null}
+                <button type="button" className="btn-secondary" onClick={() => handleOpenReport(r.id, 'html')}>HTML</button>
+                <button type="button" className="btn-secondary" onClick={() => handleOpenReport(r.id, 'json')}>JSON</button>
               </div>
             </li>
           ))}

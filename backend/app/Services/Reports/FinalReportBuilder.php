@@ -11,7 +11,10 @@ use Config\Database;
  */
 class FinalReportBuilder
 {
-    public function build(int $runId): array
+    /**
+     * @param bool $persistReport When false, only writes files (for rebuild of an existing row).
+     */
+    public function build(int $runId, bool $persistReport = true): array
     {
         $db  = Database::connect();
         $run = $db->table('smoke_observation_runs')->where('id', $runId)->get()->getRowArray();
@@ -80,7 +83,8 @@ class FinalReportBuilder
             'generated_at'     => date(DATE_ATOM),
         ];
 
-        $dir = $this->ensureDir($run['reports_dir']);
+        $resolver = new ReportArtifactResolver();
+        $dir = $resolver->ensureDir((string) $run['reports_dir']);
         $jsonPath = $dir . '/report.json';
         $htmlPath = $dir . '/index.html';
         file_put_contents($jsonPath, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
@@ -90,20 +94,23 @@ class FinalReportBuilder
         $html = (new ReportRenderer())->render($tpl, $payload);
         file_put_contents($htmlPath, $html);
 
-        $db->table('smoke_reports')->insert([
-            'run_id'                => $runId,
-            'session_id'            => null,
-            'kind'                  => 'final',
-            'title'                 => 'Final consolidated report: ' . $run['run_code'],
-            'severity_summary_json' => json_encode($severityCount),
-            'metrics_json'          => json_encode($totals),
-            'maturity_score'        => $maturity,
-            'ux_score'              => $uxAvg,
-            'html_path'             => $htmlPath,
-            'json_path'             => $jsonPath,
-            'auditor_visible'       => true,
-        ]);
-        $reportId = (int) $db->insertID();
+        $reportId = 0;
+        if ($persistReport) {
+            $db->table('smoke_reports')->insert([
+                'run_id'                => $runId,
+                'session_id'            => null,
+                'kind'                  => 'final',
+                'title'                 => 'Final consolidated report: ' . $run['run_code'],
+                'severity_summary_json' => json_encode($severityCount),
+                'metrics_json'          => json_encode($totals),
+                'maturity_score'        => $maturity,
+                'ux_score'              => $uxAvg,
+                'html_path'             => $htmlPath,
+                'json_path'             => $jsonPath,
+                'auditor_visible'       => true,
+            ]);
+            $reportId = (int) $db->insertID();
+        }
 
         return ['report_id' => $reportId, 'html_path' => $htmlPath, 'json_path' => $jsonPath];
     }
@@ -121,11 +128,4 @@ class FinalReportBuilder
         return round(max(0, min(100, $score)), 2);
     }
 
-    private function ensureDir(string $path): string
-    {
-        if (! is_dir($path)) {
-            @mkdir($path, 0775, true);
-        }
-        return $path;
-    }
 }

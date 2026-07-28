@@ -77,19 +77,26 @@ class WorkerController extends BaseController
                 return $this->jsonError('invalid_request', "{$f} is required", 400);
             }
         }
-        Database::connect()->table('smoke_observation_results')->insert([
-            'run_id'              => (int) $body['run_id'],
+        $db = Database::connect();
+        $runId = (int) $body['run_id'];
+        $run = $db->table('smoke_observation_runs')->where('id', $runId)->get()->getRowArray();
+        $resolver = new \App\Services\Reports\ReportArtifactResolver();
+        $shot = (string) ($body['screenshot_path'] ?? '');
+        $shot = $resolver->resolveFile($shot, (string) ($run['reports_dir'] ?? '')) ?? $shot;
+
+        $db->table('smoke_observation_results')->insert([
+            'run_id'              => $runId,
             'session_id'          => (int) $body['session_id'],
             'screen_url'          => (string) ($body['screen_url']     ?? ''),
             'screen_title'        => (string) ($body['screen_title']   ?? ''),
             'module_name'         => (string) ($body['module_name']    ?? ''),
-            'screenshot_path'     => (string) ($body['screenshot_path']?? ''),
+            'screenshot_path'     => $shot,
             'page_metadata_json'  => json_encode($body['page_metadata']  ?? []),
             'console_errors_json' => json_encode($body['console_errors']?? []),
             'network_errors_json' => json_encode($body['network_errors']?? []),
             'performance_json'    => json_encode($body['performance']   ?? []),
         ]);
-        return $this->jsonOk(['id' => (int) Database::connect()->insertID()]);
+        return $this->jsonOk(['id' => (int) $db->insertID()]);
     }
 
     public function recordInventory(): ResponseInterface
@@ -149,8 +156,20 @@ class WorkerController extends BaseController
     public function recordReport(): ResponseInterface
     {
         $body = $this->jsonBody();
-        Database::connect()->table('smoke_reports')->insert([
-            'run_id'                => (int) ($body['run_id']     ?? 0),
+        $db = Database::connect();
+        $runId = (int) ($body['run_id'] ?? 0);
+        $run = $runId > 0
+            ? $db->table('smoke_observation_runs')->where('id', $runId)->get()->getRowArray()
+            : null;
+        $resolver = new \App\Services\Reports\ReportArtifactResolver();
+        $reportsDir = (string) ($run['reports_dir'] ?? '');
+        $htmlPath = (string) ($body['html_path'] ?? '');
+        $jsonPath = (string) ($body['json_path'] ?? '');
+        $htmlPath = $resolver->resolveFile($htmlPath, $reportsDir) ?? $htmlPath;
+        $jsonPath = $resolver->resolveFile($jsonPath, $reportsDir) ?? $jsonPath;
+
+        $db->table('smoke_reports')->insert([
+            'run_id'                => $runId,
             'session_id'            => (int) ($body['session_id'] ?? 0) ?: null,
             'kind'                  => (string) ($body['kind']  ?? 'session'),
             'title'                 => (string) ($body['title'] ?? 'Session report'),
@@ -158,11 +177,11 @@ class WorkerController extends BaseController
             'metrics_json'          => json_encode($body['metrics'] ?? []),
             'maturity_score'        => isset($body['maturity_score']) ? (float) $body['maturity_score'] : null,
             'ux_score'              => isset($body['ux_score']) ? (float) $body['ux_score'] : null,
-            'html_path'             => (string) ($body['html_path'] ?? ''),
-            'json_path'             => (string) ($body['json_path'] ?? ''),
+            'html_path'             => $htmlPath,
+            'json_path'             => $jsonPath,
             'auditor_visible'       => (bool) ($body['auditor_visible'] ?? false),
         ]);
-        return $this->jsonOk(['id' => (int) Database::connect()->insertID()]);
+        return $this->jsonOk(['id' => (int) $db->insertID()]);
     }
 
     public function finalizeRun(int $runId): ResponseInterface

@@ -124,9 +124,18 @@ class ObservationRunsController extends BaseController
             ->get()
             ->getResultArray();
 
+        $resolver = new \App\Services\Reports\ReportArtifactResolver();
+        $runReportsDir = (string) ($run['reports_dir'] ?? '');
         foreach ($results as &$row) {
             $path = (string) ($row['screenshot_path'] ?? '');
-            $row['has_screenshot'] = $path !== '' && is_file($path);
+            $resolved = $path !== '' ? $resolver->resolveFile($path, $runReportsDir) : null;
+            if ($resolved !== null && $resolved !== $path) {
+                Database::connect()->table('smoke_observation_results')
+                    ->where('id', (int) $row['id'])
+                    ->update(['screenshot_path' => $resolved]);
+                $path = $resolved;
+            }
+            $row['has_screenshot'] = $resolved !== null;
             $row['screenshot_url'] = $row['has_screenshot']
                 ? "/runs/{$id}/results/{$row['id']}/screenshot"
                 : null;
@@ -161,13 +170,19 @@ class ObservationRunsController extends BaseController
         if (! $row) {
             return $this->jsonError('not_found', 'Result not found', 404);
         }
+        $run = $db->table('smoke_observation_runs')->where('id', $id)->get()->getRowArray();
+        $resolver = new \App\Services\Reports\ReportArtifactResolver();
         $path = (string) ($row['screenshot_path'] ?? '');
-        if ($path === '' || ! is_file($path)) {
+        $resolved = $path !== '' ? $resolver->resolveFile($path, (string) ($run['reports_dir'] ?? '')) : null;
+        if ($resolved === null) {
             return $this->jsonError('not_found', 'Screenshot file missing', 404);
+        }
+        if ($resolved !== $path) {
+            $db->table('smoke_observation_results')->where('id', $resultId)->update(['screenshot_path' => $resolved]);
         }
 
         $mime = 'image/png';
-        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $ext = strtolower(pathinfo($resolved, PATHINFO_EXTENSION));
         if ($ext === 'jpg' || $ext === 'jpeg') {
             $mime = 'image/jpeg';
         } elseif ($ext === 'webp') {
@@ -178,7 +193,7 @@ class ObservationRunsController extends BaseController
             ->setStatusCode(200)
             ->setHeader('Content-Type', $mime)
             ->setHeader('Cache-Control', 'private, max-age=300')
-            ->setBody((string) file_get_contents($path));
+            ->setBody((string) file_get_contents($resolved));
     }
 
     public function rerunSession(int $id, int $sessionId): ResponseInterface

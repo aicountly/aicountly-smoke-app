@@ -447,8 +447,10 @@ class RunOrchestrator
 
     private function reportsDir(string $product, string $runCode): string
     {
-        $base = (string) env('REPORTS_DIR', '../smoke-reports');
+        $resolver = new \App\Services\Reports\ReportArtifactResolver();
+        $base = $resolver->reportsBase();
         $date = date('Y-m-d');
-        return rtrim($base, '/\\') . '/' . $product . '/' . $date . '/' . $runCode;
+        $dir = rtrim($base, '/\\') . '/' . $product . '/' . $date . '/' . $runCode;
+        return $resolver->ensureDir($dir);
     }
 }
