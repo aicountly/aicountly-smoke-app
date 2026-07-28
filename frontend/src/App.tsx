@@ -8,6 +8,7 @@ import { NewObservationPage } from '@/pages/NewObservationPage';
 import { SessionPlanPage } from '@/pages/SessionPlanPage';
 import { RunsPage } from '@/pages/RunsPage';
 import { RunDetailPage } from '@/pages/RunDetailPage';
+import { SessionLogPage } from '@/pages/SessionLogPage';
 import { ReportsPage } from '@/pages/ReportsPage';
 import { FeatureGapMatrixPage } from '@/pages/FeatureGapMatrixPage';
 import { CompetitorBenchmarksPage } from '@/pages/CompetitorBenchmarksPage';
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="session-plans/:id" element={<SessionPlanPage />} />
         <Route path="runs" element={<RunsPage />} />
         <Route path="runs/:id" element={<RunDetailPage />} />
+        <Route path="runs/:id/sessions/:sessionId" element={<SessionLogPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="feature-gap-matrix" element={<FeatureGapMatrixPage />} />
         <Route path="competitor-benchmarks" element={<CompetitorBenchmarksPage />} />
