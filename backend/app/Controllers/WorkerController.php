@@ -95,6 +95,8 @@ class WorkerController extends BaseController
             'console_errors_json' => json_encode($body['console_errors']?? []),
             'network_errors_json' => json_encode($body['network_errors']?? []),
             'performance_json'    => json_encode($body['performance']   ?? []),
+            // Explicit Asia/Kolkata wall-clock (app.appTimezone), not DB server UTC.
+            'captured_at'         => date('Y-m-d H:i:s'),
         ]);
         return $this->jsonOk(['id' => (int) $db->insertID()]);
     }

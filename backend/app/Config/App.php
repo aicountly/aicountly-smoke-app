@@ -27,7 +27,11 @@ class App extends BaseConfig
 
     public array $supportedLocales = ['en'];
 
-    public string $appTimezone = 'UTC';
+    /**
+     * Application timezone for date()/Timestamps written by PHP.
+     * Override via .env: app.appTimezone = Asia/Kolkata
+     */
+    public string $appTimezone = 'Asia/Kolkata';
 
     public string $charset = 'UTF-8';
 

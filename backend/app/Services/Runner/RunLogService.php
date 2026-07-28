@@ -27,6 +27,7 @@ class RunLogService
             'level'        => mb_substr($level, 0, 16),
             'message'      => $message,
             'context_json' => $context === [] ? null : json_encode($context),
+            // Uses Config\App::$appTimezone (Asia/Kolkata).
             'created_at'   => date('Y-m-d H:i:s'),
         ]);
     }

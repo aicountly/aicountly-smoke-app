@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { formatAppDateTime } from '@/lib/datetime';
 import { SAAS_PRODUCTS } from '@/lib/products';
 import { useAuthStore } from '@/store/auth';
 
@@ -114,7 +115,7 @@ export function RunsPage() {
                   </div>
                   <div className="text-[11px] text-ink-500">{r.sessions_done}/{r.sessions_total} done, {r.sessions_failed} failed</div>
                 </td>
-                <td className="text-xs">{r.started_at ?? '—'}</td>
+                <td className="text-xs">{r.started_at ? formatAppDateTime(r.started_at) : '—'}</td>
                 <td className="pr-4 text-right whitespace-nowrap">
                   <Link className="btn-secondary text-xs py-1 px-2 mr-2" to={`/runs/${r.id}`}>Open</Link>
                   {canDelete && (

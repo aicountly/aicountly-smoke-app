@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { formatAppDateTime } from '@/lib/datetime';
 import { useAuthStore } from '@/store/auth';
 
 type RunLog = {
@@ -230,7 +231,7 @@ pm2 start npm --name smoke-worker -- start`}
           )}
           {logs.map((l) => (
             <div key={l.id} className="whitespace-pre-wrap break-words">
-              <span className="text-ink-500">{l.created_at}</span>{' '}
+              <span className="text-ink-500">{formatAppDateTime(l.created_at)}</span>{' '}
               <span className="text-ink-400">[{l.source}/{l.level}]</span>{' '}
               <span className={logLevelClass(l.level)}>{l.message}</span>
             </div>
