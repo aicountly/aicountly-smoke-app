@@ -106,7 +106,11 @@ export function TargetProfilesPage() {
                         className="btn-danger"
                         disabled={deleteMut.isPending}
                         onClick={() => {
-                          if (confirm(`Delete profile "${p.profile_name}"? This cannot be undone.`)) {
+                          if (
+                            confirm(
+                              `Delete profile "${p.profile_name}"?\n\nThis permanently removes the profile, credentials, and ALL related observation runs including logs, screenshots, and report files. This cannot be undone.`,
+                            )
+                          ) {
                             deleteMut.mutate(p.id);
                           }
                         }}

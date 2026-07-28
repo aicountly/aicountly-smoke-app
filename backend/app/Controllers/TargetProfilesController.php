@@ -136,11 +136,25 @@ class TargetProfilesController extends BaseController
         return $this->jsonOk(['ok' => true]);
     }
 
+    /**
+     * Hard-delete a target profile and all related observation runs, logs,
+     * screenshots, reports, credentials, and master prompts.
+     */
     public function delete(int $id): ResponseInterface
     {
-        Database::connect()->table('smoke_target_profiles')->where('id', $id)->update(['status' => 'archived']);
-        Services::audit()->record('target_profiles.archive', 'smoke_target_profiles', (string) $id, $this->user()?->id);
-        return $this->jsonOk(['ok' => true]);
+        try {
+            $result = Services::observationCleanup()->deleteTargetProfile($id);
+            Services::audit()->record(
+                'target_profiles.delete',
+                'smoke_target_profiles',
+                (string) $id,
+                $this->user()?->id,
+                $result,
+            );
+            return $this->jsonOk(['data' => $result]);
+        } catch (\RuntimeException $e) {
+            return $this->jsonError('not_found', $e->getMessage(), 404);
+        }
     }
 
     private function validateProfileInput(array $body, bool $strict): ?string

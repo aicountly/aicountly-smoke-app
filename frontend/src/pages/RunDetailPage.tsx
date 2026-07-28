@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { openReport } from '@/lib/reports';
@@ -285,8 +285,10 @@ function SessionLogDrawer({
 export function RunDetailPage() {
   const { id } = useParams();
   const runId = Number(id);
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const canOperate = useAuthStore((s) => s.hasRole('owner', 'product_reviewer'));
+  const canDelete = useAuthStore((s) => s.hasRole('owner'));
   const logEndRef = useRef<HTMLDivElement>(null);
   const [lastLogId, setLastLogId] = useState(0);
   const [logs, setLogs] = useState<RunLog[]>([]);
@@ -313,6 +315,14 @@ export function RunDetailPage() {
   const cancelMut = useMutation({
     mutationFn: async () => (await api.post(`/runs/${runId}/cancel`, {})).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['run', runId] }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async () => (await api.delete(`/runs/${runId}`)).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['runs'] });
+      navigate('/runs');
+    },
   });
 
   const rerunMut = useMutation({
@@ -390,19 +400,47 @@ export function RunDetailPage() {
             {' '}&middot; {data.data.sessions_done}/{data.data.sessions_total} done
           </p>
         </div>
-        {cancellable && (
-          <button
-            type="button"
-            className="btn-danger"
-            disabled={cancelMut.isPending}
-            onClick={() => {
-              if (confirm('Cancel this run and all queued/leased jobs?')) cancelMut.mutate();
-            }}
-          >
-            {cancelMut.isPending ? 'Cancelling…' : 'Cancel run'}
-          </button>
-        )}
+        <div className="flex gap-2 shrink-0">
+          {cancellable && (
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={cancelMut.isPending}
+              onClick={() => {
+                if (confirm('Cancel this run and all queued/leased jobs?')) cancelMut.mutate();
+              }}
+            >
+              {cancelMut.isPending ? 'Cancelling…' : 'Cancel run'}
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              className="btn-danger"
+              disabled={deleteMut.isPending}
+              onClick={() => {
+                if (
+                  confirm(
+                    `Delete run "${data.data.run_code}"?\n\nThis permanently removes all logs, screenshots, and report files for this run. This cannot be undone.`,
+                  )
+                ) {
+                  deleteMut.mutate();
+                }
+              }}
+            >
+              {deleteMut.isPending ? 'Deleting…' : 'Delete run'}
+            </button>
+          )}
+        </div>
       </div>
+
+      {deleteMut.isError && (
+        <div className="rounded border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+          Delete failed.{' '}
+          {(deleteMut.error as { response?: { data?: { message?: string } } })?.response?.data?.message
+            ?? 'Try again.'}
+        </div>
+      )}
 
       {showWorkerAlert && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">

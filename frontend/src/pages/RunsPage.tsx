@@ -1,8 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { SAAS_PRODUCTS } from '@/lib/products';
+import { useAuthStore } from '@/store/auth';
 
 type Run = {
   id: number;
@@ -20,10 +21,18 @@ type Run = {
 
 export function RunsPage() {
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const qc = useQueryClient();
+  const canDelete = useAuthStore((s) => s.hasRole('owner'));
+
   const { data } = useQuery<{ data: Run[] }>({
     queryKey: ['runs', filters],
     queryFn: async () => (await api.get('/runs', { params: filters })).data,
     refetchInterval: 3000,
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async (id: number) => (await api.delete(`/runs/${id}`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['runs'] }),
   });
 
   function setF(k: string, v: string) {
@@ -69,6 +78,14 @@ export function RunsPage() {
         </div>
       </div>
 
+      {deleteMut.isError && (
+        <div className="rounded border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+          Delete failed.{' '}
+          {(deleteMut.error as { response?: { data?: { message?: string } } })?.response?.data?.message
+            ?? 'Try again.'}
+        </div>
+      )}
+
       <div className="card overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-ink-50 text-ink-600 text-left">
@@ -79,7 +96,7 @@ export function RunsPage() {
               <th>Status</th>
               <th>Progress</th>
               <th>Started</th>
-              <th />
+              <th className="pr-4 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -98,7 +115,27 @@ export function RunsPage() {
                   <div className="text-[11px] text-ink-500">{r.sessions_done}/{r.sessions_total} done, {r.sessions_failed} failed</div>
                 </td>
                 <td className="text-xs">{r.started_at ?? '—'}</td>
-                <td className="pr-4 text-right"><Link className="btn-secondary" to={`/runs/${r.id}`}>Open</Link></td>
+                <td className="pr-4 text-right whitespace-nowrap">
+                  <Link className="btn-secondary text-xs py-1 px-2 mr-2" to={`/runs/${r.id}`}>Open</Link>
+                  {canDelete && (
+                    <button
+                      type="button"
+                      className="btn-danger text-xs py-1 px-2"
+                      disabled={deleteMut.isPending}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Delete run "${r.run_code}"?\n\nThis permanently removes all logs, screenshots, and report files for this run. This cannot be undone.`,
+                          )
+                        ) {
+                          deleteMut.mutate(r.id);
+                        }
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
             {(data?.data?.length ?? 0) === 0 && (

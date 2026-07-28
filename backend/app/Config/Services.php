@@ -15,6 +15,7 @@ use App\Services\Planner\MasterPromptSampleCatalog;
 use App\Services\Planner\SessionPlanner;
 use App\Services\Reports\FinalReportBuilder;
 use App\Services\Reports\SessionReportBuilder;
+use App\Services\Runner\ObservationCleanupService;
 use App\Services\Runner\RunLogService;
 use App\Services\Runner\RunOrchestrator;
 use App\Services\Runner\WorkerStatusService;
@@ -109,6 +110,14 @@ class Services extends BaseService
             return self::getSharedInstance('runLog');
         }
         return new RunLogService();
+    }
+
+    public static function observationCleanup(bool $getShared = true): ObservationCleanupService
+    {
+        if ($getShared) {
+            return self::getSharedInstance('observationCleanup');
+        }
+        return new ObservationCleanupService();
     }
 
     public static function workerStatus(bool $getShared = true): WorkerStatusService

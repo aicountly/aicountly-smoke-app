@@ -92,6 +92,7 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->get('runs/(:num)/results/(:num)/screenshot', 'ObservationRunsController::resultScreenshot/$1/$2');
         $routes->get('runs/code/(:segment)',     'ObservationRunsController::showByCode/$1');
         $routes->post('runs/(:num)/cancel',      'ObservationRunsController::cancel/$1', ['filter' => 'rbac:owner,product_reviewer']);
+        $routes->delete('runs/(:num)',           'ObservationRunsController::delete/$1', ['filter' => 'rbac:owner']);
 
         // Reports
         $routes->get('reports',                  'ReportsController::index');

@@ -96,6 +96,26 @@ class ObservationRunsController extends BaseController
     }
 
     /**
+     * Hard-delete a run and its logs, screenshots, and report files (DB + disk).
+     */
+    public function delete(int $id): ResponseInterface
+    {
+        try {
+            $result = Services::observationCleanup()->deleteRun($id);
+            Services::audit()->record(
+                'runs.delete',
+                'smoke_observation_runs',
+                (string) $id,
+                $this->user()?->id,
+                $result,
+            );
+            return $this->jsonOk(['data' => $result]);
+        } catch (\RuntimeException $e) {
+            return $this->jsonError('not_found', $e->getMessage(), 404);
+        }
+    }
+
+    /**
      * Full session log: worker log lines + captured screens/results + session reports.
      */
     public function sessionDetail(int $id, int $sessionId): ResponseInterface
