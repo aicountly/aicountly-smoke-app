@@ -89,7 +89,22 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       message: `Action screenshot: login form at ${page.url()}`,
     }).catch(() => {});
 
-    await login(page, job.profile);
+    try {
+      await login(page, job.profile);
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      try {
+        await observeAndPersist(ctx, '01b-login-failed');
+      } catch { /* ignore */ }
+      await appendLog({
+        run_id: job.run_id,
+        session_id: job.session.id,
+        job_id: job.job_id,
+        level: 'error',
+        message: `Login failed: ${errMsg}`,
+      }).catch(() => {});
+      throw err;
+    }
     await appendLog({
       run_id: job.run_id,
       session_id: job.session.id,
@@ -103,7 +118,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       run_id: job.run_id,
       session_id: job.session.id,
       job_id: job.job_id,
-      message: `Action screenshot: landing page "${(await page.title().catch(() => ''))}"`,
+      message: `Action screenshot: landing page "${(await page.title().catch(() => ''))}" @ ${page.url()}`,
     }).catch(() => {});
 
     // Discover menus and visit session-relevant ones
@@ -123,13 +138,30 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       if (targets.length === 0) targets = menus;
     }
 
-    // If still no menus, try direct URL from menu_path + scan again
+    // If still no menus, try direct URL from menu_path + capture each page
+    let actionOrdinal = 3;
     if (targets.length === 0) {
       const direct = buildDirectUrls(job);
       for (const url of direct) {
         try {
+          await appendLog({
+            run_id: job.run_id,
+            session_id: job.session.id,
+            job_id: job.job_id,
+            message: `Action: direct-nav ${url}`,
+          }).catch(() => {});
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
           await sleep(800);
+          const label = `${String(actionOrdinal).padStart(2, '0')}-direct-${slug(url)}`;
+          actionOrdinal++;
+          await observeAndPersist(ctx, label);
+          await appendLog({
+            run_id: job.run_id,
+            session_id: job.session.id,
+            job_id: job.job_id,
+            message: `Observed screen after direct-nav @ ${page.url()}`,
+          }).catch(() => {});
+
           menus = await scanMenus(page);
           targets = filterMenusForSession(menus, job);
           if (targets.length === 0) targets = keywordMenusForSession(menus, job);
@@ -138,7 +170,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
             run_id: job.run_id,
             session_id: job.session.id,
             job_id: job.job_id,
-            message: `Direct-nav to ${url}; rediscovered ${menus.length} menu item(s)`,
+            message: `After direct-nav rediscovered ${menus.length} menu item(s)`,
           }).catch(() => {});
           if (targets.length > 0) break;
         } catch (err) {
@@ -161,7 +193,6 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       message: `Found ${menus.length} menu item(s); visiting up to ${Math.min(targets.length, visitLimit)} for this session`,
     }).catch(() => {});
 
-    let actionOrdinal = 3;
     for (const m of targets.slice(0, visitLimit)) {
       const decision = evaluateClick(m.label, {
         destructiveAllowed: !!job.session.destructive_allowed,
@@ -397,8 +428,12 @@ function buildDirectUrls(job: Job): string[] {
     job.session.name.toLowerCase().includes('bank') ? '/banking' : '',
     job.session.name.toLowerCase().includes('inventory') ? '/inventory' : '',
     job.session.name.toLowerCase().includes('gst') ? '/gst' : '',
+    job.session.name.toLowerCase().includes('gst') ? '/gstr' : '',
+    job.session.name.toLowerCase().includes('gst') ? '/returns' : '',
     job.session.name.toLowerCase().includes('report') ? '/reports' : '',
     job.session.name.toLowerCase().includes('account') || job.session.name.toLowerCase().includes('journal') ? '/accounts' : '',
+    job.session.name.toLowerCase().includes('dashboard') ? '/dashboard' : '',
+    job.session.name.toLowerCase().includes('dashboard') ? '/home' : '',
     slugName ? `/${slugName}` : '',
   ].filter(Boolean);
   for (const g of guesses) {
