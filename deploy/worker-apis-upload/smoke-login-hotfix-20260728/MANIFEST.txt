@@ -1,0 +1,5 @@
+smoke-login-hotfix-20260728
+- portals/smoke/auth/login.ts          (multi-step + required Jump To / Smart Books)
+- portals/smoke/runSession.ts          (screenshot per action + fail if login stuck)
+- portals/smoke/scanner/menuScanner.ts (broader sidebar discovery)
+- portals/smoke/utils/safeActionGuard.ts
