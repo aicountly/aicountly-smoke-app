@@ -435,11 +435,14 @@ export function RunDetailPage() {
           <p className="mt-1 text-amber-800">{data.worker.message}</p>
           <pre className="mt-2 overflow-x-auto rounded bg-amber-100/80 p-2 text-xs text-amber-950">
 {`cd /home/YOUR_USER/public_html/worker
-cp .env.example .env   # WORKER_SHARED_TOKEN must match api/.env
-npm install --omit=dev
-npx playwright install chromium
-pm2 start npm --name smoke-worker -- start`}
+pm2 startOrRestart ecosystem.config.cjs --update-env && pm2 save
+pm2 logs aicountly-smoke-worker --lines 40`}
           </pre>
+          <p className="mt-2 text-xs text-amber-800">
+            Deploys restart <code>aicountly-smoke-worker</code> automatically. Always use the
+            ecosystem file — starting a second, differently named process would double-lease the
+            job queue.
+          </p>
         </div>
       )}
 
@@ -476,7 +479,7 @@ pm2 start npm --name smoke-worker -- start`}
           {logs.length === 0 && (
             <div className="text-ink-400">
               {data.data.status === 'queued'
-                ? 'Waiting for worker… No log lines yet. Start smoke-worker on the server to process this run.'
+                ? 'Waiting for worker… No log lines yet. Check that aicountly-smoke-worker is online on the server.'
                 : 'No log lines yet.'}
             </div>
           )}

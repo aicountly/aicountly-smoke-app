@@ -11,8 +11,10 @@ npm run smoke:hrms
 npm run smoke:report -- --run-id=17
 ```
 
-Production worker on cPanel uses `worker/scripts/start-worker.sh` or
-`pm2 start npm --name smoke-worker -- start` (runs compiled `dist/index.js`).
+The production worker on cPanel is PM2 process `aicountly-smoke-worker`, defined by
+[`worker/ecosystem.config.cjs`](../worker/ecosystem.config.cjs) and restarted by the
+deploy workflow. Start it only via `pm2 startOrRestart ecosystem.config.cjs`: a
+second, differently named process would double-lease the job queue.
 
 Each maps to a `npm --workspace worker` command. See
 [`worker/README.md`](../worker/README.md) and [`worker/src/cli/`](../worker/src/cli/).

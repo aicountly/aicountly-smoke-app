@@ -51,7 +51,7 @@ class WorkerStatusService
                 ? "Worker active — {$activeLeases} job(s) in progress"
                 : 'Worker recently active';
         } elseif ($queuedJobs > 0) {
-            $message = 'Worker offline — jobs will stay queued until smoke-worker is started on the server (PM2: npm start in /worker)';
+            $message = 'Worker offline — jobs stay queued until PM2 process aicountly-smoke-worker is online (worker/ecosystem.config.cjs)';
         }
 
         return [
