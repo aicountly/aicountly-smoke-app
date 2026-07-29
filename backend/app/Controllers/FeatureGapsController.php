@@ -15,7 +15,7 @@ class FeatureGapsController extends BaseController
             $v = $this->request->getGet($f);
             if ($v !== null && $v !== '') {
                 if ($f === 'observed' || $f === 'partial') {
-                    $q->where($f, in_array($v, ['1', 'true', 'yes'], true) ? 'true' : 'false');
+                    $q->where($f, in_array($v, ['1', 'true', 'yes'], true));
                 } else {
                     $q->where($f, $v);
                 }

@@ -588,8 +588,8 @@ class WorkerController extends BaseController
      * Competitor feature catalogs for heuristic gap detection.
      * JWT /competitors is not usable with X-Worker-Token — this endpoint is.
      *
-     * MySQL BOOLEAN is TINYINT(1): compare with 1/0, not the string "true"
-     * (which casts to 0 and returns zero rows).
+     * PostgreSQL BOOLEAN has no implicit cast from integer: compare with PHP
+     * booleans so the driver emits TRUE/FALSE, never 1/0.
      */
     public function listCompetitors(): ResponseInterface
     {
@@ -613,9 +613,9 @@ class WorkerController extends BaseController
         $enabled = $this->request->getGet('enabled');
         if ($enabled !== null && $enabled !== '') {
             $want = in_array((string) $enabled, ['1', 'true', 'yes'], true);
-            $q->where('enabled', $want ? 1 : 0);
+            $q->where('enabled', $want);
         } else {
-            $q->where('enabled', 1);
+            $q->where('enabled', true);
         }
         $rows = $q->orderBy('product_name', 'ASC')->orderBy('competitor_name', 'ASC')->get()->getResultArray();
         return $this->jsonOk(['data' => $rows]);
@@ -663,7 +663,7 @@ class WorkerController extends BaseController
                 'competitor_name'   => $name,
                 'feature_list_json' => json_encode(array_values(array_unique((array) ($row['features'] ?? [])))),
                 'source_url'        => (string) ($row['source_url'] ?? ''),
-                'enabled'           => 1,
+                'enabled'           => true,
                 'notes'             => (string) ($row['notes'] ?? ''),
             ]);
         }

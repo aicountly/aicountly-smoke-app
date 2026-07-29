@@ -47,7 +47,7 @@ class ProductionGuardFilter implements FilterInterface
             $environment = strtolower((string) ($profile['environment'] ?? $environment));
             if (in_array(end($segments), ['run', 'approve'], true)) {
                 $allowDestructive = $db->table('smoke_sessions')
-                    ->where('plan_id', $planId)->where('destructive_allowed', 1)->countAllResults() > 0;
+                    ->where('plan_id', $planId)->where('destructive_allowed', true)->countAllResults() > 0;
             }
         }
 

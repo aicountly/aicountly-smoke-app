@@ -16,8 +16,8 @@ class CompetitorProfilesController extends BaseController
             $q->where('product_name', $p);
         }
         if ($e = $this->request->getGet('enabled')) {
-            // MySQL BOOLEAN is TINYINT(1) — use 1/0 (string "true" casts to 0).
-            $q->where('enabled', in_array($e, ['1', 'true', 'yes'], true) ? 1 : 0);
+            // PostgreSQL BOOLEAN has no implicit cast from integer — pass a PHP bool.
+            $q->where('enabled', in_array($e, ['1', 'true', 'yes'], true));
         }
         $rows = $q->orderBy('product_name', 'ASC')->orderBy('competitor_name', 'ASC')->get()->getResultArray();
         return $this->jsonOk(['data' => $rows]);
