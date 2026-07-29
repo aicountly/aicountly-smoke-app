@@ -1,0 +1,13 @@
+smoke-feature-gaps-hotfix-20260729b
+
+SMOKE API:
+- app/Config/Routes.php
+- app/Controllers/WorkerController.php  (fixed enabled=1 filter + auto-seed)
+- app/Controllers/CompetitorProfilesController.php
+- samples/competitors/*.json            (needed for auto-seed)
+
+WORKER:
+- portals/smoke/runSession.ts
+- portals/smoke/reviewer/fallbackCompetitorCatalogs.ts  (NEW)
+- portals/smoke/reviewer/featureGapEngine.ts
+- portals/smoke/reviewer/competitorComparison.ts

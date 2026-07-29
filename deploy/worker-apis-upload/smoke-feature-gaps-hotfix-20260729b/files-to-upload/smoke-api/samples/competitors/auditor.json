@@ -1,0 +1,31 @@
+{
+  "product_name": "auditor",
+  "competitors": [
+    {
+      "name": "CaseWare Cloud",
+      "source_url": "https://www.caseware.com",
+      "features": [
+        "engagement letter", "risk assessment", "audit programs",
+        "internal control testing", "sampling", "working papers",
+        "review notes", "completion checklist", "trial balance",
+        "lead schedules", "consolidation", "report writer"
+      ]
+    },
+    {
+      "name": "Wolters Kluwer Audit Management",
+      "source_url": "https://www.wolterskluwer.com",
+      "features": [
+        "ai assistance", "issue tracking", "follow-ups", "compliance dashboards",
+        "kyc", "risk scoring", "cloud collaboration"
+      ]
+    },
+    {
+      "name": "Suralink",
+      "source_url": "https://suralink.com",
+      "features": [
+        "request list", "client portal", "document checklist",
+        "due date tracking", "reminders", "audit trail"
+      ]
+    }
+  ]
+}

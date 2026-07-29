@@ -1,0 +1,39 @@
+{
+  "product_name": "calendar",
+  "competitors": [
+    {
+      "name": "Google Calendar",
+      "source_url": "https://calendar.google.com",
+      "features": [
+        "day view", "week view", "month view", "timezones", "recurring events",
+        "rooms", "reminders", "shared calendars", "find a time",
+        "tasks integration", "appointment slots", "rsvp", "out of office",
+        "focus time", "meet integration"
+      ]
+    },
+    {
+      "name": "Reclaim.ai",
+      "source_url": "https://reclaim.ai",
+      "features": [
+        "ai scheduling", "smart 1:1s", "habits", "tasks", "buffer time",
+        "decompression time", "meeting analytics", "team availability"
+      ]
+    },
+    {
+      "name": "Sunsama",
+      "source_url": "https://sunsama.com",
+      "features": [
+        "daily planning", "task pull", "focus mode", "calendar sync",
+        "weekly review", "team queue"
+      ]
+    },
+    {
+      "name": "Motion",
+      "source_url": "https://www.usemotion.com",
+      "features": [
+        "ai planner", "auto reschedule", "deadline aware",
+        "meeting booking", "project planning"
+      ]
+    }
+  ]
+}
