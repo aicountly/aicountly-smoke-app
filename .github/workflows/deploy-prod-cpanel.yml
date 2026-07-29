@@ -245,7 +245,9 @@ jobs:
             exit 0
           fi
           set -o pipefail
-          ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-restart.log
+          # timeout: every pm2 call below is detached from this pipe, but a wedged
+          # SSH must fail in seconds rather than idling until the job timeout.
+          timeout 180 ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-restart.log
           set -u
           WORKER_DIR="${1%/}/worker"
           mkdir -p "$WORKER_DIR/logs"
@@ -273,14 +275,26 @@ jobs:
           echo "pm2: $(command -v pm2) ($(pm2 --version 2>/dev/null))"
 
           cd "$WORKER_DIR"
+
+          # Every pm2 call is detached from this SSH session's stdio. When no God
+          # daemon is running yet, pm2 spawns one, and a daemon that inherits the
+          # SSH pipe holds it open forever — the connection then never returns.
+          # Spawning it here against a regular file is what keeps SSH closable.
+          PM2_LOG="$(mktemp)"
+          pm2 ping </dev/null >>"$PM2_LOG" 2>&1 \
+            || echo "::warning::pm2 ping failed — pm2 daemon may not be usable for this account."
+
           # startOrRestart (not startOrReload): this is a fork-mode queue worker with
           # no listening socket, so PM2's rolling reload buys nothing and reload in
           # fork mode degrades to a stop/start anyway. A hard restart also guarantees
           # the old process cannot keep an old dist/index.js resident.
-          pm2 startOrRestart ecosystem.config.cjs --update-env \
+          pm2 startOrRestart ecosystem.config.cjs --update-env </dev/null >>"$PM2_LOG" 2>&1 \
             || echo "::warning::pm2 startOrRestart returned non-zero — the health check step decides whether the worker is actually running."
-          pm2 save || echo "::warning::pm2 save failed — the process list may not survive a server reboot."
-          pm2 list
+          pm2 save </dev/null >>"$PM2_LOG" 2>&1 \
+            || echo "::warning::pm2 save failed — the process list may not survive a server reboot."
+          cat "$PM2_LOG"
+          rm -f "$PM2_LOG"
+          pm2 list --no-color </dev/null 2>&1 || true
           echo "SMOKE_WORKER_RESTART_OK"
           EOS
           if grep -q '^SMOKE_WORKER_RESTART_OK$' /tmp/worker-restart.log; then
@@ -300,7 +314,7 @@ jobs:
         run: |
           REMOTE_ROOT="${REMOTE_ROOT%/}"
           set -o pipefail
-          ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-health.log
+          timeout 180 ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-health.log
           set -u
           WORKER_DIR="${1%/}/worker"
           for d in "$HOME/.npm-global/bin" "$HOME/bin" "$HOME/node_modules/.bin" \
@@ -317,8 +331,12 @@ jobs:
             fi
           fi
 
+          # As in the restart step: never let a pm2 command spawn the daemon onto
+          # this SSH session's pipe, or the connection cannot close.
+          pm2 ping </dev/null >/dev/null 2>&1 || true
+
           probe() {
-            pm2 jlist 2>/dev/null | node -e '
+            pm2 jlist </dev/null 2>/dev/null | node -e '
               let raw = "";
               process.stdin.on("data", (d) => { raw += d; });
               process.stdin.on("end", () => {
