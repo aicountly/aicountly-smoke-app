@@ -31,7 +31,7 @@ import { evaluateHostGuard } from './utils/hostGuard.js';
 import { dismissOverlays } from './utils/dismissOverlays.js';
 import { askOrRecallDecision, type DecisionOption } from './nav/askDecision.js';
 import { performNavAction } from './nav/performNavAction.js';
-import { resolveAppContext } from './nav/resolveAppContext.js';
+import { isEmptyCompanyPicker, resolveAppContext } from './nav/resolveAppContext.js';
 import type { ConsoleEvent } from './scanner/consoleCapture.js';
 import type { NetworkEvent } from './scanner/networkCapture.js';
 import { runFileIoScenarios, shouldRunFileIoSession } from './fileIo/fileIoEngine.js';
@@ -183,6 +183,14 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     if (appContext.navigated || appContext.rescan) {
       await sleep(500);
       await observeAndPersist(ctx, '02b-app-context-resolved');
+    }
+    // Do not walk menus on an empty company workspace — that produces a false
+    // "session completed successfully" with only picker/empty-state screenshots.
+    if (appContext.detected && !appContext.skipped && await isEmptyCompanyPicker(page)) {
+      throw new Error(
+        'Company workspace is still unresolved after app-context resolution; '
+        + 'refusing to walk menus with no company selected.',
+      );
     }
 
     // Discover menus and visit session-relevant ones

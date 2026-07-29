@@ -145,7 +145,9 @@ class DeterministicAdapter extends AbstractAdapter
                         'action' => 'abort_session',
                     ],
                 ],
-                'recommended' => 'skip_company_scoped_menus',
+                // Prefer creating the smoke company — skipping leaves every later
+                // session on an empty picker and looks like a false green run.
+                'recommended' => 'create_company',
             ];
         }
 

@@ -33,6 +33,7 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->get('decisions/(:num)',       'WorkerController::pollDecision/$1');
         $routes->post('decisions/(:num)/timeout', 'WorkerController::timeoutDecision/$1');
         $routes->get('decision-memory',        'WorkerController::decisionMemory');
+        $routes->delete('decision-memory',     'WorkerController::forgetDecisionMemory');
         $routes->post('credentials/(:num)/decrypt', 'WorkerController::decryptCredential/$1');
         $routes->post('results',               'WorkerController::recordResult');
         $routes->post('inventory',             'WorkerController::recordInventory');

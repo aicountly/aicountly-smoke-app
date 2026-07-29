@@ -199,6 +199,17 @@ async function recallDecision(job: Job, situationKey: string): Promise<DecisionM
   return response.data.data ?? null;
 }
 
+/** Drop a remembered choice that failed at runtime so it cannot false-succeed forever. */
+export async function forgetDecisionMemory(job: Job, situationKey: string): Promise<void> {
+  await backend.delete('/worker/decision-memory', {
+    params: {
+      product_name: job.run.product_name,
+      environment: job.run.environment,
+      situation_key: situationKey,
+    },
+  });
+}
+
 async function proposeDecision(input: AskDecisionInput): Promise<BrainDecision> {
   const fallback: BrainDecision = {
     question: input.question,

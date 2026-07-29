@@ -353,6 +353,36 @@ class WorkerController extends BaseController
         return $this->jsonOk(['data' => $row]);
     }
 
+    public function forgetDecisionMemory(): ResponseInterface
+    {
+        $product = trim((string) ($this->request->getGet('product_name') ?? ''));
+        $environment = trim((string) ($this->request->getGet('environment') ?? ''));
+        $situationKey = trim((string) ($this->request->getGet('situation_key') ?? ''));
+        if ($product === '' || $environment === '' || $situationKey === '') {
+            return $this->jsonError(
+                'invalid_request',
+                'product_name, environment, and situation_key query parameters are required.',
+                400,
+            );
+        }
+
+        $db = Database::connect();
+        $db->table('smoke_decision_memory')
+            ->where('product_name', $product)
+            ->where('environment', $environment)
+            ->where('situation_key', $situationKey)
+            ->delete();
+
+        return $this->jsonOk([
+            'data' => [
+                'forgotten'     => true,
+                'product_name'  => $product,
+                'environment'   => $environment,
+                'situation_key' => $situationKey,
+            ],
+        ]);
+    }
+
     public function decryptCredential(int $profileId): ResponseInterface
     {
         $plain = Services::vault()->decryptForProfile($profileId);

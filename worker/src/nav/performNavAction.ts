@@ -4,6 +4,7 @@ import { captureScreenshot } from '../scanner/screenshotCapture.js';
 import { evaluateClick } from '../utils/safeActionGuard.js';
 import { dismissOverlays } from '../utils/dismissOverlays.js';
 import type { DecisionChoice } from './askDecision.js';
+import { bodyMentionsCompany, hasEmptyCompanyCopy } from './companyPicker.js';
 
 export type NavActionContext = {
   href?: string;
@@ -126,6 +127,8 @@ async function createCompany(page: Page, requestedName?: string, screenshotsDir?
   const name = requestedName?.trim() || process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
 
   // Empty-state pages sometimes render the form inline, with no control to click.
+  // Never treat the picker search box ("Search companies...") as the name field —
+  // its placeholder matches /compan/ and used to make create "succeed" without creating.
   let field = await findCompanyNameField(page, 1_500);
   if (!field) {
     await openCreateCompanyForm(page, screenshotsDir);
@@ -146,17 +149,20 @@ async function createCompany(page: Page, requestedName?: string, screenshotsDir?
   }
 
   const scope = await dialogOrPage(page);
+  // Prefer real form submit labels. Do NOT match "+ Add Company" — that opens the
+  // create form (and is what we already clicked), it does not submit it.
   const submit = await firstVisible([
-    () => scope.getByRole('button', { name: /^(create|save|continue|submit|add|next|done)\b/i }),
-    () => scope.getByRole('button', { name: CREATE_COMPANY_TEXT }),
+    () => scope.getByRole('button', { name: /^(create|save|continue|submit|next|done)\b/i }),
     () => scope.locator('button[type="submit"], input[type="submit"]'),
   ]);
   if (!submit) {
     throw new Error(await describeFailure(page, screenshotsDir,
       `No create-company submit control was found (name field was filled with "${name}").`));
   }
+  const submitLabel = ((await submit.innerText().catch(() => '')) || '').trim().replace(/\s+/g, ' ');
   await submit.click({ timeout: 8_000 });
   await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
+  await assertCompanyCreateLanded(page, name, screenshotsDir, submitLabel);
 }
 
 async function openCreateCompanyForm(page: Page, screenshotsDir?: string): Promise<void> {
@@ -203,7 +209,7 @@ async function findCompanyNameField(page: Page, timeoutMs: number): Promise<Loca
           'input[type="text"]:not([name*="search" i]):not([id*="search" i]):not([placeholder*="search" i]),'
           + 'input:not([type]):not([name*="search" i]):not([id*="search" i])',
         ),
-      ], { editable: true });
+      ], { editable: true, rejectSearch: true });
       if (field) return field;
     }
     if (Date.now() >= deadline) return null;
@@ -211,22 +217,68 @@ async function findCompanyNameField(page: Page, timeoutMs: number): Promise<Loca
   }
 }
 
+async function assertCompanyCreateLanded(
+  page: Page,
+  name: string,
+  screenshotsDir?: string,
+  submitLabel = '',
+): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const bodyText = (await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '')).slice(0, 30_000);
+    const stillEmpty = hasEmptyCompanyCopy(bodyText);
+    // Name sitting only in the still-open create form is not proof of create.
+    const formStillOpen = !!(await findCompanyNameField(page, 250));
+    const nameVisible = bodyMentionsCompany(bodyText, name);
+    if (!stillEmpty && !formStillOpen && nameVisible) return;
+    if (!stillEmpty && !formStillOpen && !/create\s+(new\s+)?compan/i.test(bodyText)) return;
+    await page.waitForTimeout(400);
+  }
+  throw new Error(await describeFailure(page, screenshotsDir,
+    `Company create for "${name}" did not produce a visible company`
+    + (submitLabel ? ` (clicked "${submitLabel}")` : '')
+    + '. Empty picker is still showing, so later sessions will also find no company.'));
+}
+
 async function firstVisible(
   builders: Array<() => Locator>,
-  opts: { editable?: boolean } = {},
+  opts: { editable?: boolean; rejectSearch?: boolean } = {},
 ): Promise<Locator | null> {
   for (const build of builders) {
-    let candidate: Locator;
+    let matches: Locator;
     try {
-      candidate = build().filter({ visible: true }).first();
+      matches = build().filter({ visible: true });
     } catch {
       continue; // one unsupported strategy must not kill the rest
     }
-    if (!await candidate.count().catch(() => 0)) continue;
-    if (opts.editable && !await candidate.isEditable({ timeout: 500 }).catch(() => false)) continue;
-    return candidate;
+    const count = Math.min(await matches.count().catch(() => 0), 8);
+    for (let index = 0; index < count; index++) {
+      const candidate = matches.nth(index);
+      if (opts.editable && !await candidate.isEditable({ timeout: 500 }).catch(() => false)) continue;
+      if (opts.rejectSearch && await looksLikeSearchField(candidate)) continue;
+      return candidate;
+    }
   }
   return null;
+}
+
+/** Picker search ("Search companies...") must never be treated as the company name input. */
+async function looksLikeSearchField(locator: Locator): Promise<boolean> {
+  const attrs = await locator.evaluate((el) => {
+    const input = el as HTMLInputElement;
+    return {
+      name: input.getAttribute('name') || '',
+      id: input.getAttribute('id') || '',
+      type: (input.getAttribute('type') || input.type || '').toLowerCase(),
+      placeholder: input.getAttribute('placeholder') || '',
+      ariaLabel: input.getAttribute('aria-label') || '',
+      role: input.getAttribute('role') || '',
+    };
+  }).catch(() => null);
+  if (!attrs) return false;
+  if (attrs.type === 'search') return true;
+  const blob = [attrs.name, attrs.id, attrs.placeholder, attrs.ariaLabel, attrs.role].join(' ');
+  return /\bsearch\b/i.test(blob);
 }
 
 /**

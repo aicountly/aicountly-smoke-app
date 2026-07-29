@@ -1,7 +1,8 @@
 import type { Page } from 'playwright';
-import { appendLog, type Job } from '../backend.js';
+import { appendLog, backend, type Job } from '../backend.js';
 import { captureScreenshot } from '../scanner/screenshotCapture.js';
-import { askOrRecallDecision, type DecisionOption } from './askDecision.js';
+import { askOrRecallDecision, forgetDecisionMemory, type DecisionOption } from './askDecision.js';
+import { hasEmptyCompanyCopy, looksLikeCompanyPicker } from './companyPicker.js';
 import { performNavAction, type NavActionResult } from './performNavAction.js';
 
 export type ResolveAppContextOptions = {
@@ -27,16 +28,13 @@ export async function resolveAppContext(
 ): Promise<ResolveAppContextResult> {
   const url = page.url();
   const bodyText = (await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '')).slice(0, 30_000);
-  const looksLikePicker = /#\/company\/all|\/compan(?:y|ies)(?:\/|$)/i.test(url)
-    || /\b(select|choose|switch)\s+(a\s+)?(company|organisation|organization)\b/i.test(bodyText)
-    || /\bno\s+(companies|organisations|organizations)\s+(yet|found|available)\b/i.test(bodyText);
-  if (!looksLikePicker) {
+  if (!looksLikeCompanyPicker(url, bodyText)) {
     return { detected: false, navigated: false, rescan: false, skipped: false };
   }
 
   const cards = await visibleCompanyCards(page);
-  const empty = /\bno\s+(companies|organisations|organizations)\s+(yet|found|available)\b/i.test(bodyText)
-    || /\b(create|add)\s+(your\s+)?first\s+(company|organisation|organization)\b/i.test(bodyText);
+  const empty = hasEmptyCompanyCopy(bodyText);
+  const companyName = process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
 
   if (cards.length > 0) {
     const preferred = process.env.SMOKE_COMPANY_NAME?.trim();
@@ -70,7 +68,24 @@ export async function resolveAppContext(
   }
 
   if (empty || cards.length === 0) {
-    const companyName = process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
+    // Earlier sessions in this run may have "created" a company that never landed.
+    // Surface that as a hard validation failure instead of silently replaying memory.
+    const priorCreate = await priorCreateCompanyInRun(job).catch(() => null);
+    if (priorCreate) {
+      await forgetDecisionMemory(job, 'company_picker_empty').catch(() => {});
+      await log(
+        job,
+        `Validation failed: session/job previously chose Create but picker is still empty `
+        + `(prior_session_id=${priorCreate.session_id}, prior_option=${priorCreate.selected_option}, url=${url}).`,
+        'error',
+      );
+      throw new Error(
+        `Company "${companyName}" is still missing after an earlier create decision in this run `
+        + `(session_id=${priorCreate.session_id}). The company was never created successfully — `
+        + 'refusing to continue with an empty workspace.',
+      );
+    }
+
     return decide(
       page,
       job,
@@ -90,7 +105,7 @@ export async function resolveAppContext(
         { id: 'skip_company_scoped_menus', label: 'Skip company-scoped navigation', action: 'skip_target' },
         { id: 'abort_session', label: 'Abort this session', action: 'abort_session' },
       ],
-      { labels: [], empty_state_detected: empty },
+      { labels: [], empty_state_detected: empty, company_name: companyName },
     );
   }
 
@@ -126,18 +141,131 @@ async function decide(
 
   const choice = await ask(false);
   try {
-    return { detected: true, ...await act(choice) };
+    return await finishDecision(page, job, choice, act);
   } catch (error) {
     // A remembered choice that no longer works would otherwise replay and fail
     // identically on every retry, burning the run without ever asking anyone.
     if (choice.source !== 'memory') throw error;
     await log(
       job,
-      `Remembered choice "${choice.option.label}" failed: ${errorMessage(error)} — asking again.`,
+      `Remembered choice "${choice.option.label}" failed: ${errorMessage(error)} — forgetting it and asking again.`,
       'warn',
     );
-    return { detected: true, ...await act(await ask(true)) };
+    await forgetDecisionMemory(job, situationKey).catch(async (forgetError: unknown) => {
+      await log(job, `Could not forget bad decision memory: ${errorMessage(forgetError)}`, 'warn');
+    });
+    return finishDecision(page, job, await ask(true), act);
   }
+}
+
+async function finishDecision(
+  page: Page,
+  job: Job,
+  choice: Awaited<ReturnType<typeof askOrRecallDecision>>,
+  act: (choice: Awaited<ReturnType<typeof askOrRecallDecision>>) => Promise<NavActionResult>,
+): Promise<ResolveAppContextResult> {
+  if (choice.option.action === 'create_company') {
+    await log(job, `Creating company "${choice.option.company_name || 'Smoke Test Co'}" (source=${choice.source})`);
+  }
+  const result = { detected: true as const, ...await act(choice) };
+  if (choice.option.action === 'create_company') {
+    await openCreatedCompanyIfListed(page, job, choice.option.company_name);
+  }
+  await assertWorkspaceReady(page, job, choice.option.action);
+  return result;
+}
+
+async function openCreatedCompanyIfListed(page: Page, job: Job, preferred?: string): Promise<void> {
+  const name = preferred || process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
+  const cards = await visibleCompanyCards(page);
+  if (cards.length > 0) {
+    const card = pickCompany(cards, name);
+    try {
+      await card.locator.click({ timeout: 8_000 });
+      await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => {});
+      await log(job, `Opened company context after create "${card.label || name}"`);
+      return;
+    } catch (error) {
+      throw new Error(`Created a company but could not open it: ${errorMessage(error)}`);
+    }
+  }
+
+  // HRMS may list companies as plain rows/links without card selectors.
+  const byName = page.getByText(name, { exact: false }).filter({ visible: true }).first();
+  if (await byName.count().catch(() => 0)) {
+    await byName.click({ timeout: 8_000 }).catch(() => {});
+    await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => {});
+    await log(job, `Opened company context after create via name match "${name}"`);
+  }
+}
+
+/** After create/open, refuse to pretend success while the empty picker is still up. */
+async function assertWorkspaceReady(page: Page, job: Job, action: string): Promise<void> {
+  if (action !== 'create_company' && action !== 'open_company') return;
+  if (!(await isEmptyCompanyPicker(page))) {
+    await log(job, `Company workspace ready after ${action}`);
+    return;
+  }
+  throw new Error(
+    `Company workspace is still empty after ${action} (picker still shows no companies).`,
+  );
+}
+
+export async function isEmptyCompanyPicker(page: Page): Promise<boolean> {
+  const bodyText = (await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '')).slice(0, 30_000);
+  if (hasEmptyCompanyCopy(bodyText)) return true;
+  if (!looksLikeCompanyPicker(page.url(), bodyText)) return false;
+  return (await visibleCompanyCards(page)).length === 0
+    && !bodyMentionsPreferredCompany(bodyText);
+}
+
+function bodyMentionsPreferredCompany(bodyText: string): boolean {
+  const name = process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
+  return bodyText.toLowerCase().includes(name.toLowerCase()) && !hasEmptyCompanyCopy(bodyText);
+}
+
+type PriorCreate = {
+  session_id: number;
+  selected_option: string;
+};
+
+async function priorCreateCompanyInRun(job: Job): Promise<PriorCreate | null> {
+  const response = await backend.get<{ data: Array<{
+    id?: number;
+    session_id?: number;
+    status?: string;
+    selected_option?: string | null;
+    situation_key?: string;
+  }> }>('/worker/decisions', {
+    params: { run_id: job.run_id },
+  });
+  // Keep the latest answered picker decision per prior session. A failed
+  // remembered create followed by Skip on the same session must not count.
+  const latestBySession = new Map<number, {
+    session_id: number;
+    selected_option: string;
+    id: number;
+  }>();
+  for (const row of response.data.data ?? []) {
+    const sessionId = Number(row.session_id ?? 0);
+    if (!sessionId || sessionId === Number(job.session.id)) continue;
+    if (row.status !== 'answered') continue;
+    const situation = String(row.situation_key ?? '');
+    if (situation !== 'company_picker_empty' && situation !== 'company_picker_ambiguous') continue;
+    const selected = String(row.selected_option ?? '');
+    if (!selected) continue;
+    const id = Number(row.id ?? 0);
+    const prev = latestBySession.get(sessionId);
+    if (!prev || id >= prev.id) {
+      latestBySession.set(sessionId, { session_id: sessionId, selected_option: selected, id });
+    }
+  }
+  for (const row of latestBySession.values()) {
+    if (row.selected_option === 'create_company' || row.selected_option.startsWith('create_')) {
+      return { session_id: row.session_id, selected_option: row.selected_option };
+    }
+  }
+  return null;
 }
 
 type CompanyCard = {
@@ -171,7 +299,7 @@ function pickCompany(cards: CompanyCard[], preferred?: string): CompanyCard {
   return cards.find((card) => card.starred) ?? cards[0];
 }
 
-async function log(job: Job, message: string, level: 'info' | 'warn' = 'info'): Promise<void> {
+async function log(job: Job, message: string, level: 'info' | 'warn' | 'error' = 'info'): Promise<void> {
   await appendLog({
     run_id: job.run_id,
     session_id: job.session.id,
