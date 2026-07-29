@@ -56,6 +56,7 @@ class BrainEnsemble
             'environment'    => $context['environment'] ?? 'sandbox',
             'temperature'    => $context['temperature'] ?? 0.2,
             'timeout'        => $this->settings->getInt('brain.timeout_seconds', 60),
+            'context'        => $context,
         ];
 
         // Session planning is latency-sensitive (browser waits on POST /master-prompts).
@@ -77,6 +78,15 @@ class BrainEnsemble
         }
 
         if ($arbiterResult === null || ($arbiterResult['error'] ?? null)) {
+            $contextOptions['parallel_outputs'] = $parallelResults;
+            $arbiterResult = $this->deterministic->complete($systemPrompt, $userPrompt, $contextOptions);
+        }
+        if (in_array($task, ['navigation_wisdom', 'ask_user'], true)
+            && ! $this->looksLikeDecision($arbiterResult['output'] ?? null)) {
+            $contextOptions['parallel_outputs'] = $parallelResults;
+            $arbiterResult = $this->deterministic->complete($systemPrompt, $userPrompt, $contextOptions);
+        }
+        if ($task === 'file_quality' && ! $this->looksLikeFileQuality($arbiterResult['output'] ?? null)) {
             $contextOptions['parallel_outputs'] = $parallelResults;
             $arbiterResult = $this->deterministic->complete($systemPrompt, $userPrompt, $contextOptions);
         }
@@ -157,6 +167,47 @@ class BrainEnsemble
             && isset($output['sessions'])
             && is_array($output['sessions'])
             && $output['sessions'] !== [];
+    }
+
+    /** @param mixed $output */
+    private function looksLikeDecision($output): bool
+    {
+        if (! is_array($output)
+            || trim((string) ($output['question'] ?? '')) === ''
+            || ! is_array($output['options'] ?? null)
+            || $output['options'] === []
+            || trim((string) ($output['recommended'] ?? '')) === '') {
+            return false;
+        }
+
+        $optionIds = [];
+        foreach ($output['options'] as $option) {
+            if (! is_array($option)
+                || trim((string) ($option['id'] ?? '')) === ''
+                || trim((string) ($option['label'] ?? '')) === ''
+                || trim((string) ($option['action'] ?? '')) === '') {
+                return false;
+            }
+            $optionIds[] = (string) $option['id'];
+        }
+        return in_array((string) $output['recommended'], $optionIds, true);
+    }
+
+    /** @param mixed $output */
+    private function looksLikeFileQuality($output): bool
+    {
+        if (! is_array($output) || ! is_array($output['scores'] ?? null)) {
+            return false;
+        }
+        foreach (['formatting', 'completeness', 'alignment', 'export_quality', 'overall'] as $key) {
+            $score = $output['scores'][$key] ?? null;
+            if (! is_numeric($score) || (float) $score < 0 || (float) $score > 100) {
+                return false;
+            }
+        }
+        return isset($output['verdict'])
+            && is_array($output['recommendations'] ?? null)
+            && is_array($output['competitor_refs'] ?? null);
     }
 
     /**

@@ -1,0 +1,714 @@
+<?php
+
+namespace App\Controllers;
+
+use CodeIgniter\HTTP\ResponseInterface;
+use Config\Database;
+use Config\Services;
+
+/**
+ * Worker-side endpoints. Authenticated via WorkerTokenFilter (X-Worker-Token).
+ * Never use JWT here. Also never include AI provider keys -- the worker calls
+ * /worker/brain/invoke to delegate council inference back through PHP.
+ */
+class WorkerController extends BaseController
+{
+    public function lease(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $workerId = (string) ($body['worker_id'] ?? '');
+        $leaseSec = max(60, min(3600, (int) ($body['lease_seconds'] ?? 600)));
+        if ($workerId === '') {
+            return $this->jsonError('invalid_request', 'worker_id is required.', 400);
+        }
+        $job = Services::runner()->leaseNextJob($workerId, $leaseSec);
+        if (! $job) {
+            return $this->jsonOk(['data' => null]);
+        }
+        return $this->jsonOk(['data' => $job]);
+    }
+
+    public function heartbeat(int $jobId): ResponseInterface
+    {
+        $db  = Database::connect();
+        $sec = max(60, min(3600, (int) ($this->jsonBody()['lease_seconds'] ?? 600)));
+        $db->table('smoke_session_jobs')->where('id', $jobId)->update([
+            'lease_expires_at' => date('Y-m-d H:i:s', time() + $sec),
+            'updated_at'       => date('Y-m-d H:i:s'),
+        ]);
+        return $this->jsonOk(['ok' => true]);
+    }
+
+    public function complete(int $jobId): ResponseInterface
+    {
+        Services::runner()->markComplete($jobId, $this->jsonBody());
+        return $this->jsonOk(['ok' => true]);
+    }
+
+    public function fail(int $jobId): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $err  = (string) ($body['error'] ?? 'unspecified worker error');
+        Services::runner()->markFailed($jobId, $err);
+        return $this->jsonOk(['ok' => true]);
+    }
+
+    public function createDecision(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $runId = (int) ($body['run_id'] ?? 0);
+        $sessionId = (int) ($body['session_id'] ?? 0);
+        $jobId = (int) ($body['job_id'] ?? 0);
+        $situationKey = trim((string) ($body['situation_key'] ?? ''));
+        $question = trim((string) ($body['question'] ?? ''));
+        $options = $body['options'] ?? null;
+        $source = strtolower(trim((string) ($body['source'] ?? 'user')));
+        $selectedOption = trim((string) ($body['selected_option'] ?? ''));
+        $appliedFromMemory = $source === 'memory';
+
+        if ($runId <= 0 || $sessionId <= 0 || $jobId <= 0 || $situationKey === '' || $question === '') {
+            return $this->jsonError(
+                'invalid_request',
+                'run_id, session_id, job_id, situation_key, and question are required.',
+                400,
+            );
+        }
+        if (! is_array($options) || $options === []) {
+            return $this->jsonError('invalid_request', 'options must be a non-empty array.', 400);
+        }
+        foreach ($options as $option) {
+            if (! is_array($option)
+                || trim((string) ($option['id'] ?? '')) === ''
+                || trim((string) ($option['label'] ?? '')) === ''
+                || trim((string) ($option['action'] ?? '')) === '') {
+                return $this->jsonError('invalid_request', 'Each option requires id, label, and action.', 400);
+            }
+        }
+        if ($appliedFromMemory && $selectedOption === '') {
+            return $this->jsonError('invalid_request', 'selected_option is required when source=memory.', 400);
+        }
+        if ($appliedFromMemory) {
+            $validOption = false;
+            foreach ($options as $option) {
+                if (is_array($option) && (string) ($option['id'] ?? '') === $selectedOption) {
+                    $validOption = true;
+                    break;
+                }
+            }
+            if (! $validOption) {
+                return $this->jsonError('invalid_option', 'selected_option is not one of this decision’s options.', 400);
+            }
+        }
+
+        $db = Database::connect();
+        $job = $db->table('smoke_session_jobs')
+            ->where('id', $jobId)
+            ->where('run_id', $runId)
+            ->where('session_id', $sessionId)
+            ->get()
+            ->getRow();
+        if (! $job) {
+            return $this->jsonError('not_found', 'Job was not found for this run and session.', 404);
+        }
+        if (! in_array((string) $job->status, ['leased', 'awaiting_decision'], true)) {
+            return $this->jsonError('invalid_job_state', 'Job is not actively leased.', 409);
+        }
+
+        if (! $appliedFromMemory) {
+            $existing = $db->table('smoke_run_decisions')
+                ->where('job_id', $jobId)
+                ->where('situation_key', $situationKey)
+                ->where('status', 'pending')
+                ->orderBy('id', 'DESC')
+                ->get()
+                ->getRowArray();
+            if ($existing) {
+                $db->transBegin();
+                $lockedJob = $db->query(
+                    'SELECT status FROM smoke_session_jobs WHERE id = ? FOR UPDATE',
+                    [$jobId],
+                )->getRow();
+                if (! $lockedJob || ! in_array((string) $lockedJob->status, ['leased', 'awaiting_decision'], true)) {
+                    $db->transRollback();
+                    return $this->jsonError('invalid_job_state', 'Job is no longer actively leased.', 409);
+                }
+                $db->table('smoke_session_jobs')->where('id', $jobId)->update([
+                    'status'     => 'awaiting_decision',
+                    'updated_at' => date('Y-m-d H:i:s'),
+                ]);
+                $db->transCommit();
+                return $this->jsonOk(['data' => $this->formatDecision($existing)]);
+            }
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $context = is_array($body['context'] ?? null) ? $body['context'] : [];
+        $context['source'] = $appliedFromMemory ? 'memory' : ($context['source'] ?? 'user');
+        $freeText = trim((string) ($body['free_text'] ?? ''));
+        $db->transBegin();
+        $lockedJob = $db->query(
+            'SELECT status FROM smoke_session_jobs WHERE id = ? FOR UPDATE',
+            [$jobId],
+        )->getRow();
+        if (! $lockedJob || ! in_array((string) $lockedJob->status, ['leased', 'awaiting_decision'], true)) {
+            $db->transRollback();
+            return $this->jsonError('invalid_job_state', 'Job is no longer actively leased.', 409);
+        }
+        if (! $appliedFromMemory) {
+            $existing = $db->table('smoke_run_decisions')
+                ->where('job_id', $jobId)
+                ->where('situation_key', $situationKey)
+                ->where('status', 'pending')
+                ->orderBy('id', 'DESC')
+                ->get()
+                ->getRowArray();
+            if ($existing) {
+                $db->table('smoke_session_jobs')->where('id', $jobId)->update([
+                    'status'     => 'awaiting_decision',
+                    'updated_at' => $now,
+                ]);
+                $db->transCommit();
+                return $this->jsonOk(['data' => $this->formatDecision($existing)]);
+            }
+        }
+        $insert = [
+            'run_id'          => $runId,
+            'session_id'      => $sessionId,
+            'job_id'          => $jobId,
+            'situation_key'   => mb_substr($situationKey, 0, 191),
+            'question'        => $question,
+            'options_json'    => json_encode(array_values($options)),
+            'context_json'    => json_encode($context),
+            'screenshot_path' => ($body['screenshot_path'] ?? '') !== ''
+                ? mb_substr((string) $body['screenshot_path'], 0, 512)
+                : null,
+            'status'          => $appliedFromMemory ? 'answered' : 'pending',
+            'remember'        => true,
+            'created_at'      => $now,
+            'updated_at'      => $now,
+        ];
+        if ($appliedFromMemory) {
+            $insert['selected_option'] = mb_substr($selectedOption, 0, 191);
+            $insert['free_text'] = $freeText !== '' ? $freeText : null;
+            $insert['answered_at'] = $now;
+            $insert['answered_by'] = null;
+        }
+        $db->table('smoke_run_decisions')->insert($insert);
+        $decisionId = (int) $db->insertID();
+        if (! $appliedFromMemory) {
+            $db->table('smoke_session_jobs')->where('id', $jobId)->update([
+                'status'     => 'awaiting_decision',
+                'updated_at' => $now,
+            ]);
+        }
+        $db->transCommit();
+
+        if (! $db->transStatus()) {
+            return $this->jsonError('decision_create_failed', 'Could not create the decision.', 500);
+        }
+
+        $chosenLabel = $selectedOption;
+        foreach ($options as $option) {
+            if (is_array($option) && (string) ($option['id'] ?? '') === $selectedOption) {
+                $chosenLabel = trim((string) ($option['label'] ?? $selectedOption)) ?: $selectedOption;
+                break;
+            }
+        }
+        Services::runLog()->append(
+            $runId,
+            $sessionId,
+            $jobId,
+            'worker',
+            'info',
+            $appliedFromMemory
+                ? ('Reused remembered choice: ' . $chosenLabel)
+                : ('Worker needs a decision: ' . $question),
+            [
+                'decision_id'     => $decisionId,
+                'situation_key'   => $situationKey,
+                'source'          => $appliedFromMemory ? 'memory' : 'user',
+                'selected_option' => $appliedFromMemory ? $selectedOption : null,
+            ],
+        );
+
+        $decision = $db->table('smoke_run_decisions')->where('id', $decisionId)->get()->getRowArray();
+        return $this->jsonOk(['data' => $this->formatDecision($decision ?? [])], 201);
+    }
+
+    public function listDecisions(): ResponseInterface
+    {
+        $runId = (int) ($this->request->getGet('run_id') ?? 0);
+        $sessionId = (int) ($this->request->getGet('session_id') ?? 0);
+        if ($runId <= 0) {
+            return $this->jsonError('invalid_request', 'run_id query parameter is required.', 400);
+        }
+        $query = Database::connect()->table('smoke_run_decisions')
+            ->where('run_id', $runId)
+            ->orderBy('id', 'ASC');
+        if ($sessionId > 0) {
+            $query->where('session_id', $sessionId);
+        }
+        $rows = array_map(
+            fn (array $row): array => $this->formatDecision($row),
+            $query->get()->getResultArray(),
+        );
+        return $this->jsonOk(['data' => $rows]);
+    }
+
+    public function pollDecision(int $decisionId): ResponseInterface
+    {
+        $row = Database::connect()->table('smoke_run_decisions')
+            ->where('id', $decisionId)
+            ->get()
+            ->getRowArray();
+        if (! $row) {
+            return $this->jsonError('not_found', 'Decision not found.', 404);
+        }
+        return $this->jsonOk(['data' => $this->formatDecision($row)]);
+    }
+
+    public function timeoutDecision(int $decisionId): ResponseInterface
+    {
+        $now = date('Y-m-d H:i:s');
+        $db = Database::connect();
+        $db->transBegin();
+        $decision = $db->query(
+            'SELECT * FROM smoke_run_decisions WHERE id = ? FOR UPDATE',
+            [$decisionId],
+        )->getRowArray();
+        if (! $decision) {
+            $db->transRollback();
+            return $this->jsonError('not_found', 'Decision not found.', 404);
+        }
+        if ($decision['status'] !== 'pending') {
+            $db->transCommit();
+            return $this->jsonOk(['data' => $this->formatDecision($decision)]);
+        }
+
+        $db->table('smoke_run_decisions')->where('id', $decisionId)->update([
+            'status'     => 'timed_out',
+            'updated_at' => $now,
+        ]);
+        $job = $db->query(
+            'SELECT id, status FROM smoke_session_jobs WHERE id = ? FOR UPDATE',
+            [(int) $decision['job_id']],
+        )->getRow();
+        if ($job && (string) $job->status === 'awaiting_decision') {
+            // Leave job awaiting_decision so markFailed / lease reclaim owns the failure path.
+            $db->table('smoke_session_jobs')->where('id', (int) $job->id)->update([
+                'updated_at' => $now,
+            ]);
+        }
+        $db->transCommit();
+
+        Services::runLog()->append(
+            (int) $decision['run_id'],
+            (int) $decision['session_id'],
+            (int) $decision['job_id'],
+            'worker',
+            'warn',
+            'Decision timed out waiting for an operator answer',
+            ['decision_id' => $decisionId, 'situation_key' => $decision['situation_key']],
+        );
+
+        $row = $db->table('smoke_run_decisions')->where('id', $decisionId)->get()->getRowArray();
+        return $this->jsonOk(['data' => $this->formatDecision($row ?? [])]);
+    }
+
+    public function decisionMemory(): ResponseInterface
+    {
+        $product = trim((string) ($this->request->getGet('product_name') ?? ''));
+        $environment = trim((string) ($this->request->getGet('environment') ?? ''));
+        $situationKey = trim((string) ($this->request->getGet('situation_key') ?? ''));
+        if ($product === '' || $environment === '' || $situationKey === '') {
+            return $this->jsonError(
+                'invalid_request',
+                'product_name, environment, and situation_key query parameters are required.',
+                400,
+            );
+        }
+
+        $row = Database::connect()->table('smoke_decision_memory')
+            ->where('product_name', $product)
+            ->where('environment', $environment)
+            ->where('situation_key', $situationKey)
+            ->get()
+            ->getRowArray();
+        if (! $row) {
+            return $this->jsonOk(['data' => null]);
+        }
+        $row['payload'] = $this->decodeJsonObject($row['payload_json'] ?? null);
+        unset($row['payload_json']);
+        return $this->jsonOk(['data' => $row]);
+    }
+
+    public function decryptCredential(int $profileId): ResponseInterface
+    {
+        $plain = Services::vault()->decryptForProfile($profileId);
+        if ($plain === null) {
+            return $this->jsonError('not_found', 'No credential stored for that profile', 404);
+        }
+        Services::audit()->record('worker.credential_decrypt', 'smoke_credentials', (string) $profileId, null, [
+            'requester' => 'worker',
+        ]);
+        return $this->jsonOk([
+            'plaintext' => $plain,
+            'expires_in_seconds' => 60,
+        ]);
+    }
+
+    public function recordResult(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $required = ['run_id', 'session_id'];
+        foreach ($required as $f) {
+            if (empty($body[$f])) {
+                return $this->jsonError('invalid_request', "{$f} is required", 400);
+            }
+        }
+        $db = Database::connect();
+        $runId = (int) $body['run_id'];
+        $run = $db->table('smoke_observation_runs')->where('id', $runId)->get()->getRowArray();
+        $resolver = new \App\Services\Reports\ReportArtifactResolver();
+        $shot = (string) ($body['screenshot_path'] ?? '');
+        $shot = $resolver->resolveFile($shot, (string) ($run['reports_dir'] ?? '')) ?? $shot;
+
+        $db->table('smoke_observation_results')->insert([
+            'run_id'              => $runId,
+            'session_id'          => (int) $body['session_id'],
+            'screen_url'          => (string) ($body['screen_url']     ?? ''),
+            'screen_title'        => (string) ($body['screen_title']   ?? ''),
+            'module_name'         => (string) ($body['module_name']    ?? ''),
+            'screenshot_path'     => $shot,
+            'page_metadata_json'  => json_encode($body['page_metadata']  ?? []),
+            'console_errors_json' => json_encode($body['console_errors']?? []),
+            'network_errors_json' => json_encode($body['network_errors']?? []),
+            'performance_json'    => json_encode($body['performance']   ?? []),
+            // Explicit Asia/Kolkata wall-clock (app.appTimezone), not DB server UTC.
+            'captured_at'         => date('Y-m-d H:i:s'),
+        ]);
+        return $this->jsonOk(['id' => (int) $db->insertID()]);
+    }
+
+    public function recordInventory(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        Database::connect()->table('smoke_ui_inventory')->insert([
+            'run_id'      => (int) ($body['run_id']    ?? 0),
+            'session_id'  => (int) ($body['session_id']?? 0),
+            'result_id'   => (int) ($body['result_id'] ?? 0) ?: null,
+            'kind'        => (string) ($body['kind']    ?? 'unknown'),
+            'label'       => (string) ($body['label']   ?? ''),
+            'selector'    => (string) ($body['selector']?? ''),
+            'url'         => (string) ($body['url']     ?? ''),
+            'payload_json'=> json_encode($body['payload'] ?? []),
+        ]);
+        return $this->jsonOk(['ok' => true]);
+    }
+
+    public function recordUxIssue(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        Database::connect()->table('smoke_ux_issues')->insert([
+            'run_id'          => (int) ($body['run_id']    ?? 0),
+            'session_id'      => (int) ($body['session_id']?? 0),
+            'result_id'       => (int) ($body['result_id'] ?? 0) ?: null,
+            'category'        => (string) ($body['category'] ?? 'general'),
+            'severity'        => (string) ($body['severity'] ?? 'low'),
+            'title'           => (string) ($body['title']    ?? ''),
+            'description'     => (string) ($body['description']    ?? ''),
+            'recommendation'  => (string) ($body['recommendation'] ?? ''),
+            'human_summary'   => (string) ($body['human_summary'] ?? ''),
+            'developer_prompt'=> (string) ($body['developer_prompt']?? ''),
+            'evidence_json'   => json_encode($body['evidence'] ?? []),
+        ]);
+        return $this->jsonOk(['ok' => true]);
+    }
+
+    public function recordFeatureGap(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $confidence = in_array(($body['confidence'] ?? ''), ['high', 'medium', 'low'], true)
+            ? (string) $body['confidence']
+            : 'low';
+        $mode = in_array(($body['mode'] ?? ''), ['implement', 'validate_first'], true)
+            ? (string) $body['mode']
+            : 'validate_first';
+        Database::connect()->table('smoke_feature_gaps')->insert([
+            'run_id'          => (int) ($body['run_id'] ?? 0),
+            'session_id'      => (int) ($body['session_id'] ?? 0) ?: null,
+            'product_name'    => (string) ($body['product_name']     ?? ''),
+            'expected_feature'=> (string) ($body['expected_feature'] ?? ''),
+            'observed'        => (bool) ($body['observed'] ?? false),
+            'partial'         => (bool) ($body['partial']  ?? false),
+            'competitor_ref'  => (string) ($body['competitor_ref'] ?? ''),
+            'severity'        => (string) ($body['severity']       ?? 'medium'),
+            'confidence'      => $confidence,
+            'mode'            => $mode,
+            'recommendation'  => (string) ($body['recommendation'] ?? ''),
+            'human_summary'   => (string) ($body['human_summary'] ?? ''),
+            'developer_prompt'=> (string) ($body['developer_prompt']?? ''),
+            'notes'           => (string) ($body['notes'] ?? ''),
+            'sources_json'    => json_encode($body['sources'] ?? []),
+            'evidence_json'   => json_encode($body['evidence'] ?? []),
+        ]);
+        return $this->jsonOk(['ok' => true]);
+    }
+
+    public function recordReport(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $db = Database::connect();
+        $runId = (int) ($body['run_id'] ?? 0);
+        $run = $runId > 0
+            ? $db->table('smoke_observation_runs')->where('id', $runId)->get()->getRowArray()
+            : null;
+        $resolver = new \App\Services\Reports\ReportArtifactResolver();
+        $reportsDir = (string) ($run['reports_dir'] ?? '');
+        $htmlPath = (string) ($body['html_path'] ?? '');
+        $jsonPath = (string) ($body['json_path'] ?? '');
+        $htmlPath = $resolver->resolveFile($htmlPath, $reportsDir) ?? $htmlPath;
+        $jsonPath = $resolver->resolveFile($jsonPath, $reportsDir) ?? $jsonPath;
+
+        $db->table('smoke_reports')->insert([
+            'run_id'                => $runId,
+            'session_id'            => (int) ($body['session_id'] ?? 0) ?: null,
+            'kind'                  => (string) ($body['kind']  ?? 'session'),
+            'title'                 => (string) ($body['title'] ?? 'Session report'),
+            'severity_summary_json' => json_encode($body['severity_summary'] ?? []),
+            'metrics_json'          => json_encode($body['metrics'] ?? []),
+            'maturity_score'        => isset($body['maturity_score']) ? (float) $body['maturity_score'] : null,
+            'ux_score'              => isset($body['ux_score']) ? (float) $body['ux_score'] : null,
+            'html_path'             => $htmlPath,
+            'json_path'             => $jsonPath,
+            'auditor_visible'       => (bool) ($body['auditor_visible'] ?? false),
+        ]);
+        return $this->jsonOk(['id' => (int) $db->insertID()]);
+    }
+
+    public function finalizeRun(int $runId): ResponseInterface
+    {
+        Services::runner()->finalizeRunIfDone($runId);
+        return $this->jsonOk(['ok' => true]);
+    }
+
+    public function appendLog(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $message = trim((string) ($body['message'] ?? ''));
+        if ($message === '') {
+            return $this->jsonError('invalid_request', 'message is required.', 400);
+        }
+        Services::runLog()->append(
+            isset($body['run_id']) ? (int) $body['run_id'] : null,
+            isset($body['session_id']) ? (int) $body['session_id'] : null,
+            isset($body['job_id']) ? (int) $body['job_id'] : null,
+            (string) ($body['source'] ?? 'worker'),
+            (string) ($body['level'] ?? 'info'),
+            $message,
+            is_array($body['context'] ?? null) ? $body['context'] : [],
+        );
+        return $this->jsonOk(['ok' => true]);
+    }
+
+    /**
+     * Delegate council inference so the worker never holds provider API keys.
+     */
+    public function brainInvoke(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $task = (string) ($body['task'] ?? 'plan');
+        $sys  = (string) ($body['system_prompt'] ?? '');
+        $usr  = (string) ($body['user_prompt']   ?? '');
+        $ctx  = (array)  ($body['context']       ?? []);
+
+        if ($sys === '' || $usr === '') {
+            return $this->jsonError('invalid_request', 'system_prompt and user_prompt are required.', 400);
+        }
+
+        $result = Services::brain()->invoke($task, $sys, $usr, $ctx);
+        return $this->jsonOk(['data' => $result]);
+    }
+
+    /**
+     * Competitor feature catalogs for heuristic gap detection.
+     * JWT /competitors is not usable with X-Worker-Token — this endpoint is.
+     *
+     * MySQL BOOLEAN is TINYINT(1): compare with 1/0, not the string "true"
+     * (which casts to 0 and returns zero rows).
+     */
+    public function listCompetitors(): ResponseInterface
+    {
+        $db = Database::connect();
+        $product = strtolower(trim((string) ($this->request->getGet('product_name') ?? '')));
+
+        // Auto-seed from samples/competitors when the table has nothing for this product.
+        if ($product !== '') {
+            $count = $db->table('smoke_competitor_profiles')
+                ->where('LOWER(product_name) =', $product, false)
+                ->countAllResults();
+            if ($count === 0) {
+                $this->seedCompetitorsFromSamples($product);
+            }
+        }
+
+        $q = $db->table('smoke_competitor_profiles');
+        if ($product !== '') {
+            $q->where('LOWER(product_name) =', $product, false);
+        }
+        $enabled = $this->request->getGet('enabled');
+        if ($enabled !== null && $enabled !== '') {
+            $want = in_array((string) $enabled, ['1', 'true', 'yes'], true);
+            $q->where('enabled', $want ? 1 : 0);
+        } else {
+            $q->where('enabled', 1);
+        }
+        $rows = $q->orderBy('product_name', 'ASC')->orderBy('competitor_name', 'ASC')->get()->getResultArray();
+        return $this->jsonOk(['data' => $rows]);
+    }
+
+    /**
+     * Insert competitor rows from samples/competitors/{product}.json when missing.
+     */
+    private function seedCompetitorsFromSamples(string $product): void
+    {
+        $aliases = [
+            'smart books' => 'books',
+            'erp'         => 'books',
+            'accounting'  => 'books',
+        ];
+        $fileKey = $aliases[$product] ?? $product;
+        $rootSamples = realpath(WRITEPATH . '../../samples/competitors');
+        if ($rootSamples === false) {
+            return;
+        }
+        $file = $rootSamples . DIRECTORY_SEPARATOR . $fileKey . '.json';
+        if (! is_file($file)) {
+            return;
+        }
+        $data = json_decode((string) file_get_contents($file), true);
+        if (! is_array($data) || empty($data['competitors']) || ! is_array($data['competitors'])) {
+            return;
+        }
+        $db = Database::connect();
+        $productName = (string) ($data['product_name'] ?? $fileKey);
+        foreach ($data['competitors'] as $row) {
+            $name = (string) ($row['name'] ?? '');
+            if ($name === '') {
+                continue;
+            }
+            $exists = $db->table('smoke_competitor_profiles')
+                ->where('product_name', $productName)
+                ->where('competitor_name', $name)
+                ->countAllResults();
+            if ($exists > 0) {
+                continue;
+            }
+            $db->table('smoke_competitor_profiles')->insert([
+                'product_name'      => $productName,
+                'competitor_name'   => $name,
+                'feature_list_json' => json_encode($row['features'] ?? []),
+                'source_url'        => (string) ($row['source_url'] ?? ''),
+                'enabled'           => 1,
+                'notes'             => (string) ($row['notes'] ?? ''),
+            ]);
+        }
+    }
+
+    /**
+     * CLI convenience: find the latest approved session plan for a product
+     * (active target profile) and start an observation run.
+     */
+    public function enqueue(): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $product = strtolower(trim((string) ($body['product'] ?? '')));
+        $planId  = (int) ($body['plan_id'] ?? 0);
+        $db = Database::connect();
+
+        if ($planId <= 0) {
+            if ($product === '') {
+                return $this->jsonError('invalid_request', 'product or plan_id is required.', 400);
+            }
+            $row = $db->table('smoke_session_plans sp')
+                ->select('sp.id')
+                ->join('smoke_master_prompts mp', 'mp.id = sp.master_prompt_id')
+                ->join('smoke_target_profiles tp', 'tp.id = mp.target_profile_id')
+                ->where('sp.status', 'approved')
+                ->where('tp.status', 'active')
+                ->where('tp.product_name', $product)
+                ->orderBy('sp.approved_at', 'DESC')
+                ->orderBy('sp.id', 'DESC')
+                ->limit(1)
+                ->get()
+                ->getRow();
+            if (! $row) {
+                return $this->jsonError(
+                    'not_found',
+                    "No approved session plan found for active product=\"{$product}\". Approve a plan in the portal first.",
+                    404,
+                );
+            }
+            $planId = (int) $row->id;
+        } else {
+            $plan = $db->table('smoke_session_plans')->where('id', $planId)->get()->getRow();
+            if (! $plan) {
+                return $this->jsonError('not_found', 'Session plan not found', 404);
+            }
+            if ($plan->status !== 'approved') {
+                return $this->jsonError('precondition_failed', 'Plan must be approved before starting a run.', 412);
+            }
+        }
+
+        $run = Services::runner()->startRun($planId, null);
+        Services::audit()->record('worker.enqueue', 'smoke_observation_runs', (string) ($run['id'] ?? ''), null, [
+            'plan_id' => $planId,
+            'product' => $product,
+        ]);
+        return $this->jsonOk(['data' => $run], 201);
+    }
+
+    /** @param array<string,mixed> $row */
+    private function formatDecision(array $row): array
+    {
+        if ($row === []) {
+            return [];
+        }
+        $row['id'] = (int) $row['id'];
+        $row['run_id'] = (int) $row['run_id'];
+        $row['session_id'] = (int) $row['session_id'];
+        $row['job_id'] = (int) $row['job_id'];
+        $row['answered_by'] = isset($row['answered_by']) && $row['answered_by'] !== null && $row['answered_by'] !== ''
+            ? (int) $row['answered_by']
+            : null;
+        $row['remember'] = (bool) ($row['remember'] ?? false);
+        $row['options'] = $this->decodeJsonList($row['options_json'] ?? null);
+        $row['context'] = $this->decodeJsonObject($row['context_json'] ?? null);
+        $status = (string) ($row['status'] ?? '');
+        $explicit = strtolower(trim((string) ($row['context']['source'] ?? '')));
+        $row['source'] = match (true) {
+            $status === 'timed_out' => 'timeout',
+            $status === 'cancelled' => 'cancelled',
+            $status === 'pending' => 'pending',
+            in_array($explicit, ['memory', 'user', 'timeout'], true) => $explicit,
+            ($row['answered_by'] ?? null) === null && trim((string) ($row['selected_option'] ?? '')) !== '' => 'memory',
+            default => 'user',
+        };
+        unset($row['options_json'], $row['context_json']);
+        return $row;
+    }
+
+    /** @return list<mixed> */
+    private function decodeJsonList(mixed $value): array
+    {
+        $decoded = is_array($value) ? $value : json_decode((string) $value, true);
+        return is_array($decoded) ? array_values($decoded) : [];
+    }
+
+    /** @return array<string,mixed> */
+    private function decodeJsonObject(mixed $value): array
+    {
+        $decoded = is_array($value) ? $value : json_decode((string) $value, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+}

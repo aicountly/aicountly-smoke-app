@@ -1,0 +1,1 @@
+Review Buddy end to end: knowledge content, Markdown import/export fidelity, AI assistance, accessibility, and feature quality versus Notion and Confluence. Use only synthetic fixtures and never mutate production.

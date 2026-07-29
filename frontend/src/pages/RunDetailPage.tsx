@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { PendingDecisionCard, type RunDecision } from '@/components/PendingDecisionCard';
 import { api } from '@/lib/api';
+import { copyText } from '@/lib/clipboard';
 import { formatAppDateTime } from '@/lib/datetime';
 import { useAuthStore } from '@/store/auth';
 
@@ -26,6 +28,25 @@ type SessionRow = {
   leased_by: string | null;
 };
 
+type RunReport = {
+  id: number;
+  kind: string;
+  title?: string | null;
+  session_id?: number | null;
+};
+
+type FileIoTest = {
+  id: number;
+  scenario_key: string;
+  direction: string;
+  compare_status: string;
+  source_sha256?: string | null;
+  result_sha256?: string | null;
+  ai_scores?: { overall?: number; [key: string]: number | undefined };
+  ai_verdict?: string | null;
+  artifacts?: Array<{ key: string; name: string; url: string }>;
+};
+
 type RunDetail = {
   data: {
     id: number;
@@ -39,13 +60,122 @@ type RunDetail = {
     reports_dir: string;
   };
   sessions: SessionRow[];
+  reports?: RunReport[];
+  file_io_tests?: FileIoTest[];
   worker: { online: boolean; queued_jobs: number; active_leases: number; last_seen_at: string | null; message: string };
 };
+
+type UxIssueRow = {
+  id?: number;
+  severity?: string;
+  title?: string;
+  description?: string;
+  recommendation?: string | null;
+  human_summary?: string | null;
+  developer_prompt?: string | null;
+  [key: string]: unknown;
+};
+
+type FeatureGapRow = {
+  id?: number;
+  severity?: string;
+  expected_feature?: string;
+  recommendation?: string;
+  human_summary?: string | null;
+  developer_prompt?: string | null;
+  mode?: 'implement' | 'validate_first' | string | null;
+  confidence?: 'high' | 'medium' | 'low' | string | null;
+  [key: string]: unknown;
+};
+
+function primaryRecommendation(row: {
+  human_summary?: string | null;
+  recommendation?: string | null;
+  description?: string | null;
+}): string {
+  return String(row.human_summary ?? '').trim()
+    || String(row.recommendation ?? '').trim()
+    || String(row.description ?? '').trim();
+}
 
 function logLevelClass(level: string): string {
   if (level === 'error') return 'text-red-400';
   if (level === 'warn') return 'text-amber-300';
   return 'text-emerald-200';
+}
+
+function promptText(row: { developer_prompt?: string | null }): string {
+  return String(row.developer_prompt ?? '').trim();
+}
+
+/** UX prompts + implement-mode gaps (excludes validate_first backlog). */
+function buildAllCursorPrompts(uxRows: UxIssueRow[], gapRows: FeatureGapRow[]): string {
+  const parts: string[] = [];
+  for (const row of uxRows) {
+    const text = promptText(row);
+    if (text) parts.push(text);
+  }
+  for (const row of gapRows) {
+    if (String(row.mode ?? '') === 'validate_first') continue;
+    const text = promptText(row);
+    if (text) parts.push(text);
+  }
+  return parts.join('\n\n---\n\n');
+}
+
+function gapModeBadgeClass(mode: string): string {
+  return mode === 'implement' ? 'badge-brand' : 'badge-neutral';
+}
+
+function gapModeLabel(mode: string): string {
+  if (mode === 'validate_first') return 'validate first';
+  if (mode === 'implement') return 'implement';
+  return mode;
+}
+
+function jobStatusBadgeClass(status: string | null): string {
+  if (status === 'awaiting_decision') return 'badge-warning';
+  if (status === 'leased') return 'badge-info';
+  if (status === 'failed') return 'badge-danger';
+  if (status === 'succeeded' || status === 'done') return 'badge-brand';
+  return 'badge-neutral';
+}
+
+function DeveloperPromptBlock({
+  prompt,
+  copyKey,
+  copiedKey,
+  onCopy,
+}: {
+  prompt: string;
+  copyKey: string;
+  copiedKey: string | null;
+  onCopy: (key: string, text: string) => void;
+}) {
+  if (!prompt) return null;
+  const copied = copiedKey === copyKey;
+  return (
+    <div className="mt-2">
+      <details>
+        <summary className="cursor-pointer text-xs text-ink-500 hover:text-ink-800 select-none">
+          Technical details
+        </summary>
+        <div className="mt-1 flex items-center gap-2 mb-1">
+          <span className="text-xs font-medium text-ink-500">Developer prompt</span>
+          <button
+            type="button"
+            className="btn-secondary text-xs py-0.5 px-2"
+            onClick={() => onCopy(copyKey, prompt)}
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+        <pre className="max-h-48 overflow-auto rounded bg-ink-50 border border-ink-100 p-2 text-xs font-mono text-ink-800 whitespace-pre-wrap break-words">
+          {prompt}
+        </pre>
+      </details>
+    </div>
+  );
 }
 
 export function RunDetailPage() {
@@ -58,7 +188,9 @@ export function RunDetailPage() {
   const logEndRef = useRef<HTMLDivElement>(null);
   const [lastLogId, setLastLogId] = useState(0);
   const [logs, setLogs] = useState<RunLog[]>([]);
-  const [detailTab, setDetailTab] = useState<'inventory' | 'ux' | 'gaps'>('inventory');
+  const [detailTab, setDetailTab] = useState<'inventory' | 'ux' | 'gaps' | 'file-io'>('inventory');
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data } = useQuery<RunDetail>({
     queryKey: ['run', runId],
@@ -66,9 +198,23 @@ export function RunDetailPage() {
     refetchInterval: 3000,
   });
 
+  const runActive = !!data && ['queued', 'running'].includes(data.data.status);
+  const awaitingDecision =
+    !!data && data.sessions.some((s) => s.job_status === 'awaiting_decision');
+  const decisionsQ = useQuery<{ data: RunDecision[] }>({
+    queryKey: ['run-decisions', runId, 'pending'],
+    queryFn: async () =>
+      (await api.get(`/runs/${runId}/decisions`, { params: { status: 'pending' } })).data,
+    refetchInterval: 2500,
+    enabled: runId > 0 && canOperate && (!data || runActive || awaitingDecision),
+  });
+
   const cancelMut = useMutation({
     mutationFn: async () => (await api.post(`/runs/${runId}/cancel`, {})).data,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['run', runId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['run', runId] });
+      qc.invalidateQueries({ queryKey: ['run-decisions', runId] });
+    },
   });
 
   const deleteMut = useMutation({
@@ -84,23 +230,26 @@ export function RunDetailPage() {
       (await api.post(`/runs/${runId}/sessions/${sessionId}/rerun`, {})).data,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['run', runId] });
+      qc.invalidateQueries({ queryKey: ['run-decisions', runId] });
     },
   });
+
+  const detailFindingsEnabled = runId > 0 && (detailTab === 'ux' || detailTab === 'gaps');
 
   const inventoryQ = useQuery<{ data: Array<Record<string, unknown>> }>({
     queryKey: ['run-inventory', runId],
     queryFn: async () => (await api.get(`/runs/${runId}/inventory`)).data,
     enabled: runId > 0 && detailTab === 'inventory',
   });
-  const uxQ = useQuery<{ data: Array<Record<string, unknown>> }>({
+  const uxQ = useQuery<{ data: UxIssueRow[] }>({
     queryKey: ['run-ux', runId],
     queryFn: async () => (await api.get(`/runs/${runId}/ux-issues`)).data,
-    enabled: runId > 0 && detailTab === 'ux',
+    enabled: detailFindingsEnabled,
   });
-  const gapsQ = useQuery<{ data: Array<Record<string, unknown>> }>({
+  const gapsQ = useQuery<{ data: FeatureGapRow[] }>({
     queryKey: ['run-gaps', runId],
     queryFn: async () => (await api.get(`/runs/${runId}/feature-gaps`)).data,
-    enabled: runId > 0 && detailTab === 'gaps',
+    enabled: detailFindingsEnabled,
   });
 
   const logsQuery = useQuery<{ data: RunLog[] }>({
@@ -129,15 +278,65 @@ export function RunDetailPage() {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs.length]);
 
+  useEffect(() => {
+    return () => {
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    };
+  }, []);
+
+  async function handleCopy(key: string, text: string) {
+    const ok = await copyText(text);
+    if (!ok) return;
+    setCopiedKey(key);
+    if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    copyResetRef.current = setTimeout(() => setCopiedKey(null), 2000);
+  }
+
+  async function handleCopyAll() {
+    const blob = buildAllCursorPrompts(uxQ.data?.data ?? [], gapsQ.data?.data ?? []);
+    if (!blob) return;
+    await handleCopy('all', blob);
+  }
+
+  async function handleArtifactDownload(artifact: { name: string; url: string }) {
+    const response = await api.get(artifact.url, { responseType: 'blob' });
+    const objectUrl = URL.createObjectURL(response.data);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = artifact.name;
+    anchor.click();
+    URL.revokeObjectURL(objectUrl);
+  }
+
   if (!data) return <div className="text-sm text-ink-500">Loading...</div>;
 
   const showWorkerAlert = !data.worker.online && ['queued', 'running'].includes(data.data.status);
   const cancellable = canOperate && ['queued', 'running'].includes(data.data.status);
+  const uxRows = uxQ.data?.data ?? [];
+  const gapRows = gapsQ.data?.data ?? [];
+  const copyAllCount =
+    uxRows.filter((r) => promptText(r)).length +
+    gapRows.filter((r) => String(r.mode ?? '') !== 'validate_first' && promptText(r)).length;
+  const showCopyAll = detailTab === 'ux' || detailTab === 'gaps';
+
+  const pendingDecisions = decisionsQ.data?.data ?? [];
+  const sessionById = new Map(data.sessions.map((s) => [s.id, s]));
+  const runReports = data.reports ?? [];
+  const sessionReports = runReports.filter((r) => String(r.kind) === 'session');
+  const finalReport = runReports.find((r) => String(r.kind) === 'final') ?? null;
+  const primarySession = data.sessions[0] ?? null;
 
   function canRerun(s: SessionRow): boolean {
     if (!canOperate) return false;
     if (!s.job_id) return false;
-    return s.job_status !== 'leased';
+    if (s.job_status === 'leased' || s.job_status === 'awaiting_decision') return false;
+    return true;
+  }
+
+  function rerunBlockedLabel(status: string | null): string {
+    if (status === 'awaiting_decision') return 'Awaiting decision…';
+    if (status === 'leased') return 'Running…';
+    return '';
   }
 
   return (
@@ -185,6 +384,43 @@ export function RunDetailPage() {
         </div>
       </div>
 
+      {(sessionReports.length > 0 || finalReport || primarySession) && (
+        <div className="flex flex-wrap gap-2 text-sm">
+          {sessionReports.map((r) => (
+            <Link
+              key={r.id}
+              to={`/reports?id=${r.id}`}
+              className="btn-secondary text-xs py-1 px-2"
+            >
+              {sessionReports.length > 1
+                ? `View session report${r.session_id ? ` #${r.session_id}` : ''}`
+                : 'View session report'}
+            </Link>
+          ))}
+          {finalReport && (
+            <Link
+              to={`/reports?id=${finalReport.id}`}
+              className="btn-secondary text-xs py-1 px-2"
+            >
+              View final report
+            </Link>
+          )}
+          {primarySession && (
+            <Link
+              to={`/runs/${runId}/sessions/${primarySession.id}`}
+              className="btn-secondary text-xs py-1 px-2"
+              title={
+                data.sessions.length > 1
+                  ? 'Opens the first session log; use View log on each session row for others'
+                  : 'View session logs and screenshots'
+              }
+            >
+              View session log
+            </Link>
+          )}
+        </div>
+      )}
+
       {deleteMut.isError && (
         <div className="rounded border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
           Delete failed.{' '}
@@ -215,6 +451,21 @@ pm2 start npm --name smoke-worker -- start`}
           )}
         </div>
       )}
+
+      {pendingDecisions.map((d) => (
+        <PendingDecisionCard
+          key={d.id}
+          runId={runId}
+          decision={d}
+          sessionName={sessionById.get(d.session_id)?.name}
+          canAnswer={canOperate}
+          onAnswered={() => {
+            qc.invalidateQueries({ queryKey: ['run-decisions', runId] });
+            qc.invalidateQueries({ queryKey: ['run', runId] });
+            qc.invalidateQueries({ queryKey: ['run-logs', runId] });
+          }}
+        />
+      ))}
 
       <div className="card overflow-hidden">
         <div className="px-4 py-2 bg-ink-50 text-ink-600 text-sm font-semibold flex justify-between items-center">
@@ -261,7 +512,11 @@ pm2 start npm --name smoke-worker -- start`}
                 <td className="px-4 py-2">{s.ordinal}</td>
                 <td>{s.name}</td>
                 <td><span className="badge-neutral">{s.status}</span></td>
-                <td><span className="badge-neutral">{s.job_status ?? '—'}</span></td>
+                <td>
+                  <span className={jobStatusBadgeClass(s.job_status)}>
+                    {s.job_status ?? '—'}
+                  </span>
+                </td>
                 <td>{s.attempts}</td>
                 <td className="text-xs text-ink-500">{s.leased_by ?? '—'}</td>
                 <td className="text-xs text-red-700 truncate max-w-xs">{s.last_error ?? ''}</td>
@@ -287,8 +542,17 @@ pm2 start npm --name smoke-worker -- start`}
                       Re-run
                     </button>
                   ) : (
-                    <span className="text-xs text-ink-400" title={s.job_status === 'leased' ? 'Wait until the worker finishes' : undefined}>
-                      {s.job_status === 'leased' ? 'Running…' : ''}
+                    <span
+                      className="text-xs text-ink-400"
+                      title={
+                        s.job_status === 'awaiting_decision'
+                          ? 'Answer the pending decision before re-running'
+                          : s.job_status === 'leased'
+                            ? 'Wait until the worker finishes'
+                            : undefined
+                      }
+                    >
+                      {rerunBlockedLabel(s.job_status)}
                     </span>
                   )}
                 </td>
@@ -304,23 +568,37 @@ pm2 start npm --name smoke-worker -- start`}
       </div>
 
       <div className="card overflow-hidden">
-        <div className="px-4 py-2 bg-ink-50 text-ink-600 text-sm font-semibold flex gap-3">
-          {([
-            ['inventory', 'UI inventory'],
-            ['ux', 'UX issues'],
-            ['gaps', 'Feature gaps'],
-          ] as const).map(([key, label]) => (
+        <div className="px-4 py-2 bg-ink-50 text-ink-600 text-sm font-semibold flex flex-wrap gap-3 items-center justify-between">
+          <div className="flex gap-3">
+            {([
+              ['inventory', 'UI inventory'],
+              ['ux', 'UX issues'],
+              ['gaps', 'Feature gaps'],
+              ['file-io', 'File I/O'],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={detailTab === key ? 'text-brand-700 underline' : 'text-ink-500 hover:text-ink-800'}
+                onClick={() => setDetailTab(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {showCopyAll && (
             <button
-              key={key}
               type="button"
-              className={detailTab === key ? 'text-brand-700 underline' : 'text-ink-500 hover:text-ink-800'}
-              onClick={() => setDetailTab(key)}
+              className="btn-secondary text-xs py-1 px-2 font-normal"
+              disabled={copyAllCount === 0 || uxQ.isLoading || gapsQ.isLoading}
+              title="Copies all UX prompts plus implement-mode feature-gap prompts (skips validate-first)"
+              onClick={() => void handleCopyAll()}
             >
-              {label}
+              {copiedKey === 'all' ? 'Copied all' : 'Copy all Cursor prompts'}
             </button>
-          ))}
+          )}
         </div>
-        <div className="p-4 text-sm max-h-80 overflow-y-auto">
+        <div className="p-4 text-sm max-h-96 overflow-y-auto">
           {detailTab === 'inventory' && (
             <ul className="space-y-2">
               {(inventoryQ.data?.data ?? []).map((row, i) => (
@@ -337,34 +615,129 @@ pm2 start npm --name smoke-worker -- start`}
           )}
           {detailTab === 'ux' && (
             <ul className="space-y-2">
-              {(uxQ.data?.data ?? []).map((row, i) => (
-                <li key={i} className="border-b border-ink-100 pb-2">
-                  <div className="flex gap-2 items-center">
-                    <span className="badge-warning">{String(row.severity ?? '')}</span>
-                    <span className="font-medium">{String(row.title ?? '')}</span>
-                  </div>
-                  {row.description ? <p className="text-ink-600 mt-1">{String(row.description)}</p> : null}
-                </li>
-              ))}
-              {!uxQ.isLoading && (uxQ.data?.data?.length ?? 0) === 0 && (
+              {uxRows.map((row, i) => {
+                const prompt = promptText(row);
+                const copyKey = `ux-${row.id ?? i}`;
+                const summary = primaryRecommendation(row);
+                const technical = String(row.recommendation ?? '').trim();
+                const description = String(row.description ?? '').trim();
+                return (
+                  <li key={copyKey} className="border-b border-ink-100 pb-2">
+                    <div className="flex gap-2 items-center flex-wrap">
+                      <span className="badge-warning">{String(row.severity ?? '')}</span>
+                      <span className="font-medium">{String(row.title ?? '')}</span>
+                    </div>
+                    {summary ? (
+                      <p className="text-ink-800 mt-1 whitespace-pre-wrap">{summary}</p>
+                    ) : null}
+                    {technical && technical !== summary ? (
+                      <details className="mt-1">
+                        <summary className="text-xs text-ink-500 cursor-pointer">Technical recommendation</summary>
+                        <p className="text-xs text-ink-600 mt-1">{technical}</p>
+                      </details>
+                    ) : null}
+                    {description && description !== summary && description !== technical ? (
+                      <p className="text-xs text-ink-500 mt-1">{description}</p>
+                    ) : null}
+                    <DeveloperPromptBlock
+                      prompt={prompt}
+                      copyKey={copyKey}
+                      copiedKey={copiedKey}
+                      onCopy={handleCopy}
+                    />
+                  </li>
+                );
+              })}
+              {!uxQ.isLoading && uxRows.length === 0 && (
                 <li className="text-ink-500">No UX issues recorded yet.</li>
               )}
             </ul>
           )}
           {detailTab === 'gaps' && (
             <ul className="space-y-2">
-              {(gapsQ.data?.data ?? []).map((row, i) => (
-                <li key={i} className="border-b border-ink-100 pb-2">
-                  <div className="flex gap-2 items-center">
-                    <span className="badge-neutral">{String(row.severity ?? '')}</span>
-                    <span className="font-medium">{String(row.expected_feature ?? '')}</span>
-                  </div>
-                  {row.recommendation ? <p className="text-ink-600 mt-1">{String(row.recommendation)}</p> : null}
-                </li>
-              ))}
-              {!gapsQ.isLoading && (gapsQ.data?.data?.length ?? 0) === 0 && (
+              {gapRows.map((row, i) => {
+                const prompt = promptText(row);
+                const copyKey = `gap-${row.id ?? i}`;
+                const mode = String(row.mode ?? '').trim();
+                const confidence = String(row.confidence ?? '').trim();
+                return (
+                  <li key={copyKey} className="border-b border-ink-100 pb-2">
+                    <div className="flex gap-2 items-center flex-wrap">
+                      <span className="badge-neutral">{String(row.severity ?? '')}</span>
+                      {mode ? (
+                        <span
+                          className={gapModeBadgeClass(mode)}
+                          title={
+                            mode === 'validate_first'
+                              ? 'Validate in product before treating as sprint work'
+                              : 'Ready to implement in the product repo'
+                          }
+                        >
+                          {gapModeLabel(mode)}
+                        </span>
+                      ) : null}
+                      {confidence ? (
+                        <span className="badge-neutral" title="Detection confidence">
+                          {confidence}
+                        </span>
+                      ) : null}
+                      <span className="font-medium">{String(row.expected_feature ?? '')}</span>
+                    </div>
+                    {(() => {
+                      const summary = primaryRecommendation(row);
+                      const technical = String(row.recommendation ?? '').trim();
+                      return (
+                        <>
+                          {summary ? (
+                            <p className="text-ink-800 mt-1 whitespace-pre-wrap">{summary}</p>
+                          ) : null}
+                          {technical && technical !== summary ? (
+                            <details className="mt-1">
+                              <summary className="text-xs text-ink-500 cursor-pointer">Technical recommendation</summary>
+                              <p className="text-xs text-ink-600 mt-1">{technical}</p>
+                            </details>
+                          ) : null}
+                        </>
+                      );
+                    })()}
+                    <DeveloperPromptBlock
+                      prompt={prompt}
+                      copyKey={copyKey}
+                      copiedKey={copiedKey}
+                      onCopy={handleCopy}
+                    />
+                  </li>
+                );
+              })}
+              {!gapsQ.isLoading && gapRows.length === 0 && (
                 <li className="text-ink-500">No feature gaps recorded yet.</li>
               )}
+            </ul>
+          )}
+          {detailTab === 'file-io' && (
+            <ul className="space-y-3">
+              {(data.file_io_tests ?? []).map((row) => (
+                <li key={row.id} className="border-b border-ink-100 pb-3">
+                  <div className="flex gap-2 items-center flex-wrap">
+                    <span className={row.compare_status === 'pass' ? 'badge-brand' : row.compare_status === 'not_applicable' ? 'badge-neutral' : 'badge-warning'}>
+                      {row.compare_status === 'not_applicable' ? 'workflow passed (not comparable)' : row.compare_status}
+                    </span>
+                    <span className="font-medium">{row.scenario_key}</span>
+                    <span className="badge-neutral">{row.direction}</span>
+                    {row.ai_scores?.overall !== undefined && <span className="badge-neutral">AI {row.ai_scores.overall}/100</span>}
+                  </div>
+                  {row.ai_verdict && <p className="mt-1">{row.ai_verdict}</p>}
+                  <div className="text-xs font-mono text-ink-500 break-all mt-1">
+                    <div>source: {row.source_sha256 || '—'}</div><div>result: {row.result_sha256 || '—'}</div>
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    {(row.artifacts ?? []).map((artifact) => (
+                      <button key={artifact.key} type="button" className="text-brand-700 underline text-xs" onClick={() => void handleArtifactDownload(artifact)}>{artifact.name}</button>
+                    ))}
+                  </div>
+                </li>
+              ))}
+              {(data.file_io_tests?.length ?? 0) === 0 && <li className="text-ink-500">No File I/O tests recorded yet.</li>}
             </ul>
           )}
         </div>

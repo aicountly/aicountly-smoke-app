@@ -44,6 +44,60 @@ export type GuardDecision = {
   matchedToken?: string;
 };
 
+export type FileAction = 'detect_file_ui' | 'download_file' | 'export_file' | 'upload_file' | 'import_file' | 'compare_file';
+
+const FILE_MUTATIONS = new Set<FileAction>(['upload_file', 'import_file']);
+const FILE_OUTPUTS = new Set<FileAction>(['download_file', 'export_file']);
+
+export function parseAllowedActions(value: string | string[] | null | undefined): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function evaluateFileAction(action: FileAction, ctx: GuardContext): GuardDecision {
+  if (action === 'detect_file_ui') return { allowed: true };
+  const environment = ctx.environment.toLowerCase();
+  const isProduction = environment.startsWith('production');
+  const allowedActions = new Set(ctx.allowedActions ?? []);
+
+  if (!allowedActions.has(action)) {
+    return { allowed: false, reason: `allowed_actions does not include ${action}` };
+  }
+  if (isProduction) {
+    return { allowed: false, reason: 'production environment forbids file actions' };
+  }
+  if (FILE_OUTPUTS.has(action)) {
+    return { allowed: true };
+  }
+  if (FILE_MUTATIONS.has(action)) {
+    if (!['sandbox', 'gh_staging'].includes(environment)) {
+      return { allowed: false, reason: 'file mutations require sandbox or gh_staging' };
+    }
+    if (!ctx.allowSafeDemo) {
+      return { allowed: false, reason: 'profile.allow_safe_demo is false' };
+    }
+    if (!ctx.destructiveAllowed) {
+      return { allowed: false, reason: 'session has destructive_allowed=false' };
+    }
+    return { allowed: true };
+  }
+  return { allowed: true };
+}
+
+export function evaluateFileActionContract(actions: FileAction[], ctx: GuardContext): GuardDecision {
+  for (const action of actions) {
+    const decision = evaluateFileAction(action, ctx);
+    if (!decision.allowed) return decision;
+  }
+  return { allowed: true };
+}
+
 export function isRestrictedLabel(label: string | null | undefined): { matched: boolean; token?: string } {
   if (!label) return { matched: false };
   const m = RESTRICTED_REGEX.exec(label);
@@ -51,7 +105,10 @@ export function isRestrictedLabel(label: string | null | undefined): { matched: 
   return { matched: false };
 }
 
-export function evaluateClick(label: string | null, ctx: GuardContext): GuardDecision {
+export function evaluateClick(label: string | null, ctx: GuardContext, action = 'click_menu'): GuardDecision {
+  if (ctx.allowedActions && !ctx.allowedActions.includes(action)) {
+    return { allowed: false, reason: `allowed_actions does not include ${action}` };
+  }
   // Production targets are always observer-only -- never click destructive labels.
   const isProd = ctx.environment === 'production_readonly' || ctx.environment === 'production_restricted';
   const r = isRestrictedLabel(label ?? '');

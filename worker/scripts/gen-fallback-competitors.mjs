@@ -3,13 +3,14 @@ import path from 'node:path';
 
 const dir = path.resolve('samples/competitors');
 const catalogs = {};
+const fileIoFeatures = ['file upload', 'file download', 'csv import', 'excel export', 'pdf export'];
 for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
   const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
   const product = String(data.product_name || '').toLowerCase();
   catalogs[product] = (data.competitors || []).map((c) => ({
     product_name: product,
     competitor_name: c.name,
-    features: c.features || [],
+    features: [...new Set([...(c.features || []), ...fileIoFeatures])],
     source_url: c.source_url || '',
   }));
 }

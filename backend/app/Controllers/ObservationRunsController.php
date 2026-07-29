@@ -53,8 +53,26 @@ class ObservationRunsController extends BaseController
             ->get()
             ->getResultArray();
         $reports = $db->table('smoke_reports')->where('run_id', $id)->get()->getResultArray();
+        $fileIoTests = $db->table('smoke_file_io_tests')->where('run_id', $id)->orderBy('id', 'ASC')->get()->getResultArray();
+        foreach ($fileIoTests as &$test) {
+            foreach (['ai_scores_json', 'ai_recommendations', 'competitor_refs_json', 'artifact_paths_json', 'evidence_json'] as $field) {
+                $test[str_replace('_json', '', $field)] = json_decode((string) ($test[$field] ?? '[]'), true) ?: [];
+                unset($test[$field]);
+            }
+            $paths = (array) ($test['artifact_paths'] ?? []);
+            $test['artifacts'] = array_map(
+                fn ($key): array => [
+                    'key' => (string) $key,
+                    'name' => basename((string) $paths[$key]),
+                    'url' => "/runs/{$id}/file-io/{$test['id']}/artifact/" . rawurlencode((string) $key),
+                ],
+                array_keys($paths),
+            );
+            unset($test['artifact_paths']);
+        }
+        unset($test);
         $worker = Services::workerStatus()->snapshot();
-        return $this->jsonOk(['data' => $run, 'sessions' => $sessions, 'reports' => $reports, 'worker' => $worker]);
+        return $this->jsonOk(['data' => $run, 'sessions' => $sessions, 'reports' => $reports, 'file_io_tests' => $fileIoTests, 'worker' => $worker]);
     }
 
     public function logs(int $id): ResponseInterface
@@ -82,15 +100,22 @@ class ObservationRunsController extends BaseController
     public function cancel(int $id): ResponseInterface
     {
         $db = Database::connect();
-        $db->table('smoke_session_jobs')->where('run_id', $id)->whereIn('status', ['queued', 'leased'])->update([
+        $now = date('Y-m-d H:i:s');
+        $db->transStart();
+        $db->table('smoke_session_jobs')->where('run_id', $id)->whereIn('status', ['queued', 'leased', 'awaiting_decision'])->update([
             'status'     => 'cancelled',
-            'updated_at' => date('Y-m-d H:i:s'),
+            'updated_at' => $now,
+        ]);
+        $db->table('smoke_run_decisions')->where('run_id', $id)->where('status', 'pending')->update([
+            'status'     => 'cancelled',
+            'updated_at' => $now,
         ]);
         $db->table('smoke_observation_runs')->where('id', $id)->update([
             'status'       => 'cancelled',
-            'completed_at' => date('Y-m-d H:i:s'),
-            'updated_at'   => date('Y-m-d H:i:s'),
+            'completed_at' => $now,
+            'updated_at'   => $now,
         ]);
+        $db->transComplete();
         Services::audit()->record('runs.cancel', 'smoke_observation_runs', (string) $id, $this->user()?->id);
         return $this->jsonOk(['ok' => true]);
     }
@@ -213,6 +238,28 @@ class ObservationRunsController extends BaseController
             ->setStatusCode(200)
             ->setHeader('Content-Type', $mime)
             ->setHeader('Cache-Control', 'private, max-age=300')
+            ->setBody((string) file_get_contents($resolved));
+    }
+
+    public function fileIoArtifact(int $id, int $testId, string $key): ResponseInterface
+    {
+        $db = Database::connect();
+        $run = $db->table('smoke_observation_runs')->where('id', $id)->get()->getRowArray();
+        $test = $db->table('smoke_file_io_tests')->where('id', $testId)->where('run_id', $id)->get()->getRowArray();
+        if (! $run || ! $test) {
+            return $this->jsonError('not_found', 'File I/O artifact not found.', 404);
+        }
+        $paths = json_decode((string) ($test['artifact_paths_json'] ?? '{}'), true);
+        $path = is_array($paths) ? (string) ($paths[$key] ?? '') : '';
+        $resolved = $path !== ''
+            ? (new \App\Services\Reports\ReportArtifactResolver())->resolveFile($path, (string) ($run['reports_dir'] ?? ''))
+            : null;
+        if ($resolved === null) {
+            return $this->jsonError('not_found', 'Artifact file is missing.', 404);
+        }
+        return $this->response
+            ->setHeader('Content-Type', mime_content_type($resolved) ?: 'application/octet-stream')
+            ->setHeader('Content-Disposition', 'attachment; filename="' . basename($resolved) . '"')
             ->setBody((string) file_get_contents($resolved));
     }
 

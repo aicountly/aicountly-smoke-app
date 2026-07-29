@@ -145,7 +145,7 @@ async function selectJumpTo(page: Page, profile: ProfileRow): Promise<void> {
   }
 
   const preferred = preferredJumpTargets(profile);
-  let picked =
+  const picked =
     usable.find((o) => preferred.some((p) => matchesJump(o.label, o.value, p)))
     || usable.find((o) => /smart\s*books|books|erp/i.test(`${o.label} ${o.value}`))
     || usable[0];
@@ -213,7 +213,7 @@ async function findJumpToSelect(page: Page): Promise<Locator | null> {
   for (let i = 0; i < count; i++) {
     const loc = selects.nth(i);
     const text = ((await loc.innerText().catch(() => '')) || '').toLowerCase();
-    if (/smart books|books|erp|contacts|hrms|vault|auditor|my account/.test(text)) {
+    if (/smart books|books|erp|contacts|hrms|our people|ourpeople|buddy|vault|auditor|my account/.test(text)) {
       return loc;
     }
   }
@@ -226,6 +226,8 @@ function preferredJumpTargets(profile: ProfileRow): string[] {
   const out: string[] = [];
   if (env) out.push(env);
   if (product) out.push(product);
+  // Our People ESS is provisioned from HRMS; Jump To on my.aicountly.com is "hrms".
+  if (/^ourpeople$/i.test(product)) out.push('HRMS', 'hrms');
   // Accounting / books smoke sessions (Sales, Invoices, GST, …)
   out.push('Smart Books', 'Books', 'ERP', 'ERP (Beta)', 'ERP 3.0', 'ERP 1.0');
   return out;

@@ -12,6 +12,7 @@ type Session = {
   description: string;
   expected_screens: number;
   destructive_allowed: boolean;
+  allowed_actions_json: string | string[];
   status: string;
 };
 
@@ -34,7 +35,7 @@ export function SessionPlanPage() {
 
   const [order, setOrder] = useState<number[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', menu_path: '', description: '', expected_screens: 1 });
+  const [editForm, setEditForm] = useState({ name: '', menu_path: '', description: '', expected_screens: 1, destructive_allowed: false });
   const [adding, setAdding] = useState(false);
   const [addForm, setAddForm] = useState({ name: '', menu_path: '', description: '', expected_screens: 4 });
   const [rejectReason, setRejectReason] = useState('');
@@ -116,6 +117,7 @@ export function SessionPlanPage() {
       menu_path: s.menu_path ?? '',
       description: s.description ?? '',
       expected_screens: s.expected_screens || 1,
+      destructive_allowed: s.destructive_allowed,
     });
   }
 
@@ -212,6 +214,17 @@ export function SessionPlanPage() {
                     value={editForm.expected_screens}
                     onChange={(e) => setEditForm({ ...editForm, expected_screens: Number(e.target.value) || 1 })}
                   />
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={editForm.destructive_allowed}
+                      onChange={(e) => setEditForm({ ...editForm, destructive_allowed: e.target.checked })}
+                    />
+                    Allow destructive sandbox actions
+                  </label>
+                  {editForm.destructive_allowed && (
+                    <div className="text-xs text-amber-700">Only sandbox/gh_staging profiles with safe demo enabled can run uploads or imports.</div>
+                  )}
                   <div className="flex gap-2">
                     <button className="btn-primary" onClick={() => updateSessionMut.mutate({ sid: s.id, body: editForm })} disabled={updateSessionMut.isPending}>Save</button>
                     <button className="btn-secondary" onClick={() => setEditingId(null)}>Cancel</button>
@@ -223,6 +236,9 @@ export function SessionPlanPage() {
                     <div className="font-medium">{i + 1}. {s.name}</div>
                     <div className="flex gap-2">
                       {s.destructive_allowed && <span className="badge-warning">destructive</span>}
+                      {sessionActions(s).some((action) => ['upload_file', 'import_file'].includes(action)) && (
+                        <span className="badge-warning">File I/O requires safe demo</span>
+                      )}
                       <span className="badge-neutral">{s.expected_screens} screens</span>
                     </div>
                   </div>
@@ -258,4 +274,14 @@ export function SessionPlanPage() {
       </div>
     </div>
   );
+}
+
+function sessionActions(session: Session): string[] {
+  if (Array.isArray(session.allowed_actions_json)) return session.allowed_actions_json;
+  try {
+    const parsed = JSON.parse(session.allowed_actions_json || '[]');
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
 }

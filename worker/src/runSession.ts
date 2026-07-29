@@ -13,13 +13,28 @@ import { collectInventory } from './scanner/uiInventory.js';
 import { captureScreenshot } from './scanner/screenshotCapture.js';
 import { attachConsoleCapture } from './scanner/consoleCapture.js';
 import { attachNetworkCapture } from './scanner/networkCapture.js';
-import { reviewPage, type UxIssue } from './reviewer/uxReviewEngine.js';
-import { detectGaps, type CompetitorBenchmark } from './reviewer/featureGapEngine.js';
+import { dedupeUxIssues, reviewPage, type UxIssue } from './reviewer/uxReviewEngine.js';
+import { detectGaps, type CompetitorBenchmark, type FeatureGap } from './reviewer/featureGapEngine.js';
 import { enrichGaps } from './reviewer/competitorComparison.js';
 import { fallbackCompetitorCatalogs } from './reviewer/fallbackCompetitorCatalogs.js';
 import { buildSessionReport } from './reporter/sessionReportBuilder.js';
 import { finalizeIfLast } from './reporter/finalReportBuilder.js';
-import { evaluateClick } from './utils/safeActionGuard.js';
+import {
+  buildFeatureGapCursorPrompt,
+  buildFeatureGapHumanSummary,
+  buildUxCursorPrompt,
+  buildUxHumanSummary,
+  type CursorPromptContext,
+} from './reporter/cursorPromptBuilder.js';
+import { evaluateClick, isRestrictedLabel, parseAllowedActions } from './utils/safeActionGuard.js';
+import { dismissOverlays } from './utils/dismissOverlays.js';
+import { askOrRecallDecision, type DecisionOption } from './nav/askDecision.js';
+import { performNavAction } from './nav/performNavAction.js';
+import { resolveAppContext } from './nav/resolveAppContext.js';
+import type { ConsoleEvent } from './scanner/consoleCapture.js';
+import type { NetworkEvent } from './scanner/networkCapture.js';
+import { runFileIoScenarios, shouldRunFileIoSession } from './fileIo/fileIoEngine.js';
+import type { FileIoTestResult } from './fileIo/types.js';
 
 const browserMap = { chromium, firefox, webkit } as const;
 
@@ -31,6 +46,13 @@ type ObserveCtx = {
   allUx: UxIssue[];
   allInventory: import('./scanner/uiInventory.js').InventoryEntry[];
   screenshots: string[];
+  screenUrls: string[];
+  screenTitles: string[];
+  screenCapturedAt: string[];
+  consoleEvents: ConsoleEvent[];
+  networkEvents: NetworkEvent[];
+  consoleCursor: number;
+  networkCursor: number;
   onScreenObserved: () => void;
   onInventoryRecorded: (n: number) => void;
 };
@@ -41,6 +63,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     ? job.run.reports_dir
     : path.resolve(config.repoRoot, job.run.reports_dir);
   const screenshotsDir = path.join(reportsDir, 'screenshots');
+  const allowedActions = parseAllowedActions(job.session.allowed_actions_json);
 
   const browser: Browser = await browserMap[config.playwright.browser].launch({
     headless: config.playwright.headless,
@@ -49,6 +72,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   const context: BrowserContext = await browser.newContext({
     userAgent: config.playwright.userAgent,
     viewport: { width: 1440, height: 900 },
+    acceptDownloads: true,
   });
   // tsx/esbuild keepNames injects __name() into serialized page.evaluate fns;
   // polyfill it in the browser so any remaining function-form evaluates don't crash.
@@ -60,8 +84,12 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   const allUx: UxIssue[] = [];
   const allInventory: import('./scanner/uiInventory.js').InventoryEntry[] = [];
   const screenshots: string[] = [];
+  const screenUrls: string[] = [];
+  const screenTitles: string[] = [];
+  const screenCapturedAt: string[] = [];
   let screensObserved = 0;
   let inventoryCount = 0;
+  let fileIoResults: FileIoTestResult[] = [];
 
   const ctx: ObserveCtx = {
     job,
@@ -71,6 +99,13 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     allUx,
     allInventory,
     screenshots,
+    screenUrls,
+    screenTitles,
+    screenCapturedAt,
+    consoleEvents: consoleSink.events,
+    networkEvents: networkSink.events,
+    consoleCursor: 0,
+    networkCursor: 0,
     onScreenObserved: () => { screensObserved++; },
     onInventoryRecorded: (n) => { inventoryCount += n; },
   };
@@ -125,26 +160,19 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       message: `Action screenshot: landing page "${(await page.title().catch(() => ''))}" @ ${page.url()}`,
     }).catch(() => {});
 
+    const appContext = await resolveAppContext(page, job, { screenshotsDir });
+    if (appContext.navigated || appContext.rescan) {
+      await sleep(500);
+      await observeAndPersist(ctx, '02b-app-context-resolved');
+    }
+
     // Discover menus and visit session-relevant ones
     let menus = await scanMenus(page);
-    let targets = filterMenusForSession(menus, job);
-
-    // If filter wiped everything, fall back to all menus (better than 0 screens).
-    if (menus.length > 0 && targets.length === 0) {
-      await appendLog({
-        run_id: job.run_id,
-        session_id: job.session.id,
-        job_id: job.job_id,
-        level: 'warn',
-        message: `Menu filter matched 0 of ${menus.length} item(s) for path "${job.session.menu_path}"; using keyword/all-menu fallback`,
-      }).catch(() => {});
-      targets = keywordMenusForSession(menus, job);
-      if (targets.length === 0) targets = menus;
-    }
+    let targets = appContext.skipped ? [] : selectMenuTargets(menus, job);
 
     // If still no menus, try direct URL from menu_path + capture each page
     let actionOrdinal = 3;
-    if (targets.length === 0) {
+    if (targets.length === 0 && !appContext.skipped) {
       const direct = buildDirectUrls(job);
       for (const url of direct) {
         try {
@@ -167,9 +195,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
           }).catch(() => {});
 
           menus = await scanMenus(page);
-          targets = filterMenusForSession(menus, job);
-          if (targets.length === 0) targets = keywordMenusForSession(menus, job);
-          if (targets.length === 0) targets = menus;
+          targets = selectMenuTargets(menus, job);
           await appendLog({
             run_id: job.run_id,
             session_id: job.session.id,
@@ -197,11 +223,21 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       message: `Found ${menus.length} menu item(s); visiting up to ${Math.min(targets.length, visitLimit)} for this session`,
     }).catch(() => {});
 
-    for (const m of targets.slice(0, visitLimit)) {
+    const attemptedLabels = new Set<string>();
+    while (attemptedLabels.size < visitLimit && !appContext.skipped) {
+      // Every iteration starts from current DOM state; selectors captured before
+      // navigation or overlay changes are intentionally never reused.
+      menus = await scanMenus(page);
+      targets = selectMenuTargets(menus, job);
+      const m = targets.find((item) => !attemptedLabels.has(normalizeLabel(item.label)));
+      if (!m) break;
+      attemptedLabels.add(normalizeLabel(m.label));
+
       const decision = evaluateClick(m.label, {
         destructiveAllowed: !!job.session.destructive_allowed,
         environment: job.profile.environment,
         allowSafeDemo: !!job.profile.allow_safe_demo,
+        allowedActions,
       });
       if (!decision.allowed) {
         await appendLog({
@@ -221,12 +257,8 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
           message: `Action: open menu "${m.label}"`,
         }).catch(() => {});
 
-        if (m.href && /^https?:/.test(m.href)) {
-          await page.goto(m.href, { waitUntil: 'domcontentloaded', timeout: 20_000 });
-        } else {
-          await page.locator(m.selector).first().click({ timeout: 10_000 });
-          await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
-        }
+        const opened = await openMenuWithRecovery(page, job, m, screenshotsDir);
+        if (!opened) continue;
         await sleep(500);
 
         const label = `${String(actionOrdinal).padStart(2, '0')}-menu-${slug(m.label)}`;
@@ -264,6 +296,30 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
         level: 'warn',
         message: 'No navigable menu actions found after login — only login/landing screenshots were captured.',
       }).catch(() => {});
+    }
+    if (shouldRunFileIoSession(job.session.name, allowedActions)) {
+      fileIoResults = await runFileIoScenarios({
+        page,
+        job,
+        reportsDir,
+        executionContext: {
+          urls: screenUrls,
+          titles: screenTitles,
+          inventoryLabels: allInventory.map((item) => item.label),
+        },
+      });
+      for (const test of fileIoResults.filter((row) => row.compare_status === 'fail')) {
+        allUx.push({
+          category: 'file_io',
+          severity: 'high',
+          title: `File I/O failed: ${test.scenario_key}`,
+          description: String(test.evidence.download ?? test.evidence.upload ?? 'File fidelity check failed.'),
+          recommendation: 'Fix the upload/download flow and preserve source structure and content.',
+          human_summary: '',
+          developer_prompt: '',
+          evidence: { ...test.evidence, artifact_paths: test.artifact_paths },
+        });
+      }
     }
   } finally {
     consoleSink.detach();
@@ -324,7 +380,11 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     if (benchmarks.length > 0) catalogSource = 'bundled-fallback';
   }
 
-  const heuristicGaps = detectGaps(job.run.product_name, allInventory, benchmarks);
+  const heuristicGaps = detectGaps(job.run.product_name, allInventory, benchmarks, {
+    sessionName: job.session.name,
+    menuPath: job.session.menu_path,
+    screensChecked: screenUrls,
+  });
   await appendLog({
     run_id: job.run_id,
     session_id: job.session.id,
@@ -341,16 +401,36 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     }).catch(() => {});
   }
 
-  const enriched = await enrichGaps(job.run.product_name, job.run.environment, heuristicGaps);
+  const brainEnriched = await enrichGaps(job.run.product_name, job.run.environment, heuristicGaps);
+  const enriched = restoreGapContract(brainEnriched, heuristicGaps);
+  linkGapVisualEvidence(enriched, screenUrls, screenshots);
+  const promptContext: CursorPromptContext = {
+    product_name: job.run.product_name,
+    environment: job.run.environment,
+    run_code: job.run.run_code,
+    session_name: job.session.name,
+    menu_path: job.session.menu_path,
+  };
+  const uxIssues = dedupeUxIssues(allUx);
+  for (const issue of uxIssues) {
+    issue.human_summary = buildUxHumanSummary(issue);
+    issue.developer_prompt = buildUxCursorPrompt(issue, promptContext);
+  }
+  for (const gap of enriched) {
+    gap.human_summary = buildFeatureGapHumanSummary(gap);
+    gap.developer_prompt = buildFeatureGapCursorPrompt(gap, promptContext);
+  }
 
-  await recordUxIssues(allUx.map((i) => ({
+  await recordUxIssues(uxIssues.map((i) => ({
     run_id:      job.run.id,
     session_id:  job.session.id,
+    result_id:   i.result_id,
     category:    i.category,
     severity:    i.severity,
     title:       i.title,
     description: i.description,
     recommendation:  i.recommendation,
+    human_summary: i.human_summary,
     developer_prompt: i.developer_prompt,
     evidence:    i.evidence,
   })));
@@ -363,10 +443,14 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     partial:          g.partial,
     competitor_ref:   g.competitor_ref,
     severity:         g.severity,
+    confidence:       g.confidence,
+    mode:             g.mode,
     recommendation:   g.recommendation,
+    human_summary:     g.human_summary,
     developer_prompt: g.developer_prompt,
     notes:            g.notes,
     sources:          g.sources,
+    evidence:         g.evidence,
   })));
 
   const completedAt = new Date().toISOString();
@@ -376,11 +460,15 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     reportsDir,
     screensObserved,
     inventoryCount,
-    uxIssues: allUx,
+    uxIssues,
     featureGaps: enriched,
     screenshots,
+    screenshotUrls: screenUrls,
+    screenshotTitles: screenTitles,
+    screenshotCapturedAt: screenCapturedAt,
     startedAt,
     completedAt,
+    fileIoTests: fileIoResults,
   });
 
   await finalizeIfLast(job.run.id);
@@ -390,8 +478,9 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     completed_at: completedAt,
     screens_observed: screensObserved,
     inventory_count: inventoryCount,
-    ux_issues: allUx.length,
+    ux_issues: uxIssues.length,
     feature_gaps: enriched.length,
+    file_io_tests: fileIoResults.length,
   };
 }
 
@@ -401,7 +490,15 @@ async function observeAndPersist(ctx: ObserveCtx, label: string): Promise<void> 
   const inventory = await collectInventory(page);
   const shotPath = await captureScreenshot(page, screenshotsDir, label || meta.title || 'screen');
   screenshots.push(shotPath);
+  ctx.screenUrls.push(meta.url);
+  ctx.screenTitles.push(meta.module_name || meta.title || label || 'Untitled screen');
+  ctx.screenCapturedAt.push(new Date().toISOString());
   for (const item of inventory) allInventory.push(item);
+  // Consume only events emitted since the previous screen snapshot.
+  const consoleEvents = ctx.consoleEvents.slice(ctx.consoleCursor);
+  const networkEvents = ctx.networkEvents.slice(ctx.networkCursor);
+  ctx.consoleCursor = ctx.consoleEvents.length;
+  ctx.networkCursor = ctx.networkEvents.length;
 
   const resultId = await recordResult({
     run_id: job.run.id,
@@ -411,8 +508,8 @@ async function observeAndPersist(ctx: ObserveCtx, label: string): Promise<void> 
     module_name: meta.module_name || label,
     screenshot_path: shotPath,
     page_metadata: meta,
-    console_errors: [],
-    network_errors: [],
+    console_errors: consoleEvents,
+    network_errors: networkEvents,
     performance: {},
   });
   await recordInventory(inventory.map((i) => ({
@@ -426,8 +523,20 @@ async function observeAndPersist(ctx: ObserveCtx, label: string): Promise<void> 
     payload: i.payload,
   })));
 
-  const issues = reviewPage({ meta, inventory, consoleEvents: [], networkEvents: [] });
-  for (const i of issues) allUx.push(i);
+  const issues = reviewPage({ meta, inventory, consoleEvents, networkEvents });
+  for (const i of issues) {
+    i.result_id = resultId;
+    i.evidence = {
+      ...i.evidence,
+      affected_urls: [meta.url],
+      screen_titles: [meta.module_name || meta.title || label],
+      screenshot_paths: [shotPath],
+      inventory_samples: relevantInventory(i, inventory),
+      ...(consoleEvents.length ? { console_events: consoleEvents.slice(0, 10) } : {}),
+      ...(networkEvents.length ? { network_events: networkEvents.slice(0, 10) } : {}),
+    };
+    allUx.push(i);
+  }
 
   ctx.onScreenObserved();
   ctx.onInventoryRecorded(inventory.length);
@@ -439,7 +548,7 @@ function filterMenusForSession(menus: MenuItem[], job: Job): MenuItem[] {
   if (!raw || raw === '/' || raw === '/menu/*' || raw === '*') return menus;
 
   const token = raw.replace(/\*/g, '').replace(/^\//, '').replace(/\/$/, '');
-  const parts = token.split(/[\/\-_]+/).filter((p) => p.length > 1);
+  const parts = token.split(/[/_-]+/).filter((p) => p.length > 1);
 
   const matched = menus.filter((m) => {
     const hay = `${m.label} ${m.href}`.toLowerCase();
@@ -460,6 +569,120 @@ function keywordMenusForSession(menus: MenuItem[], job: Job): MenuItem[] {
     const hay = `${m.label} ${m.href}`.toLowerCase();
     return words.some((w) => hay.includes(w));
   });
+}
+
+function selectMenuTargets(menus: MenuItem[], job: Job): MenuItem[] {
+  let targets = filterMenusForSession(menus, job);
+  if (menus.length > 0 && targets.length === 0) targets = keywordMenusForSession(menus, job);
+  if (menus.length > 0 && targets.length === 0) targets = menus;
+
+  const rawPath = (job.session.menu_path || '').trim().toLowerCase();
+  const broadLandingSession = !rawPath || rawPath === '/' || rawPath === '*' || rawPath === '/menu/*'
+    || /login\s*\+?\s*dashboard/i.test(job.session.name);
+  if (!broadLandingSession) return targets;
+
+  return targets.filter((menu) => {
+    const text = `${menu.label} ${menu.href}`;
+    return !/\b(help|support|chat|live\s*chat|logout|log\s*out|sign\s*out)\b/i.test(text);
+  });
+}
+
+async function openMenuWithRecovery(
+  page: Page,
+  job: Job,
+  menu: MenuItem,
+  screenshotsDir: string,
+): Promise<boolean> {
+  try {
+    await clickCurrentMenu(page, menu);
+    return true;
+  } catch (firstError) {
+    const overlayChanged = await dismissOverlays(page);
+    const retried = await findMenuByLabel(page, menu.label);
+    if (retried) {
+      try {
+        await clickCurrentMenu(page, retried);
+        return true;
+      } catch {
+        // Continue to the single guarded force-click below.
+      }
+    }
+
+    const forceTarget = await findMenuByLabel(page, menu.label);
+    if (forceTarget && !forceTarget.href && !isRestrictedLabel(forceTarget.label).matched) {
+      try {
+        await page.locator(forceTarget.selector).first().click({ timeout: 8_000, force: true });
+        await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
+        return true;
+      } catch {
+        // The user decision is the final recovery path.
+      }
+    }
+
+    const situationKey = `click_intercepted:${menu.label}`.slice(0, 191);
+    const decisionOptions: DecisionOption[] = [
+      { id: 'dismiss_and_retry', label: 'Dismiss the overlay and rescan menus', action: 'dismiss_overlay' },
+      { id: 'skip_control', label: `Skip "${menu.label}"`, action: 'skip_target' },
+      { id: 'rescan_menus', label: 'Rescan menus without clicking this target', action: 'rescan_menus' },
+      ...(menu.href
+        ? [{ id: 'navigate_href', label: `Navigate directly to "${menu.label}"`, action: 'navigate_href' as const, href: menu.href }]
+        : []),
+      { id: 'abort_session', label: 'Abort this session', action: 'abort_session' },
+    ];
+    const screenshotPath = await captureScreenshot(
+      page,
+      screenshotsDir,
+      `decision-click-${slug(menu.label)}`,
+    ).catch(() => undefined);
+    const choice = await askOrRecallDecision({
+      job,
+      page,
+      situationKey,
+      question: `"${menu.label}" is still blocked after dismissing overlays and retrying. How should the smoke run proceed?`,
+      options: decisionOptions,
+      context: {
+        target_label: menu.label,
+        target_href: menu.href,
+        click_error: (firstError as Error).message,
+        overlay_changed: overlayChanged,
+      },
+      screenshotPath,
+    });
+    const action = await performNavAction(page, job, choice, { href: menu.href });
+    if (action.skipped) return false;
+    if (action.navigated) return true;
+
+    if (action.rescan) {
+      const finalTarget = await findMenuByLabel(page, menu.label);
+      if (finalTarget) {
+        try {
+          await clickCurrentMenu(page, finalTarget);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    }
+    return false;
+  }
+}
+
+async function clickCurrentMenu(page: Page, menu: MenuItem): Promise<void> {
+  if (menu.href && /^https?:/i.test(menu.href)) {
+    await page.goto(menu.href, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+  } else {
+    await page.locator(menu.selector).first().click({ timeout: 10_000 });
+    await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
+  }
+}
+
+async function findMenuByLabel(page: Page, label: string): Promise<MenuItem | undefined> {
+  const normalized = normalizeLabel(label);
+  return (await scanMenus(page)).find((item) => normalizeLabel(item.label) === normalized);
+}
+
+function normalizeLabel(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function buildDirectUrls(job: Job): string[] {
@@ -500,4 +723,54 @@ function slug(s: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function relevantInventory(issue: UxIssue, inventory: import('./scanner/uiInventory.js').InventoryEntry[]) {
+  const preferredKinds = issue.category === 'navigation'
+    ? ['menu', 'submenu', 'search']
+    : issue.category === 'multi_tenant'
+      ? ['company_selector', 'branch_selector', 'fy_selector', 'menu']
+      : issue.category === 'reports'
+        ? ['table', 'export', 'print', 'download']
+        : issue.category === 'filters'
+          ? ['table', 'filter']
+          : ['button', 'form', 'table'];
+  const preferred = inventory.filter((item) => preferredKinds.includes(item.kind));
+  return (preferred.length ? preferred : inventory).slice(0, 10).map(({ kind, label, selector, url }) => ({
+    kind, label, selector, url,
+  }));
+}
+
+function linkGapVisualEvidence(gaps: FeatureGap[], screenUrls: string[], screenshots: string[]): void {
+  for (const gap of gaps) {
+    const nearby = gap.evidence.nearby_inventory ?? [];
+    const relatedUrls = new Set([
+      ...gap.evidence.screens_checked,
+      ...nearby.map((item) => item.url).filter(Boolean),
+    ]);
+    const linked = screenUrls.flatMap((url, index) =>
+      relatedUrls.has(url) && screenshots[index] ? [screenshots[index]!] : [],
+    );
+    gap.evidence.screenshot_paths = [...new Set(linked.length ? linked : screenshots.slice(0, 1))];
+    gap.evidence.target_selectors = [...new Set(
+      nearby.map((item) => item.selector).filter(Boolean),
+    )].slice(0, 5);
+  }
+}
+
+function restoreGapContract(enriched: FeatureGap[], heuristic: FeatureGap[]): FeatureGap[] {
+  const defaults = new Map(heuristic.map((gap) => [gap.expected_feature.toLowerCase(), gap]));
+  return enriched.map((gap) => {
+    const base = defaults.get(String(gap.expected_feature).toLowerCase());
+    return {
+      ...base,
+      ...gap,
+      observed: base ? base.observed : gap.observed,
+      partial: base ? base.partial : gap.partial,
+      confidence: gap.confidence ?? base?.confidence ?? 'low',
+      mode: gap.mode ?? base?.mode ?? 'validate_first',
+      evidence: gap.evidence ?? base?.evidence ?? { sample_labels: [], screens_checked: [] },
+      sources: Array.isArray(gap.sources) ? gap.sources : (base?.sources ?? []),
+    };
+  });
 }

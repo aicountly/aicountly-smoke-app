@@ -1,0 +1,1 @@
+Review My Account end to end: profile, security, preferences, avatar upload validation, accessibility, and modern SaaS account-center standards. Use only synthetic fixtures and never mutate production.

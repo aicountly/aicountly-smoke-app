@@ -18,6 +18,18 @@ brain has no provider configured.
 - `reports/` &mdash; HTML templates rendered by `SessionReportBuilder` and
   `FinalReportBuilder` for every run. Mustache-flavoured (`{{var}}`,
   `{{#section}}...{{/section}}`).
+- `fixtures/` &mdash; synthetic, non-sensitive files and `manifest.json`
+  scenarios for all SaaS products. The worker copies each fixture into the
+  run report directory before use; never edit a fixture in place during a run.
+
+## File I/O fixture safety
+
+Fixtures may be uploaded/imported only to `sandbox` or `gh_staging` when the
+profile enables safe demo, the session enables destructive actions, the exact
+file action is allowed, and the operator approves the first upload for that
+product/module. Production file mutations are always blocked. Downloads and
+exports are compared by hash, MIME, size, and format structure, then optionally
+reviewed by the `file_quality` brain task.
 
 ## Editing competitor benchmarks
 

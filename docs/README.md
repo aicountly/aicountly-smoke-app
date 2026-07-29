@@ -174,6 +174,27 @@ Per-session report (HTML + JSON)  ->  Final consolidated report
 Production targets always show the red **PRODUCTION** banner and the worker
 disables every restricted button via `SafeActionGuard`.
 
+### File I/O smoke tests
+
+Every SaaS product has a synthetic fixture scenario under `samples/fixtures/`.
+File I/O sessions detect upload/import/download/export controls, materialize a
+run-scoped fixture copy, and record hash, MIME, size, structure, and AI quality
+results in `smoke_file_io_tests`.
+
+- Detection is always read-only.
+- Downloads/exports require a non-production profile and the matching
+  `allowed_actions` entry.
+- Uploads/imports require `sandbox` or `gh_staging`, profile
+  `allow_safe_demo=true`, session `destructive_allowed=true`, the matching
+  `allowed_actions` entry, and an operator approval remembered per
+  product/module.
+- Production uploads/imports are unconditionally blocked; there is no owner
+  override.
+
+Enable a safe test by turning on **Allow safe demo** on the target profile,
+adding upload/import actions to the File I/O session, and enabling its
+destructive toggle before approval. Use only the bundled synthetic fixtures.
+
 ## 8. Run identifiers
 
 Every run gets a unique code: `SMOKE-RUN-YYYYMMDD-NNNN` (4-digit daily counter
@@ -198,6 +219,8 @@ smoke-reports/
           *.png
         evidence/
           *.json
+        fixtures/              # run-scoped copies; samples are never mutated
+        downloads/             # downloaded/exported artifacts
 ```
 
 ## 10. Security notes

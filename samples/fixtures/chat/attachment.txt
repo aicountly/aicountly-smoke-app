@@ -1,0 +1,2 @@
+AICOUNTLY smoke attachment
+Synthetic, non-sensitive, and safe to upload only to approved demo environments.

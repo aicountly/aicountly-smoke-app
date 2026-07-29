@@ -1,0 +1,3 @@
+SMOKE TEST FIXTURE — NON-SENSITIVE
+This file contains no credentials or production data.
+Reference: VAULT-SMOKE-20260729

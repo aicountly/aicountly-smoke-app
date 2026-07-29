@@ -1,0 +1,3 @@
+account_code,account_name,debit,credit
+1000,Cash,1000.00,0.00
+3000,Demo capital,0.00,1000.00

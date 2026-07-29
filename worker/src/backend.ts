@@ -93,6 +93,11 @@ export async function recordInventory(rows: Array<Record<string, unknown>>): Pro
   }
 }
 
+export async function recordFileIoTest(payload: Record<string, unknown>): Promise<number> {
+  const response = await backend.post<{ id: number }>('/worker/file-io-tests', payload);
+  return response.data.id;
+}
+
 export async function recordUxIssues(rows: Array<Record<string, unknown>>): Promise<void> {
   for (const row of rows) {
     await backend.post('/worker/ux-issues', row);

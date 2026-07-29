@@ -18,7 +18,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "trial balance",
         "lead schedules",
         "consolidation",
-        "report writer"
+        "report writer",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.caseware.com"
     },
@@ -32,7 +37,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "compliance dashboards",
         "kyc",
         "risk scoring",
-        "cloud collaboration"
+        "cloud collaboration",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.wolterskluwer.com"
     },
@@ -45,7 +55,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "document checklist",
         "due date tracking",
         "reminders",
-        "audit trail"
+        "audit trail",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://suralink.com"
     }
@@ -75,7 +90,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "payroll module",
         "cost centres",
         "drill down",
-        "remote access"
+        "remote access",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://tallysolutions.com"
     },
@@ -107,7 +127,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "multi currency",
         "branches",
         "audit trail",
-        "api / webhooks"
+        "api / webhooks",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.zoho.com/books"
     },
@@ -133,7 +158,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "budgets",
         "audit log",
         "rule based categorisation",
-        "mobile receipt scan"
+        "mobile receipt scan",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://quickbooks.intuit.com"
     },
@@ -152,9 +182,47 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "broker management",
         "multi-godown",
         "trf inward outward",
-        "reorder management"
+        "reorder management",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://busy.in"
+    }
+  ],
+  "buddy": [
+    {
+      "product_name": "buddy",
+      "competitor_name": "Notion",
+      "features": [
+        "markdown import",
+        "markdown export",
+        "pdf export",
+        "file attachments",
+        "workspace export",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export"
+      ],
+      "source_url": "https://www.notion.so"
+    },
+    {
+      "product_name": "buddy",
+      "competitor_name": "Confluence",
+      "features": [
+        "word import",
+        "pdf export",
+        "html export",
+        "file attachments",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export"
+      ],
+      "source_url": "https://www.atlassian.com/software/confluence"
     }
   ],
   "calendar": [
@@ -176,7 +244,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "rsvp",
         "out of office",
         "focus time",
-        "meet integration"
+        "meet integration",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://calendar.google.com"
     },
@@ -191,7 +264,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "buffer time",
         "decompression time",
         "meeting analytics",
-        "team availability"
+        "team availability",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://reclaim.ai"
     },
@@ -204,7 +282,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "focus mode",
         "calendar sync",
         "weekly review",
-        "team queue"
+        "team queue",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://sunsama.com"
     },
@@ -216,9 +299,48 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "auto reschedule",
         "deadline aware",
         "meeting booking",
-        "project planning"
+        "project planning",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.usemotion.com"
+    }
+  ],
+  "chat": [
+    {
+      "product_name": "chat",
+      "competitor_name": "Slack",
+      "features": [
+        "file attachments",
+        "drag and drop upload",
+        "attachment preview",
+        "attachment download",
+        "search files",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
+      ],
+      "source_url": "https://slack.com"
+    },
+    {
+      "product_name": "chat",
+      "competitor_name": "Microsoft Teams",
+      "features": [
+        "file upload",
+        "file sharing",
+        "document preview",
+        "download attachments",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
+      ],
+      "source_url": "https://www.microsoft.com/microsoft-teams"
     }
   ],
   "contacts": [
@@ -240,7 +362,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "import / export",
         "mobile app",
         "automation",
-        "snippets / templates"
+        "snippets / templates",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.hubspot.com/products/crm"
     },
@@ -255,7 +382,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "duplicate detection",
         "smart contact data",
         "lead inbox",
-        "products catalog"
+        "products catalog",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.pipedrive.com"
     },
@@ -272,7 +404,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "approvals",
         "blueprint",
         "ai assistant zia",
-        "social integrations"
+        "social integrations",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.zoho.com/crm"
     },
@@ -284,9 +421,48 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "tags",
         "interaction history",
         "linkedin enrichment",
-        "shared address book"
+        "shared address book",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://folk.app"
+    }
+  ],
+  "docs": [
+    {
+      "product_name": "docs",
+      "competitor_name": "Google Docs",
+      "features": [
+        "document upload",
+        "pdf import",
+        "pdf export",
+        "docx export",
+        "version history",
+        "real-time collaboration",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export"
+      ],
+      "source_url": "https://workspace.google.com/products/docs/"
+    },
+    {
+      "product_name": "docs",
+      "competitor_name": "Microsoft 365",
+      "features": [
+        "file upload",
+        "pdf export",
+        "docx import / export",
+        "comments",
+        "track changes",
+        "file download",
+        "csv import",
+        "excel export"
+      ],
+      "source_url": "https://www.microsoft.com/microsoft-365"
     }
   ],
   "fr": [
@@ -303,7 +479,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "cash flow",
         "xbrl export",
         "audit trail",
-        "review hierarchy"
+        "review hierarchy",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.caseware.com"
     },
@@ -316,7 +497,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "ifrs taxonomy",
         "review notes",
         "version history",
-        "anchored exports"
+        "anchored exports",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://iriscarbon.com"
     },
@@ -328,7 +514,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "tickmarks",
         "reconciliation",
         "automation rules",
-        "documentation linking"
+        "documentation linking",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://datasnipper.com"
     }
@@ -356,7 +547,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "esignature",
         "asset management",
         "document vault",
-        "hrms mobile app"
+        "hrms mobile app",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.keka.com"
     },
@@ -376,7 +572,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "lms",
         "policy library",
         "goals & reviews",
-        "approvals workflow"
+        "approvals workflow",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.zoho.com/people"
     },
@@ -398,7 +599,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "attendance",
         "self-service",
         "expense claims",
-        "geo attendance"
+        "geo attendance",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://www.greythr.com"
     },
@@ -414,9 +620,79 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "rewards & recognition",
         "pulse surveys",
         "comp planning",
-        "global payroll"
+        "global payroll",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://darwinbox.com"
+    }
+  ],
+  "my-account": [
+    {
+      "product_name": "my-account",
+      "competitor_name": "Auth0 Account Center",
+      "features": [
+        "profile avatar upload",
+        "image validation",
+        "profile export",
+        "account data download",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
+      ],
+      "source_url": "https://auth0.com"
+    },
+    {
+      "product_name": "my-account",
+      "competitor_name": "Okta End-User Dashboard",
+      "features": [
+        "profile management",
+        "avatar upload",
+        "account data export",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
+      ],
+      "source_url": "https://www.okta.com"
+    }
+  ],
+  "ourpeople": [
+    {
+      "product_name": "ourpeople",
+      "competitor_name": "BambooHR",
+      "features": [
+        "employee document upload",
+        "document vault",
+        "csv import",
+        "excel export",
+        "report export",
+        "file upload",
+        "file download",
+        "pdf export"
+      ],
+      "source_url": "https://www.bamboohr.com"
+    },
+    {
+      "product_name": "ourpeople",
+      "competitor_name": "HiBob",
+      "features": [
+        "employee files",
+        "bulk document upload",
+        "csv import",
+        "report export",
+        "file upload",
+        "file download",
+        "excel export",
+        "pdf export"
+      ],
+      "source_url": "https://www.hibob.com"
     }
   ],
   "secretarial": [
@@ -428,7 +704,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "minutes",
         "circular resolutions",
         "registers",
-        "compliance calendar"
+        "compliance calendar",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://suvit.io"
     },
@@ -446,7 +727,12 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "statutory registers",
         "share transfer",
         "charges register",
-        "dsc management"
+        "dsc management",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://compliancemantra.in"
     },
@@ -458,9 +744,49 @@ const CATALOGS: Record<string, CompetitorBenchmark[]> = {
         "minutes builder",
         "ss-1 / ss-2 secretarial standards",
         "board portal",
-        "e-voting"
+        "e-voting",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
       ],
       "source_url": "https://resolutionpro.in"
+    }
+  ],
+  "vault": [
+    {
+      "product_name": "vault",
+      "competitor_name": "1Password",
+      "features": [
+        "document vault",
+        "file attachments",
+        "secure file upload",
+        "attachment download",
+        "version history",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
+      ],
+      "source_url": "https://1password.com"
+    },
+    {
+      "product_name": "vault",
+      "competitor_name": "Bitwarden",
+      "features": [
+        "encrypted file attachments",
+        "secure export",
+        "vault import",
+        "vault export",
+        "file upload",
+        "file download",
+        "csv import",
+        "excel export",
+        "pdf export"
+      ],
+      "source_url": "https://bitwarden.com"
     }
   ]
 };

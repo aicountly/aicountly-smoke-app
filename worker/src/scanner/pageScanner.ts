@@ -11,6 +11,9 @@ export type PageMetadata = {
   has_export: boolean;
   has_print: boolean;
   has_download: boolean;
+  has_upload: boolean;
+  file_input_count: number;
+  file_accept_mimes: string[];
   empty_state: boolean;
   table_overflow: boolean;
   modal_overflow: boolean;
@@ -68,6 +71,9 @@ const SCAN_PAGE_JS = `
     has_export: /\\bexport\\b/i.test(allText),
     has_print: /\\bprint\\b/i.test(allText),
     has_download: /\\bdownload\\b/i.test(allText),
+    has_upload: $('input[type="file"]').length > 0 || /\\b(upload|import|attach)\\b/i.test(allText),
+    file_input_count: $('input[type="file"]').length,
+    file_accept_mimes: $('input[type="file"]').map((el) => el.getAttribute('accept') || '').filter(Boolean),
     empty_state: /no (records|data|results)|empty|nothing/i.test(allText) && tables.length === 0,
     table_overflow: tableOverflow,
     modal_overflow: modalOverflow,

@@ -28,9 +28,15 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->post('jobs/(:num)/heartbeat', 'WorkerController::heartbeat/$1');
         $routes->post('jobs/(:num)/complete',  'WorkerController::complete/$1');
         $routes->post('jobs/(:num)/fail',      'WorkerController::fail/$1');
+        $routes->post('decisions',             'WorkerController::createDecision');
+        $routes->get('decisions',              'WorkerController::listDecisions');
+        $routes->get('decisions/(:num)',       'WorkerController::pollDecision/$1');
+        $routes->post('decisions/(:num)/timeout', 'WorkerController::timeoutDecision/$1');
+        $routes->get('decision-memory',        'WorkerController::decisionMemory');
         $routes->post('credentials/(:num)/decrypt', 'WorkerController::decryptCredential/$1');
         $routes->post('results',               'WorkerController::recordResult');
         $routes->post('inventory',             'WorkerController::recordInventory');
+        $routes->post('file-io-tests',          'WorkerController::recordFileIoTest');
         $routes->post('ux-issues',             'WorkerController::recordUxIssue');
         $routes->post('feature-gaps',          'WorkerController::recordFeatureGap');
         $routes->post('reports',               'WorkerController::recordReport');
@@ -72,14 +78,14 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         // Session plans
         $routes->get('session-plans/(:num)',     'SessionPlansController::show/$1');
         $routes->put('session-plans/(:num)',     'SessionPlansController::update/$1', ['filter' => 'rbac:owner,product_reviewer']);
-        $routes->post('session-plans/(:num)/sessions',  'SessionPlansController::addSession/$1',     ['filter' => 'rbac:owner,product_reviewer']);
+        $routes->post('session-plans/(:num)/sessions',  'SessionPlansController::addSession/$1',     ['filter' => ['rbac:owner,product_reviewer', 'production_guard']]);
         $routes->put('session-plans/(:num)/reorder',    'SessionPlansController::reorder/$1',        ['filter' => 'rbac:owner,product_reviewer']);
-        $routes->post('session-plans/(:num)/approve',   'SessionPlansController::approve/$1',        ['filter' => 'rbac:owner,product_reviewer']);
+        $routes->post('session-plans/(:num)/approve',   'SessionPlansController::approve/$1',        ['filter' => ['rbac:owner,product_reviewer', 'production_guard']]);
         $routes->post('session-plans/(:num)/reject',    'SessionPlansController::reject/$1',         ['filter' => 'rbac:owner,product_reviewer']);
-        $routes->post('session-plans/(:num)/run',       'SessionPlansController::startRun/$1',       ['filter' => 'rbac:owner,product_reviewer']);
+        $routes->post('session-plans/(:num)/run',       'SessionPlansController::startRun/$1',       ['filter' => ['rbac:owner,product_reviewer', 'production_guard']]);
 
         // Sessions (within plan)
-        $routes->put('sessions/(:num)',          'SessionsController::update/$1',  ['filter' => 'rbac:owner,product_reviewer']);
+        $routes->put('sessions/(:num)',          'SessionsController::update/$1',  ['filter' => ['rbac:owner,product_reviewer', 'production_guard']]);
         $routes->post('sessions/(:num)/split',   'SessionsController::split/$1',   ['filter' => 'rbac:owner,product_reviewer']);
         $routes->post('sessions/(:num)/merge',   'SessionsController::merge/$1',   ['filter' => 'rbac:owner,product_reviewer']);
         $routes->delete('sessions/(:num)',       'SessionsController::delete/$1',  ['filter' => 'rbac:owner,product_reviewer']);
@@ -88,9 +94,13 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->get('runs',                     'ObservationRunsController::index');
         $routes->get('runs/(:num)',              'ObservationRunsController::show/$1');
         $routes->get('runs/(:num)/logs',         'ObservationRunsController::logs/$1');
+        $routes->get('runs/(:num)/decisions',    'DecisionsController::index/$1', ['filter' => 'rbac:owner,product_reviewer']);
+        $routes->post('runs/(:num)/decisions/(:num)/answer', 'DecisionsController::answer/$1/$2', ['filter' => 'rbac:owner,product_reviewer']);
+        $routes->get('runs/(:num)/decisions/(:num)/screenshot', 'DecisionsController::screenshot/$1/$2', ['filter' => 'rbac:owner,product_reviewer']);
         $routes->get('runs/(:num)/sessions/(:num)', 'ObservationRunsController::sessionDetail/$1/$2');
         $routes->post('runs/(:num)/sessions/(:num)/rerun', 'ObservationRunsController::rerunSession/$1/$2', ['filter' => 'rbac:owner,product_reviewer']);
         $routes->get('runs/(:num)/results/(:num)/screenshot', 'ObservationRunsController::resultScreenshot/$1/$2');
+        $routes->get('runs/(:num)/file-io/(:num)/artifact/(:segment)', 'ObservationRunsController::fileIoArtifact/$1/$2/$3');
         $routes->get('runs/code/(:segment)',     'ObservationRunsController::showByCode/$1');
         $routes->post('runs/(:num)/cancel',      'ObservationRunsController::cancel/$1', ['filter' => 'rbac:owner,product_reviewer']);
         $routes->delete('runs/(:num)',           'ObservationRunsController::delete/$1', ['filter' => 'rbac:owner']);

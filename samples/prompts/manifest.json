@@ -49,6 +49,12 @@
       "product": "secretarial",
       "file": "secretarial.txt"
     },
+    {"id":"docs-full","label":"Docs — Full product intelligence","description":"Documents, collaboration, and PDF fidelity.","product":"docs","file":"docs.txt"},
+    {"id":"vault-full","label":"Vault — Full product intelligence","description":"Secure records and attachment fidelity.","product":"vault","file":"vault.txt"},
+    {"id":"chat-full","label":"Chat — Full product intelligence","description":"Messaging and attachment quality.","product":"chat","file":"chat.txt"},
+    {"id":"my-account-full","label":"My Account — Full product intelligence","description":"Profile, security, and avatar upload.","product":"my-account","file":"my-account.txt"},
+    {"id":"ourpeople-full","label":"Our People — Full product intelligence","description":"Directory and organisation documents.","product":"ourpeople","file":"ourpeople.txt"},
+    {"id":"buddy-full","label":"Buddy — Full product intelligence","description":"Knowledge import/export and AI quality.","product":"buddy","file":"buddy.txt"},
     {
       "id": "generic-nav-sweep",
       "label": "Quick navigation sweep",

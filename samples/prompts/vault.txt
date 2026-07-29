@@ -1,0 +1,1 @@
+Review Vault end to end: secure items, sharing, attachment upload/download fidelity, accessibility, and feature quality versus 1Password and Bitwarden. Use only synthetic fixtures and never mutate production.

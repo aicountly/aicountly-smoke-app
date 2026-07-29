@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 
 export type InventoryEntry = {
-  kind: 'menu' | 'submenu' | 'button' | 'form' | 'table' | 'filter' | 'export' | 'print' | 'download' | 'shortcut' | 'help' | 'tab' | 'modal' | 'company_selector' | 'fy_selector' | 'branch_selector' | 'search' | 'ai_copilot';
+  kind: 'menu' | 'submenu' | 'button' | 'form' | 'table' | 'filter' | 'export' | 'print' | 'download' | 'upload' | 'shortcut' | 'help' | 'tab' | 'modal' | 'company_selector' | 'fy_selector' | 'branch_selector' | 'search' | 'ai_copilot';
   label: string;
   selector: string;
   url: string;
@@ -47,6 +47,20 @@ const COLLECT_INVENTORY_JS = `
       placeholder: i.placeholder,
     }));
     out.push({ kind: 'form', label: text(f).slice(0, 100), selector: cssPath(f), url: url, payload: { fields: inputs } });
+  }
+  for (const input of $('input[type="file"]')) {
+    out.push({
+      kind: 'upload',
+      label: input.getAttribute('aria-label') || input.name || 'File upload',
+      selector: cssPath(input),
+      url: url,
+      payload: { accept: input.getAttribute('accept') || '', multiple: !!input.multiple },
+    });
+  }
+  for (const el of $('a, button, [role="button"]').filter(visible)) {
+    if (/\\b(upload|import|attach)\\b/i.test(text(el))) {
+      out.push({ kind: 'upload', label: text(el), selector: cssPath(el), url: url, payload: {} });
+    }
   }
   for (const t of $('table').filter(visible)) {
     const headers = Array.from(t.querySelectorAll('thead th')).map((h) => text(h));

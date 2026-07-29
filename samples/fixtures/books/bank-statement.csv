@@ -1,0 +1,3 @@
+date,description,reference,debit,credit,balance
+2026-07-01,Opening balance,SMOKE-001,0.00,1000.00,1000.00
+2026-07-02,Demo expense,SMOKE-002,25.50,0.00,974.50

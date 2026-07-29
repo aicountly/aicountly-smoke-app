@@ -1,0 +1,1 @@
+Review Docs end to end: navigation, editing, collaboration, PDF upload/download/export fidelity, accessibility, errors, and feature quality versus Google Docs and Microsoft 365. Use only synthetic fixtures and never mutate production.

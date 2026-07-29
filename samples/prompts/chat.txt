@@ -1,0 +1,1 @@
+Review Chat end to end: conversations, channels, attachments, download fidelity, accessibility, and feature quality versus Slack and Teams. Use only synthetic fixtures and never mutate production.
