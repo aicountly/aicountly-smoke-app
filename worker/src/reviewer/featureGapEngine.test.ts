@@ -70,6 +70,26 @@ test('href payload participates in feature matching', () => {
   assert.equal(form16?.partial, false);
 });
 
+test('an aliased product matches its canonical benchmarks, from either side', () => {
+  const booksBenchmarks: CompetitorBenchmark[] = [{
+    product_name: 'books',
+    competitor_name: 'Competitor',
+    features: ['Bank reconciliation'],
+  }];
+  const inventory = [item('Ledgers', '/ledgers')];
+
+  // Bundled fallback catalogs tag rows canonically; the run carries the alias.
+  const fromFallback = detectGaps('erp', inventory, booksBenchmarks, { sessionName: 'Banking' });
+  assert.equal(fromFallback.length, 1);
+  assert.equal(fromFallback[0]?.expected_feature, 'bank reconciliation');
+
+  // The API echoes the requested alias back on each row.
+  const fromApi = detectGaps('erp', inventory, [{ ...booksBenchmarks[0], product_name: 'erp' }], {});
+  assert.equal(fromApi.length, 1);
+
+  assert.equal(detectGaps('hrms', inventory, booksBenchmarks, {}).length, 0, 'unrelated products stay excluded');
+});
+
 test('short tokens do not over-match substrings', () => {
   const rows = detectGaps('HRMS', [
     item('AI-powered performance', '/payroll/pf-summary'),

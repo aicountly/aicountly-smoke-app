@@ -1,4 +1,5 @@
 import type { InventoryEntry } from '../scanner/uiInventory.js';
+import { canonicalProduct } from './productAliases.js';
 import type { Severity } from './uxReviewEngine.js';
 
 export type FeatureGap = {
@@ -57,9 +58,9 @@ export function detectGaps(
 
   // collapse expected features per product across all enabled competitors
   const expected = new Map<string, string[]>(); // featureKey -> competitor refs
-  const productKey = productName.trim().toLowerCase();
+  const productKey = canonicalProduct(productName);
   for (const b of benchmarks) {
-    if ((b.product_name || '').trim().toLowerCase() !== productKey) continue;
+    if (canonicalProduct(b.product_name || '') !== productKey) continue;
     for (const f of b.features) {
       const key = normalizeFeature(f);
       const refs = expected.get(key) ?? [];

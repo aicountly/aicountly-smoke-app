@@ -98,19 +98,68 @@ The portal lives at <http://localhost:5173>. The backend API at
 
 ### Production worker (cPanel)
 
-The worker is **not** started by deploy. On the server:
+The live smoke worker runs on the **same cPanel account as the portal and API**,
+from `${PROD_REMOTE_ROOT}/worker/`, under PM2 as **`aicountly-smoke-worker`**,
+executing compiled output (`npm start` → `node dist/index.js`).
+
+The deploy workflow owns it end to end: it builds `worker/dist/`, rsyncs it with
+`--delete`, installs production dependencies and Chromium on the server, then runs
+`pm2 startOrRestart worker/ecosystem.config.cjs --update-env` + `pm2 save` and
+verifies via `pm2 jlist` that the process is `online` and not restart-looping. No
+files are ever uploaded by hand, which is the whole point: hand-picked uploads to
+the old host silently shipped half-applied builds (a wrong-product login fix and a
+screen-visit-budget fix both "deployed green" and never went live).
+
+Process identity lives in [`worker/ecosystem.config.cjs`](../worker/ecosystem.config.cjs)
+— `instances: 1` is mandatory, since two instances would double-lease the same job
+queue.
+
+#### One-time server bootstrap
+
+Nothing below can be automated by the workflow; do it once over SSH:
 
 ```bash
-cd ${PROD_REMOTE_ROOT}/worker
+cd "${PROD_REMOTE_ROOT}/worker"
+
 cp .env.example .env
 # WORKER_BACKEND_URL=https://smoke.aicountly.org/api/v1
-# WORKER_SHARED_TOKEN=<same as api/.env>
-npm install --omit=dev
-npx playwright install-deps chromium   # once, as root
-npx playwright install chromium
-pm2 start npm --name smoke-worker -- start
+# WORKER_SHARED_TOKEN=<identical to WORKER_SHARED_TOKEN in ../api/.env>
+# WORKER_ID=aicountly-smoke-worker
+# leave REPORTS_DIR unset
+
+npm install -g pm2                     # per cPanel account
+npx playwright install-deps chromium   # ONCE, as root (system libraries)
+
+pm2 startOrRestart ecosystem.config.cjs --update-env
 pm2 save
+pm2 startup                            # resurrect after a server reboot
 ```
+
+The deploy skips the restart with a `::warning::` (never a failure) when
+`worker/.env` is missing or `pm2` is not on the deploy shell's `PATH`, so a worker
+prerequisite can never block the frontend/API deploy — but the run turns red at the
+end if PM2 reports the process is not online.
+
+#### Cutover from the retired shared worker
+
+The old shared multi-portal worker on `worker.apis.aicountly.com` (cPanel account
+`apisaicountly`) **must stop leasing smoke jobs** — `pm2 delete` its smoke process
+there, or point it away from this API. Two workers polling the same queue
+double-lease it: sessions of one run get split across two hosts running different
+builds, and reports interleave.
+
+Confirm which worker served a run in the portal: **Run detail → Sessions → Worker**
+shows `leased_by`, i.e. the worker's `WORKER_ID`. It must read
+`aicountly-smoke-worker`. Anything else means the retired worker is still alive.
+
+`npm run worker:pack` is **legacy** — it only builds upload bundles for the retired
+host and is kept for reference.
+
+`REPORTS_DIR` needs no configuration: the worker default (`cwd/..` +
+`smoke-reports`, with PM2 cwd `${PROD_REMOTE_ROOT}/worker`) and the API default
+(`api/.env` `REPORTS_DIR = ../smoke-reports`, relative to CodeIgniter `ROOTPATH` =
+`${PROD_REMOTE_ROOT}/api/`) both resolve to `${PROD_REMOTE_ROOT}/smoke-reports`. If
+you override one side, override both or the Reports page cannot find screenshots.
 
 See [`worker/README.md`](../worker/README.md) for full setup.
 

@@ -108,6 +108,7 @@ jobs:
           ssh cpanel-prod "mkdir -p \
             '${REMOTE_ROOT}/api' \
             '${REMOTE_ROOT}/worker' \
+            '${REMOTE_ROOT}/worker/logs' \
             '${REMOTE_ROOT}/samples' \
             '${REMOTE_ROOT}/smoke-reports' \
             '${REMOTE_ROOT}/migrations' \
@@ -154,6 +155,7 @@ jobs:
             worker/dist/ "cpanel-prod:${REMOTE_ROOT}/worker/dist/"
           rsync -avz \
             worker/package.json \
+            worker/ecosystem.config.cjs \
             worker/.env.example \
             worker/README.md \
             "cpanel-prod:${REMOTE_ROOT}/worker/"
@@ -168,7 +170,7 @@ jobs:
           if ! ssh cpanel-prod "test -f '${REMOTE_ROOT}/worker/.env'"; then
             echo "::warning::${REMOTE_ROOT}/worker/.env not found on the server."
             echo "Create it manually (copy worker/.env.example) — deploy never writes worker/.env."
-            echo "WORKER_SHARED_TOKEN must match api/.env. Then start with PM2: pm2 start npm --name smoke-worker -- start"
+            echo "WORKER_SHARED_TOKEN must match api/.env. Until it exists, the PM2 restart step is skipped."
           else
             echo "Server worker/.env present (unchanged by deploy)."
           fi
@@ -227,6 +229,151 @@ jobs:
             else \
               echo 'npx/npm not found — install Playwright browsers manually after Node is available.'; \
             fi"
+
+      # The live worker runs on THIS account under PM2 as aicountly-smoke-worker.
+      # Without this step the new worker/dist/ sits on disk while the old process
+      # keeps serving stale code — a green deploy that changed nothing.
+      - name: Restart smoke worker (PM2)
+        id: worker_restart
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          if ! ssh cpanel-prod "test -f '${REMOTE_ROOT}/worker/.env'"; then
+            echo "::warning::Skipping worker restart — ${REMOTE_ROOT}/worker/.env is missing. A worker without WORKER_SHARED_TOKEN would poll and fail every lease forever. Create it from worker/.env.example, then re-run this workflow."
+            echo "restarted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          set -o pipefail
+          ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-restart.log
+          set -u
+          WORKER_DIR="${1%/}/worker"
+          mkdir -p "$WORKER_DIR/logs"
+
+          # Non-login cPanel SSH shells usually have neither node nor pm2 on PATH
+          # (Node comes from the cPanel Node selector / nodevenv), so widen it first.
+          for d in "$HOME/.npm-global/bin" "$HOME/bin" "$HOME/node_modules/.bin" \
+                   /opt/cpanel/ea-nodejs*/bin "$HOME"/nodevenv/*/*/bin \
+                   /usr/local/bin /usr/bin; do
+            [ -d "$d" ] && PATH="$d:$PATH"
+          done
+          export PATH
+          if command -v npm >/dev/null 2>&1; then
+            NPM_PREFIX="$(npm prefix -g 2>/dev/null || true)"
+            if [ -n "$NPM_PREFIX" ] && [ -d "$NPM_PREFIX/bin" ]; then
+              PATH="$NPM_PREFIX/bin:$PATH"
+              export PATH
+            fi
+          fi
+
+          if ! command -v pm2 >/dev/null 2>&1; then
+            echo "::warning::pm2 not found on the server PATH — the worker/dist just deployed is NOT live. One-time fix over SSH: npm install -g pm2 && cd $WORKER_DIR && pm2 startOrRestart ecosystem.config.cjs --update-env && pm2 save && pm2 startup"
+            exit 0
+          fi
+          echo "pm2: $(command -v pm2) ($(pm2 --version 2>/dev/null))"
+
+          cd "$WORKER_DIR"
+          # startOrRestart (not startOrReload): this is a fork-mode queue worker with
+          # no listening socket, so PM2's rolling reload buys nothing and reload in
+          # fork mode degrades to a stop/start anyway. A hard restart also guarantees
+          # the old process cannot keep an old dist/index.js resident.
+          pm2 startOrRestart ecosystem.config.cjs --update-env \
+            || echo "::warning::pm2 startOrRestart returned non-zero — the health check step decides whether the worker is actually running."
+          pm2 save || echo "::warning::pm2 save failed — the process list may not survive a server reboot."
+          pm2 list
+          echo "SMOKE_WORKER_RESTART_OK"
+          EOS
+          if grep -q '^SMOKE_WORKER_RESTART_OK$' /tmp/worker-restart.log; then
+            echo "restarted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "restarted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A crash-looping worker reporting a green deploy is the exact failure this
+      # whole change exists to eliminate, so verify from pm2 jlist (machine
+      # readable) instead of trusting the restart command's exit code.
+      - name: Verify smoke worker is online (PM2)
+        id: worker_health
+        if: steps.worker_restart.outputs.restarted == 'true'
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          set -o pipefail
+          ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-health.log
+          set -u
+          WORKER_DIR="${1%/}/worker"
+          for d in "$HOME/.npm-global/bin" "$HOME/bin" "$HOME/node_modules/.bin" \
+                   /opt/cpanel/ea-nodejs*/bin "$HOME"/nodevenv/*/*/bin \
+                   /usr/local/bin /usr/bin; do
+            [ -d "$d" ] && PATH="$d:$PATH"
+          done
+          export PATH
+          if command -v npm >/dev/null 2>&1; then
+            NPM_PREFIX="$(npm prefix -g 2>/dev/null || true)"
+            if [ -n "$NPM_PREFIX" ] && [ -d "$NPM_PREFIX/bin" ]; then
+              PATH="$NPM_PREFIX/bin:$PATH"
+              export PATH
+            fi
+          fi
+
+          probe() {
+            pm2 jlist 2>/dev/null | node -e '
+              let raw = "";
+              process.stdin.on("data", (d) => { raw += d; });
+              process.stdin.on("end", () => {
+                // pm2 sometimes prefixes jlist with lines like "[PM2] Spawning PM2 daemon",
+                // so scan every "[" until one parses as an array.
+                const end = raw.lastIndexOf("]");
+                let list = [];
+                for (let i = raw.indexOf("["); i !== -1 && i < end; i = raw.indexOf("[", i + 1)) {
+                  try {
+                    const parsed = JSON.parse(raw.slice(i, end + 1));
+                    if (Array.isArray(parsed)) { list = parsed; break; }
+                  } catch (e) { /* not JSON at this offset, keep scanning */ }
+                }
+                const p = list.find((x) => x && x.name === "aicountly-smoke-worker");
+                if (!p) { process.stdout.write("missing 0"); return; }
+                const env = p.pm2_env || {};
+                process.stdout.write(`${env.status || "unknown"} ${env.restart_time || 0}`);
+              });
+            '
+          }
+
+          # Two samples: a dead/errored process fails the first check, and a worker
+          # that boots then crashes on config shows up as a climbing restart_time.
+          sleep 5
+          read -r STATUS1 RESTARTS1 <<<"$(probe)"
+          echo "pm2 status  5s after restart: status=$STATUS1 restarts=$RESTARTS1"
+          sleep 12
+          read -r STATUS2 RESTARTS2 <<<"$(probe)"
+          echo "pm2 status 17s after restart: status=$STATUS2 restarts=$RESTARTS2"
+
+          if [ "$STATUS2" = "online" ]; then
+            # Only compare counters when both samples saw the process, so a jlist
+            # hiccup cannot masquerade as a restart loop.
+            if [ "$STATUS1" = "online" ] && [ "$RESTARTS2" != "$RESTARTS1" ]; then
+              echo "::error::aicountly-smoke-worker is restarting in a loop (restart_time $RESTARTS1 -> $RESTARTS2) — it is not processing jobs reliably."
+            else
+              echo "aicountly-smoke-worker is online and stable."
+              echo "SMOKE_WORKER_HEALTHY"
+              exit 0
+            fi
+          else
+            echo "::error::aicountly-smoke-worker is not online (pm2 status: $STATUS2). The worker/dist deployed by this run is NOT processing jobs."
+          fi
+          echo "--- tail worker-error.log ---"
+          tail -40 "$WORKER_DIR/logs/worker-error.log" 2>/dev/null || echo "(no error log yet)"
+          echo "--- tail worker-out.log ---"
+          tail -40 "$WORKER_DIR/logs/worker-out.log" 2>/dev/null || echo "(no out log yet)"
+          echo "--- pm2 list ---"
+          pm2 list 2>/dev/null || true
+          EOS
+          if grep -q '^SMOKE_WORKER_HEALTHY$' /tmp/worker-health.log; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run database migrations
         env:
@@ -288,13 +435,32 @@ jobs:
             echo "|---|---|"
             echo "| \`${REMOTE_ROOT}/\` | React portal (index.html) |"
             echo "| \`${REMOTE_ROOT}/api/\` | CodeIgniter API |"
-            echo "| \`${REMOTE_ROOT}/worker/\` | Playwright worker (PM2: \`npm start\`) |"
+            echo "| \`${REMOTE_ROOT}/worker/\` | Live Playwright worker (PM2 \`aicountly-smoke-worker\`) |"
             echo ""
             echo "### Worker (one-time on server)"
             echo ""
-            echo "1. \`cp worker/.env.example worker/.env\` and set \`WORKER_SHARED_TOKEN\` (same as \`api/.env\`)."
-            echo "2. \`npx playwright install-deps chromium\` (once, as root) then \`npx playwright install chromium\`."
-            echo "3. \`pm2 start npm --name smoke-worker -- start\` from \`${REMOTE_ROOT}/worker\`."
+            echo "The worker runs on **this** cPanel account. Every deploy rebuilds \`worker/dist/\`, then runs"
+            echo "\`pm2 startOrRestart ecosystem.config.cjs --update-env\` + \`pm2 save\` and verifies the process is \`online\`,"
+            echo "so the live worker always matches the deployed commit. Nothing has to be uploaded by hand."
+            echo ""
+            echo "Manual prerequisites — deploy cannot do these for you:"
+            echo ""
+            echo "1. \`${REMOTE_ROOT}/worker/.env\` (copy \`.env.example\`; \`WORKER_SHARED_TOKEN\` must match \`api/.env\`). Deploy never writes it, and skips the restart while it is missing."
+            echo "2. \`pm2\` installed for this account (\`npm install -g pm2\`) plus \`pm2 startup\` once, so it survives a reboot. If \`pm2\` is not on the deploy shell's PATH the restart is skipped with a warning."
+            echo "3. \`npx playwright install-deps chromium\` once **as root** (Chromium shared libraries; the per-deploy \`playwright install chromium\` only fetches the browser)."
+            echo ""
+            echo "Identity: PM2 process \`aicountly-smoke-worker\`, \`WORKER_ID=aicountly-smoke-worker\` — shown in the portal under Run detail → Sessions → Worker."
+            echo "The retired shared worker on \`worker.apis.aicountly.com\` must be stopped; two workers on one queue double-lease and interleave sessions from different builds."
+            echo "\`npm run worker:pack\` is legacy tooling for that retired host only."
             echo ""
             echo "> Open https://smoke.aicountly.org/ — should show the login page, not a directory listing."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Deliberately last: the deploy (frontend, API, migrations) must finish even
+      # when the worker is dead, but the run must still go red so a broken worker is
+      # never mistaken for a successful deploy.
+      - name: Fail if smoke worker is not online
+        if: always() && steps.worker_health.outputs.healthy == 'false'
+        run: |
+          echo "::error::Frontend, API and migrations deployed, but PM2 process aicountly-smoke-worker is not online — see the 'Verify smoke worker is online (PM2)' step for the log tail."
+          exit 1

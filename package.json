@@ -17,6 +17,7 @@
     "frontend:build": "npm --workspace frontend run build",
     "worker:dev": "npm --workspace worker run dev",
     "worker:build": "npm --workspace worker run build",
+    "worker:pack": "node worker/scripts/pack-apis-bundle.mjs",
     "backend:serve": "php backend/spark serve",
     "backend:migrate": "php backend/spark migrate",
     "backend:seed": "php backend/spark db:seed InitialSeeder",

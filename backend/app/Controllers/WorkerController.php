@@ -13,6 +13,17 @@ use Config\Services;
  */
 class WorkerController extends BaseController
 {
+    /**
+     * Requested product name -> canonical samples/competitors catalog key.
+     * Stored rows always carry the canonical name, so seeding and listing must
+     * both resolve through this map before touching the table.
+     */
+    private const COMPETITOR_PRODUCT_ALIASES = [
+        'smart books' => 'books',
+        'erp'         => 'books',
+        'accounting'  => 'books',
+    ];
+
     public function lease(): ResponseInterface
     {
         $body = $this->jsonBody();
@@ -590,25 +601,36 @@ class WorkerController extends BaseController
      *
      * PostgreSQL BOOLEAN has no implicit cast from integer: compare with PHP
      * booleans so the driver emits TRUE/FALSE, never 1/0.
+     *
+     * Escaping must stay enabled on the LOWER(product_name) comparison: the
+     * builder already leaves parenthesised expressions verbatim, whereas
+     * $escape = false would also inline the bound value unquoted.
+     *
+     * The alias is resolved once and the canonical name drives the seed check,
+     * the seed insert and the list filter. Rows are echoed back under the name
+     * the caller asked for: the worker filters benchmarks by the product it
+     * requested (worker/src/reviewer/featureGapEngine.ts) and would discard
+     * every row tagged with the canonical name instead.
      */
     public function listCompetitors(): ResponseInterface
     {
         $db = Database::connect();
         $product = strtolower(trim((string) ($this->request->getGet('product_name') ?? '')));
+        $canonical = self::COMPETITOR_PRODUCT_ALIASES[$product] ?? $product;
 
         // Auto-seed from samples/competitors when the table has nothing for this product.
-        if ($product !== '') {
+        if ($canonical !== '') {
             $count = $db->table('smoke_competitor_profiles')
-                ->where('LOWER(product_name) =', $product, false)
+                ->where('LOWER(product_name) =', $canonical)
                 ->countAllResults();
             if ($count === 0) {
-                $this->seedCompetitorsFromSamples($product);
+                $this->seedCompetitorsFromSamples($canonical);
             }
         }
 
         $q = $db->table('smoke_competitor_profiles');
-        if ($product !== '') {
-            $q->where('LOWER(product_name) =', $product, false);
+        if ($canonical !== '') {
+            $q->where('LOWER(product_name) =', $canonical);
         }
         $enabled = $this->request->getGet('enabled');
         if ($enabled !== null && $enabled !== '') {
@@ -618,25 +640,32 @@ class WorkerController extends BaseController
             $q->where('enabled', true);
         }
         $rows = $q->orderBy('product_name', 'ASC')->orderBy('competitor_name', 'ASC')->get()->getResultArray();
+        if ($canonical !== $product) {
+            foreach ($rows as &$row) {
+                $row['product_name'] = $product;
+            }
+            unset($row);
+        }
         return $this->jsonOk(['data' => $rows]);
     }
 
     /**
      * Insert competitor rows from samples/competitors/{product}.json when missing.
+     * Expects an already canonicalised product name.
+     *
+     * The insert is guarded by ON CONFLICT DO NOTHING rather than a preceding
+     * existence check: two workers can hit a cold table at the same time, and
+     * the (product_name, competitor_name) unique key must absorb the race
+     * without either request erroring. Existing rows are left untouched, which
+     * preserves edits made through the portal.
      */
     private function seedCompetitorsFromSamples(string $product): void
     {
-        $aliases = [
-            'smart books' => 'books',
-            'erp'         => 'books',
-            'accounting'  => 'books',
-        ];
-        $fileKey = $aliases[$product] ?? $product;
         $rootSamples = realpath(WRITEPATH . '../../samples/competitors');
         if ($rootSamples === false) {
             return;
         }
-        $file = $rootSamples . DIRECTORY_SEPARATOR . $fileKey . '.json';
+        $file = $rootSamples . DIRECTORY_SEPARATOR . $product . '.json';
         if (! is_file($file)) {
             return;
         }
@@ -645,21 +674,13 @@ class WorkerController extends BaseController
             return;
         }
         $db = Database::connect();
-        $productName = (string) ($data['product_name'] ?? $fileKey);
         foreach ($data['competitors'] as $row) {
             $name = (string) ($row['name'] ?? '');
             if ($name === '') {
                 continue;
             }
-            $exists = $db->table('smoke_competitor_profiles')
-                ->where('product_name', $productName)
-                ->where('competitor_name', $name)
-                ->countAllResults();
-            if ($exists > 0) {
-                continue;
-            }
-            $db->table('smoke_competitor_profiles')->insert([
-                'product_name'      => $productName,
+            $db->table('smoke_competitor_profiles')->ignore(true)->insert([
+                'product_name'      => $product,
                 'competitor_name'   => $name,
                 'feature_list_json' => json_encode(array_values(array_unique((array) ($row['features'] ?? [])))),
                 'source_url'        => (string) ($row['source_url'] ?? ''),
