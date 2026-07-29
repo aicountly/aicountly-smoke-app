@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Database;
+use Config\Environments;
 use Config\Services;
 
 class MasterPromptsController extends BaseController
@@ -41,8 +42,8 @@ class MasterPromptsController extends BaseController
             return $this->jsonError('not_found', 'Target profile not found', 404);
         }
 
-        // Force production safety
-        if (in_array($env, ['production_readonly', 'production_restricted'], true)) {
+        // Force production safety on the observer-only tiers.
+        if (Environments::isObserverOnly($env)) {
             $body['destructive_allowed'] = false;
         }
 

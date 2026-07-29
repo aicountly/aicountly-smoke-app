@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { SAAS_PRODUCTS, SAAS_PRODUCT_SLUGS, type SaasProductOption } from '@/lib/products';
+import { ENVIRONMENTS, isProductionEnvironment } from '@/lib/environments';
 
 type TargetProfile = {
   id: number;
@@ -18,14 +19,6 @@ type TargetProfile = {
   allow_safe_demo: boolean;
   status: string;
 };
-
-
-const ENVIRONMENTS = [
-  { v: 'sandbox',                label: 'Sandbox' },
-  { v: 'gh_staging',             label: 'GH / Staging' },
-  { v: 'production_readonly',    label: 'Production Read-Only' },
-  { v: 'production_restricted',  label: 'Production Restricted' },
-];
 
 export function TargetProfilesPage() {
   const qc = useQueryClient();
@@ -89,7 +82,7 @@ export function TargetProfilesPage() {
                 <td className="px-4 py-2 font-medium">{p.profile_name}</td>
                 <td>{SAAS_PRODUCTS.find((x) => x.slug === p.product_name)?.label ?? p.product_name}</td>
                 <td>
-                  <span className={'badge-' + (p.environment.startsWith('production') ? 'danger' : 'brand')}>
+                  <span className={'badge-' + (isProductionEnvironment(p.environment) ? 'danger' : 'brand')}>
                     {p.environment}
                   </span>
                 </td>

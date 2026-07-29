@@ -24,12 +24,13 @@ brain has no provider configured.
 
 ## File I/O fixture safety
 
-Fixtures may be uploaded/imported only to `sandbox` or `gh_staging` when the
-profile enables safe demo, the session enables destructive actions, the exact
-file action is allowed, and the operator approves the first upload for that
-product/module. Production file mutations are always blocked. Downloads and
-exports are compared by hash, MIME, size, and format structure, then optionally
-reviewed by the `file_quality` brain task.
+Fixtures may be uploaded/imported only to `sandbox`, `gh_staging` or
+`production_full_access` when the profile enables safe demo, the session enables
+destructive actions, the exact file action is allowed, and the operator approves
+the first upload for that product/module. File mutations on `production_readonly`
+and `production_restricted` are always blocked. Downloads and exports are
+compared by hash, MIME, size, and format structure, then optionally reviewed by
+the `file_quality` brain task.
 
 ## Editing competitor benchmarks
 

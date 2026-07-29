@@ -9,6 +9,8 @@
  * label (e.g. "Save Invoice", "Final Submit", "Generate GSTR-1").
  */
 
+import { allowsFullAccess, isObserverOnlyEnvironment } from './environments.js';
+
 const RESTRICTED_TOKENS = [
   // explicit list from spec
   'save', 'submit', 'delete', 'remove', 'post', 'approve', 'reject',
@@ -49,6 +51,9 @@ export type FileAction = 'detect_file_ui' | 'download_file' | 'export_file' | 'u
 const FILE_MUTATIONS = new Set<FileAction>(['upload_file', 'import_file']);
 const FILE_OUTPUTS = new Set<FileAction>(['download_file', 'export_file']);
 
+/** Reported when an observer-only production tier refuses file I/O outright. */
+export const OBSERVER_ONLY_FILE_BLOCK_REASON = 'production environment forbids file actions';
+
 export function parseAllowedActions(value: string | string[] | null | undefined): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
   if (!value) return [];
@@ -62,22 +67,20 @@ export function parseAllowedActions(value: string | string[] | null | undefined)
 
 export function evaluateFileAction(action: FileAction, ctx: GuardContext): GuardDecision {
   if (action === 'detect_file_ui') return { allowed: true };
-  const environment = ctx.environment.toLowerCase();
-  const isProduction = environment.startsWith('production');
   const allowedActions = new Set(ctx.allowedActions ?? []);
 
   if (!allowedActions.has(action)) {
     return { allowed: false, reason: `allowed_actions does not include ${action}` };
   }
-  if (isProduction) {
-    return { allowed: false, reason: 'production environment forbids file actions' };
+  if (isObserverOnlyEnvironment(ctx.environment)) {
+    return { allowed: false, reason: OBSERVER_ONLY_FILE_BLOCK_REASON };
   }
   if (FILE_OUTPUTS.has(action)) {
     return { allowed: true };
   }
   if (FILE_MUTATIONS.has(action)) {
-    if (!['sandbox', 'gh_staging'].includes(environment)) {
-      return { allowed: false, reason: 'file mutations require sandbox or gh_staging' };
+    if (!allowsFullAccess(ctx.environment)) {
+      return { allowed: false, reason: 'file mutations require sandbox, gh_staging or production_full_access' };
     }
     if (!ctx.allowSafeDemo) {
       return { allowed: false, reason: 'profile.allow_safe_demo is false' };
@@ -109,13 +112,13 @@ export function evaluateClick(label: string | null, ctx: GuardContext, action = 
   if (ctx.allowedActions && !ctx.allowedActions.includes(action)) {
     return { allowed: false, reason: `allowed_actions does not include ${action}` };
   }
-  // Production targets are always observer-only -- never click destructive labels.
-  const isProd = ctx.environment === 'production_readonly' || ctx.environment === 'production_restricted';
+  // Read-only and restricted production targets are observer-only -- never click
+  // destructive labels. production_full_access opts out and behaves like sandbox.
   const r = isRestrictedLabel(label ?? '');
   if (!r.matched) {
     return { allowed: true };
   }
-  if (isProd) {
+  if (isObserverOnlyEnvironment(ctx.environment)) {
     return { allowed: false, reason: 'production environment forbids destructive labels', matchedToken: r.token };
   }
   if (!ctx.destructiveAllowed) {

@@ -3,13 +3,15 @@
 namespace App\Filters;
 
 use Config\Database;
+use Config\Environments;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
- * Hard-stops destructive sessions on production profiles. There is no owner
- * override: production smoke runs remain observer-only.
+ * Hard-stops destructive sessions on observer-only production profiles. There is
+ * no owner override for those tiers. production_full_access is exempt: it is a
+ * live target the owner controls and deliberately permits destructive actions.
  */
 class ProductionGuardFilter implements FilterInterface
 {
@@ -54,10 +56,11 @@ class ProductionGuardFilter implements FilterInterface
         if (! $allowDestructive) {
             return; // observer-mode requests are always allowed
         }
-        if (str_starts_with($environment, 'production')) {
+        if (Environments::isObserverOnly($environment)) {
             return service('response')->setStatusCode(403)->setJSON([
                 'error'   => 'production_guard',
-                'message' => 'Production profiles are observer-only; destructive_allowed cannot be enabled.',
+                'message' => 'Production read-only and restricted profiles are observer-only; destructive_allowed '
+                    . 'cannot be enabled. Use the production_full_access tier for a live target you control.',
             ]);
         }
     }

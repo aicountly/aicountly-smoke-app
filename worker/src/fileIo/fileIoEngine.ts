@@ -3,7 +3,12 @@ import type { Page } from 'playwright';
 import { config } from '../config.js';
 import { appendLog, recordFileIoTest, type Job } from '../backend.js';
 import { askOrRecallDecision } from '../nav/askDecision.js';
-import { evaluateFileActionContract, parseAllowedActions, type FileAction } from '../utils/safeActionGuard.js';
+import {
+  OBSERVER_ONLY_FILE_BLOCK_REASON,
+  evaluateFileActionContract,
+  parseAllowedActions,
+  type FileAction,
+} from '../utils/safeActionGuard.js';
 import type { GuardContext, GuardDecision } from '../utils/safeActionGuard.js';
 import { compareArtifacts, inspectExportArtifact } from './compareArtifacts.js';
 import { downloadArtifact } from './downloadHelper.js';
@@ -52,7 +57,8 @@ export async function runFileIoScenarios(input: {
     const gate = evaluateScenarioGate(scenario, guardContext);
     if (!gate.allowed) {
       const reason = gate.reason;
-      const skipped = baseResult(scenario, reason?.includes('production') ? 'blocked' : 'skipped', reason ?? 'File action blocked.');
+      const status = reason === OBSERVER_ONLY_FILE_BLOCK_REASON ? 'blocked' : 'skipped';
+      const skipped = baseResult(scenario, status, reason ?? 'File action blocked.');
       await persist(job, skipped);
       results.push(skipped);
       continue;

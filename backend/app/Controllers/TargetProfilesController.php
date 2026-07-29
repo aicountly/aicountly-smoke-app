@@ -4,15 +4,12 @@ namespace App\Controllers;
 
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Database;
+use Config\Environments;
 use Config\Products;
 use Config\Services;
 
 class TargetProfilesController extends BaseController
 {
-    private const ENVIRONMENTS = [
-        'sandbox', 'gh_staging', 'production_readonly', 'production_restricted',
-    ];
-
     public function index(): ResponseInterface
     {
         $db = Database::connect();
@@ -47,7 +44,7 @@ class TargetProfilesController extends BaseController
             return $this->jsonError('invalid_request', $err, 400);
         }
         $env = (string) $body['environment'];
-        $isProd = in_array($env, ['production_readonly', 'production_restricted'], true);
+        $isObserverOnly = Environments::isObserverOnly($env);
 
         $row = [
             'profile_name'           => trim((string) $body['profile_name']),
@@ -58,10 +55,10 @@ class TargetProfilesController extends BaseController
             'username'               => (string) $body['username'],
             'allowed_domains'        => json_encode($body['allowed_domains'] ?? []),
             'allowed_modules'        => json_encode($body['allowed_modules'] ?? []),
-            'observer_mode'          => (bool) ($body['observer_mode'] ?? true) || $isProd,
-            'read_only'              => (bool) ($body['read_only'] ?? true) || $isProd,
-            'production_restriction' => $isProd || (bool) ($body['production_restriction'] ?? true),
-            'allow_safe_demo'        => $isProd ? false : (bool) ($body['allow_safe_demo'] ?? false),
+            'observer_mode'          => (bool) ($body['observer_mode'] ?? true) || $isObserverOnly,
+            'read_only'              => (bool) ($body['read_only'] ?? true) || $isObserverOnly,
+            'production_restriction' => $isObserverOnly || (bool) ($body['production_restriction'] ?? true),
+            'allow_safe_demo'        => $isObserverOnly ? false : (bool) ($body['allow_safe_demo'] ?? false),
             'ip_restriction'         => json_encode($body['ip_restriction'] ?? []),
             'login_strategy'         => (string) ($body['login_strategy'] ?? 'standard'),
             'extra_config'           => json_encode($body['extra_config'] ?? null),
@@ -99,7 +96,7 @@ class TargetProfilesController extends BaseController
         }
 
         $env = (string) ($body['environment'] ?? $existing->environment);
-        $isProd = in_array($env, ['production_readonly', 'production_restricted'], true);
+        $isObserverOnly = Environments::isObserverOnly($env);
 
         $patch = array_filter([
             'profile_name'           => $body['profile_name']   ?? null,
@@ -116,10 +113,10 @@ class TargetProfilesController extends BaseController
         if (array_key_exists('allowed_modules', $body))  { $patch['allowed_modules']  = json_encode($body['allowed_modules'] ?? []); }
         if (array_key_exists('ip_restriction', $body))   { $patch['ip_restriction']   = json_encode($body['ip_restriction'] ?? []); }
         if (array_key_exists('extra_config', $body))     { $patch['extra_config']     = json_encode($body['extra_config']); }
-        if (array_key_exists('observer_mode', $body))    { $patch['observer_mode']    = (bool) $body['observer_mode'] || $isProd; }
-        if (array_key_exists('read_only', $body))        { $patch['read_only']        = (bool) $body['read_only'] || $isProd; }
-        if (array_key_exists('production_restriction', $body)) { $patch['production_restriction'] = (bool) $body['production_restriction'] || $isProd; }
-        if (array_key_exists('allow_safe_demo', $body))  { $patch['allow_safe_demo']  = $isProd ? false : (bool) $body['allow_safe_demo']; }
+        if (array_key_exists('observer_mode', $body))    { $patch['observer_mode']    = (bool) $body['observer_mode'] || $isObserverOnly; }
+        if (array_key_exists('read_only', $body))        { $patch['read_only']        = (bool) $body['read_only'] || $isObserverOnly; }
+        if (array_key_exists('production_restriction', $body)) { $patch['production_restriction'] = (bool) $body['production_restriction'] || $isObserverOnly; }
+        if (array_key_exists('allow_safe_demo', $body))  { $patch['allow_safe_demo']  = $isObserverOnly ? false : (bool) $body['allow_safe_demo']; }
 
         $patch['updated_by'] = $this->user()?->id;
         $patch['updated_at'] = date('Y-m-d H:i:s');
@@ -169,8 +166,8 @@ class TargetProfilesController extends BaseController
         if (! empty($body['product_name']) && ! in_array($body['product_name'], Products::slugs(), true)) {
             return 'Unknown product_name';
         }
-        if (! empty($body['environment']) && ! in_array($body['environment'], self::ENVIRONMENTS, true)) {
-            return 'Unknown environment (must be one of ' . implode(', ', self::ENVIRONMENTS) . ')';
+        if (! empty($body['environment']) && ! Environments::isKnown((string) $body['environment'])) {
+            return 'Unknown environment (must be one of ' . implode(', ', Environments::ALL) . ')';
         }
         foreach (['base_url', 'login_url'] as $u) {
             if (! empty($body[$u]) && ! filter_var($body[$u], FILTER_VALIDATE_URL)) {

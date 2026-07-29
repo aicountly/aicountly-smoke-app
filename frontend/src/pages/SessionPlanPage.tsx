@@ -228,10 +228,10 @@ export function SessionPlanPage() {
                       checked={editForm.destructive_allowed}
                       onChange={(e) => setEditForm({ ...editForm, destructive_allowed: e.target.checked })}
                     />
-                    Allow destructive sandbox actions
+                    Allow destructive actions
                   </label>
                   {editForm.destructive_allowed && (
-                    <div className="text-xs text-amber-700">Only sandbox/gh_staging profiles with safe demo enabled can run uploads or imports.</div>
+                    <div className="text-xs text-amber-700">Only sandbox, GH / staging or production full-access profiles with safe demo enabled can run uploads or imports.</div>
                   )}
                   <div className="flex gap-2">
                     <button className="btn-primary" onClick={() => updateSessionMut.mutate({ sid: s.id, body: editForm })} disabled={updateSessionMut.isPending}>Save</button>

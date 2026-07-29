@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { api } from '@/lib/api';
+import { ENVIRONMENTS } from '@/lib/environments';
 import { useProductionContext } from '@/store/productionContext';
 
 type Profile = { id: number; profile_name: string; product_name: string; environment: string };
@@ -130,10 +131,7 @@ export function NewObservationPage() {
           <div>
             <label className="label">Environment</label>
             <select className="input" value={environment} onChange={(e) => setEnvironment(e.target.value)}>
-              <option value="sandbox">Sandbox</option>
-              <option value="gh_staging">GH / Staging</option>
-              <option value="production_readonly">Production Read-Only</option>
-              <option value="production_restricted">Production Restricted</option>
+              {ENVIRONMENTS.map((e) => <option key={e.v} value={e.v}>{e.label}</option>)}
             </select>
           </div>
         </div>

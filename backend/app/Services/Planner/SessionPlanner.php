@@ -3,6 +3,7 @@
 namespace App\Services\Planner;
 
 use App\Services\Brain\BrainEnsemble;
+use Config\Environments;
 
 /**
  * Turns a master prompt + target profile context into a structured session plan.
@@ -68,9 +69,10 @@ class SessionPlanner
         return <<<'PROMPT'
 You are an internal AI session planner for AICOUNTLY's product intelligence
 portal. The smoke portal is observer-first. File downloads/exports are allowed
-only when listed in allowed_actions and never on production. Synthetic fixture
-uploads/imports require sandbox or gh_staging, profile allow_safe_demo, explicit
-owner intent, destructive_allowed, and explicit upload/import allowed_actions.
+only when listed in allowed_actions and never on production_readonly or
+production_restricted. Synthetic fixture uploads/imports require sandbox,
+gh_staging or production_full_access, profile allow_safe_demo, explicit owner
+intent, destructive_allowed, and explicit upload/import allowed_actions.
 
 Given a master prompt and a target app context, decompose the work into a list
 of independent observation sessions, one per main menu / module. If a single
@@ -107,7 +109,8 @@ NEVER include: submit_form, save, delete, post, approve, reject, finalize,
 generate_invoice, file_return, send, sync, reconcile, reset.
 
 destructive_allowed MUST be false unless the user explicitly says
-"ALLOW DESTRUCTIVE" in their prompt AND environment is sandbox or gh_staging.
+"ALLOW DESTRUCTIVE" in their prompt AND environment is sandbox, gh_staging or
+production_full_access.
 
 Include one "File I/O & exports" session. In safe demo environments it may use
 upload_file, import_file, download_file, export_file, compare_file. Otherwise
@@ -150,7 +153,7 @@ EOT;
         $plan['environment']  = (string) ($plan['environment']  ?? $environment);
         $plan['rationale']    = (string) ($plan['rationale']    ?? '');
         $sessions = [];
-        $mayEnableDestructive = in_array(strtolower($environment), ['sandbox', 'gh_staging'], true)
+        $mayEnableDestructive = Environments::allowsFullAccess($environment)
             && ! empty($profile['allow_safe_demo'])
             && stripos($prompt, 'ALLOW DESTRUCTIVE') !== false;
         $i = 1;

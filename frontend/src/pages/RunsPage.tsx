@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { formatAppDateTime } from '@/lib/datetime';
+import { ENVIRONMENTS, isProductionEnvironment } from '@/lib/environments';
 import { SAAS_PRODUCTS } from '@/lib/products';
 import { useAuthStore } from '@/store/auth';
 
@@ -60,10 +61,7 @@ export function RunsPage() {
           <label className="label">Environment</label>
           <select className="input" value={filters.environment ?? ''} onChange={(e) => setF('environment', e.target.value)}>
             <option value="">All</option>
-            <option value="sandbox">Sandbox</option>
-            <option value="gh_staging">GH / Staging</option>
-            <option value="production_readonly">Production R/O</option>
-            <option value="production_restricted">Production Restricted</option>
+            {ENVIRONMENTS.map((e) => <option key={e.v} value={e.v}>{e.shortLabel}</option>)}
           </select>
         </div>
         <div>
@@ -106,7 +104,7 @@ export function RunsPage() {
                 <td className="px-4 py-2 font-mono">{r.run_code}</td>
                 <td>{r.product_name}</td>
                 <td>
-                  <span className={'badge-' + (r.environment.startsWith('production') ? 'danger' : 'brand')}>{r.environment}</span>
+                  <span className={'badge-' + (isProductionEnvironment(r.environment) ? 'danger' : 'brand')}>{r.environment}</span>
                 </td>
                 <td><span className={'badge-' + statusBadge(r.status)}>{r.status}</span></td>
                 <td>

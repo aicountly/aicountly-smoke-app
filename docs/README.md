@@ -213,15 +213,27 @@ Per-session report (HTML + JSON)  ->  Final consolidated report
 
 ## 7. Environment modes
 
-| Mode                         | Allowed                               |
-|------------------------------|---------------------------------------|
-| `sandbox`                    | Observer + clicks + read-only actions |
-| `gh_staging`                 | Observer + clicks + read-only actions |
-| `production_readonly`        | Observer + clicks ONLY                |
-| `production_restricted`      | Observer (no clicks beyond menus)     |
+| Mode                         | Allowed                                    |
+|------------------------------|--------------------------------------------|
+| `sandbox`                    | Observer + clicks + read-only actions      |
+| `gh_staging`                 | Observer + clicks + read-only actions      |
+| `production_readonly`        | Observer + clicks ONLY                     |
+| `production_restricted`      | Observer (no clicks beyond menus)          |
+| `production_full_access`     | Observer + full access (opt-in destructive)|
 
-Production targets always show the red **PRODUCTION** banner and the worker
-disables every restricted button via `SafeActionGuard`.
+Every `production_*` tier shows the red **PRODUCTION** banner. The read-only and
+restricted tiers are observer-only: `SafeActionGuard` disables every restricted
+button, file I/O is refused outright, and `destructive_allowed` cannot be turned
+on (403 from `ProductionGuardFilter`).
+
+`production_full_access` is for a live target you own. It keeps the banner but
+behaves like a sandbox: restricted labels are clickable and file I/O is
+available. It is not automatic — the profile must set `allow_safe_demo=true` and
+the session must set `destructive_allowed=true`, exactly as in sandbox. Tier
+membership is defined once in `Config\Environments` (backend),
+`worker/src/utils/environments.ts`, and `frontend/src/lib/environments.ts`; never
+branch on `startsWith('production')`, which would sweep this tier back into the
+observer-only rules.
 
 ### File I/O smoke tests
 
@@ -231,14 +243,14 @@ run-scoped fixture copy, and record hash, MIME, size, structure, and AI quality
 results in `smoke_file_io_tests`.
 
 - Detection is always read-only.
-- Downloads/exports require a non-production profile and the matching
-  `allowed_actions` entry.
-- Uploads/imports require `sandbox` or `gh_staging`, profile
-  `allow_safe_demo=true`, session `destructive_allowed=true`, the matching
-  `allowed_actions` entry, and an operator approval remembered per
+- Downloads/exports require a profile outside the observer-only tiers and the
+  matching `allowed_actions` entry.
+- Uploads/imports require `sandbox`, `gh_staging` or `production_full_access`,
+  profile `allow_safe_demo=true`, session `destructive_allowed=true`, the
+  matching `allowed_actions` entry, and an operator approval remembered per
   product/module.
-- Production uploads/imports are unconditionally blocked; there is no owner
-  override.
+- `production_readonly` and `production_restricted` uploads/imports are
+  unconditionally blocked; there is no owner override.
 
 Enable a safe test by turning on **Allow safe demo** on the target profile,
 adding upload/import actions to the File I/O session, and enabling its
@@ -284,8 +296,9 @@ smoke-reports/
   per-job lease ID). The worker never sees AI provider API keys.
 - All mutating endpoints are gated by `RbacFilter`. All actions are recorded
   in `smoke_audit_logs`.
-- Production targets force `read_only=true` and `observer_mode=true` regardless
-  of other flags.
+- `production_readonly` and `production_restricted` targets force
+  `read_only=true` and `observer_mode=true` regardless of other flags.
+  `production_full_access` does not, so it can exercise a live target you own.
 
 ## 11. Convenience scripts
 
