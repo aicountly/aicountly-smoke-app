@@ -1,0 +1,20 @@
+smoke-plan-fast-hotfix-20260729
+
+Speeds up "Generate session plan" on New Observation (was hanging on
+OpenAI + Perplexity + Gemini sequential council, often past the 60s UI timeout).
+
+SMOKE API (smoke.aicountly.org):
+- app/Services/Brain/BrainEnsemble.php          (fast plan path by default)
+- app/Services/Brain/Adapters/AbstractAdapter.php
+- app/Services/Brain/Adapters/OpenAIAdapter.php
+- app/Services/Brain/Adapters/GeminiAdapter.php
+- app/Services/Brain/Adapters/PerplexityAdapter.php
+- app/Controllers/MasterPromptsController.php
+- app/Database/Seeds/SettingsSeeder.php         (optional; new keys also work as defaults)
+
+FRONTEND (smoke.aicountly.org SPA build):
+- src/pages/NewObservationPage.tsx              (120s timeout + error banner)
+
+Optional DB settings (smoke_settings):
+- brain.plan_mode = "fast"   (default) | "council"
+- brain.plan_providers = ["openai","gemini"]
