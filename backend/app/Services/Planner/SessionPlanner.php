@@ -27,7 +27,7 @@ use App\Services\Brain\BrainEnsemble;
  *     ]
  *   }
  *
- * Sessions are split menu-wise and sub-divided when expected_screens > 8.
+ * Sessions are split menu-wise and sub-divided when the expected_screens planning estimate is > 8.
  */
 class SessionPlanner
 {
@@ -74,8 +74,10 @@ owner intent, destructive_allowed, and explicit upload/import allowed_actions.
 
 Given a master prompt and a target app context, decompose the work into a list
 of independent observation sessions, one per main menu / module. If a single
-menu is large (>8 screens), split it into sub-sessions. Output ONE valid JSON
-object that conforms exactly to this schema:
+menu is estimated to contain >8 screens, split it into sub-sessions as a
+planning aid. expected_screens is a planning estimate only, not a runtime visit
+quota; the worker discovers and visits relevant menus independently. Output ONE
+valid JSON object that conforms exactly to this schema:
 
 {
   "rationale": string,

@@ -41,6 +41,7 @@ export const config = {
   workerId: process.env.WORKER_ID || hostname(),
   pollIntervalMs: int('WORKER_POLL_INTERVAL_MS', 2500),
   leaseSeconds: int('WORKER_LEASE_SECONDS', 600),
+  maxScreensPerSession: Math.max(1, int('SMOKE_MAX_SCREENS_PER_SESSION', 40)),
   reportsDir: process.env.REPORTS_DIR
     ? path.isAbsolute(process.env.REPORTS_DIR)
       ? process.env.REPORTS_DIR

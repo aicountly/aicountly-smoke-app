@@ -27,6 +27,7 @@ import {
   type CursorPromptContext,
 } from './reporter/cursorPromptBuilder.js';
 import { evaluateClick, isRestrictedLabel, parseAllowedActions } from './utils/safeActionGuard.js';
+import { evaluateHostGuard } from './utils/hostGuard.js';
 import { dismissOverlays } from './utils/dismissOverlays.js';
 import { askOrRecallDecision, type DecisionOption } from './nav/askDecision.js';
 import { performNavAction } from './nav/performNavAction.js';
@@ -35,6 +36,7 @@ import type { ConsoleEvent } from './scanner/consoleCapture.js';
 import type { NetworkEvent } from './scanner/networkCapture.js';
 import { runFileIoScenarios, shouldRunFileIoSession } from './fileIo/fileIoEngine.js';
 import type { FileIoTestResult } from './fileIo/types.js';
+import { computeVisitBudget } from './utils/visitBudget.js';
 
 const browserMap = { chromium, firefox, webkit } as const;
 
@@ -90,6 +92,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   let screensObserved = 0;
   let inventoryCount = 0;
   let fileIoResults: FileIoTestResult[] = [];
+  let estimatedScreens = 0;
 
   const ctx: ObserveCtx = {
     job,
@@ -151,6 +154,22 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       message: `Login successful — now at ${page.url()}`,
     }).catch(() => {});
 
+    try {
+      await enforceProductHost(page, job);
+    } catch (err) {
+      try {
+        await observeAndPersist(ctx, '01c-wrong-product-host');
+      } catch { /* ignore */ }
+      await appendLog({
+        run_id: job.run_id,
+        session_id: job.session.id,
+        job_id: job.job_id,
+        level: 'error',
+        message: (err as Error).message,
+      }).catch(() => {});
+      throw err;
+    }
+
     // Action 2: post-login landing / dashboard
     await observeAndPersist(ctx, '02-after-login-landing');
     await appendLog({
@@ -169,6 +188,16 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     // Discover menus and visit session-relevant ones
     let menus = await scanMenus(page);
     let targets = appContext.skipped ? [] : selectMenuTargets(menus, job);
+    if (!appContext.skipped && targets.length === 0 && menus.length > 0 && isSpecificMenuPath(job.session.menu_path)) {
+      await appendLog({
+        run_id: job.run_id,
+        session_id: job.session.id,
+        job_id: job.job_id,
+        level: 'warn',
+        message: `Menu path "${job.session.menu_path}" matched none of the ${menus.length} menu item(s) at ${page.url()} `
+          + '— not falling back to unrelated menus; trying direct navigation instead.',
+      }).catch(() => {});
+    }
 
     // If still no menus, try direct URL from menu_path + capture each page
     let actionOrdinal = 3;
@@ -215,13 +244,28 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       }
     }
 
-    const visitLimit = Math.max(4, job.session.expected_screens || 4);
+    const visitBudget = computeVisitBudget({
+      expectedScreens: job.session.expected_screens,
+      matchedCount: targets.length,
+      safetyMax: config.maxScreensPerSession,
+    });
+    const { visitLimit } = visitBudget;
+    estimatedScreens = visitBudget.estimated;
     await appendLog({
       run_id: job.run_id,
       session_id: job.session.id,
       job_id: job.job_id,
-      message: `Found ${menus.length} menu item(s); visiting up to ${Math.min(targets.length, visitLimit)} for this session`,
+      message: `Visit budget: estimated_screens=${estimatedScreens}, matched_menus=${targets.length}, visit_limit=${visitLimit} (safety_max=${config.maxScreensPerSession})`,
     }).catch(() => {});
+    if (visitBudget.truncated) {
+      await appendLog({
+        run_id: job.run_id,
+        session_id: job.session.id,
+        job_id: job.job_id,
+        level: 'warn',
+        message: `Matched menus truncated by safety max: matched_menus=${targets.length}, visit_limit=${visitLimit}, safety_max=${config.maxScreensPerSession}`,
+      }).catch(() => {});
+    }
 
     const attemptedLabels = new Set<string>();
     while (attemptedLabels.size < visitLimit && !appContext.skipped) {
@@ -288,7 +332,16 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       }
     }
 
-    if (screensObserved <= 2 && targets.length === 0) {
+    if (targets.length === 0 && isSpecificMenuPath(job.session.menu_path)) {
+      await appendLog({
+        run_id: job.run_id,
+        session_id: job.session.id,
+        job_id: job.job_id,
+        level: 'warn',
+        message: `Session scope "${job.session.menu_path}" was never reached (no matching menu and no working direct URL) `
+          + `on ${page.url()} — reporting no coverage for it instead of substituting unrelated menus.`,
+      }).catch(() => {});
+    } else if (screensObserved <= 2 && targets.length === 0) {
       await appendLog({
         run_id: job.run_id,
         session_id: job.session.id,
@@ -326,6 +379,16 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     networkSink.detach();
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
+  }
+
+  if (screensObserved < estimatedScreens) {
+    await appendLog({
+      run_id: job.run_id,
+      session_id: job.session.id,
+      job_id: job.job_id,
+      level: 'warn',
+      message: `Coverage below planning estimate: screens_observed=${screensObserved}, estimated_screens=${estimatedScreens}`,
+    }).catch(() => {});
   }
 
   // Gap detection once at end of session against the full inventory.
@@ -484,6 +547,59 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   };
 }
 
+/**
+ * Post-login gate: pull the session onto profile.base_url and fail the session
+ * when it is still on another product host. Without this, a Books-biased "Jump
+ * To" turns an HRMS run into a pile of Books screenshots that look successful.
+ */
+async function enforceProductHost(page: Page, job: Job): Promise<void> {
+  const baseUrl = (job.profile.base_url || '').trim();
+  if (!baseUrl) return;
+  const allowedDomains = job.profile.allowed_domains;
+
+  const landed = evaluateHostGuard({ currentUrl: page.url(), baseUrl, allowedDomains });
+  if (landed.ok) return;
+
+  await appendLog({
+    run_id: job.run_id,
+    session_id: job.session.id,
+    job_id: job.job_id,
+    level: 'warn',
+    message: `Post-login host "${landed.actualHost || page.url()}" is not the profile host `
+      + `"${landed.expectedHost}" — navigating to ${baseUrl}`,
+  }).catch(() => {});
+
+  try {
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
+    await sleep(800);
+  } catch (err) {
+    await appendLog({
+      run_id: job.run_id,
+      session_id: job.session.id,
+      job_id: job.job_id,
+      level: 'warn',
+      message: `Force-navigation to ${baseUrl} failed: ${(err as Error).message}`,
+    }).catch(() => {});
+  }
+
+  const settled = evaluateHostGuard({ currentUrl: page.url(), baseUrl, allowedDomains });
+  if (settled.ok) {
+    await appendLog({
+      run_id: job.run_id,
+      session_id: job.session.id,
+      job_id: job.job_id,
+      message: `Recovered onto product host ${settled.actualHost} @ ${page.url()}`,
+    }).catch(() => {});
+    return;
+  }
+
+  throw new Error(
+    `${settled.message} (profile "${job.profile.profile_name}", product "${job.profile.product_name}", `
+    + `current url ${page.url()}). Check the login "Jump To" product for this profile.`,
+  );
+}
+
 async function observeAndPersist(ctx: ObserveCtx, label: string): Promise<void> {
   const { job, page, reportsDir, screenshotsDir, allUx, allInventory, screenshots } = ctx;
   const meta = await scanPage(page);
@@ -571,10 +687,23 @@ function keywordMenusForSession(menus: MenuItem[], job: Job): MenuItem[] {
   });
 }
 
+/** A session scoped to a concrete area (e.g. "/leave"), not a whole-app sweep. */
+function isSpecificMenuPath(menuPath: string | null | undefined): boolean {
+  const raw = (menuPath || '').trim().toLowerCase();
+  if (!raw) return false;
+  return raw !== '/' && raw !== '*' && raw !== '/menu/*';
+}
+
 function selectMenuTargets(menus: MenuItem[], job: Job): MenuItem[] {
   let targets = filterMenusForSession(menus, job);
   if (menus.length > 0 && targets.length === 0) targets = keywordMenusForSession(menus, job);
-  if (menus.length > 0 && targets.length === 0) targets = menus;
+  if (menus.length > 0 && targets.length === 0) {
+    // A specific menu_path that matches nothing usually means we are in the
+    // wrong app; visiting every menu would report unrelated coverage as if the
+    // session had succeeded. Leave it empty so direct navigation runs instead.
+    if (isSpecificMenuPath(job.session.menu_path)) return [];
+    targets = menus;
+  }
 
   const rawPath = (job.session.menu_path || '').trim().toLowerCase();
   const broadLandingSession = !rawPath || rawPath === '/' || rawPath === '*' || rawPath === '/menu/*'

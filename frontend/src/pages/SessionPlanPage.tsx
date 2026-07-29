@@ -177,13 +177,17 @@ export function SessionPlanPage() {
           <input className="input" placeholder="Name" value={addForm.name} onChange={(e) => setAddForm({ ...addForm, name: e.target.value })} />
           <input className="input font-mono text-xs" placeholder="Menu path" value={addForm.menu_path} onChange={(e) => setAddForm({ ...addForm, menu_path: e.target.value })} />
           <textarea className="input" placeholder="Description" rows={2} value={addForm.description} onChange={(e) => setAddForm({ ...addForm, description: e.target.value })} />
-          <input
-            className="input w-32"
-            type="number"
-            min={1}
-            value={addForm.expected_screens}
-            onChange={(e) => setAddForm({ ...addForm, expected_screens: Number(e.target.value) || 1 })}
-          />
+          <label className="block text-sm">
+            <span className="font-medium">Est. screens</span>
+            <input
+              className="input w-32 mt-1"
+              type="number"
+              min={1}
+              value={addForm.expected_screens}
+              onChange={(e) => setAddForm({ ...addForm, expected_screens: Number(e.target.value) || 1 })}
+            />
+          </label>
+          <div className="text-xs text-ink-500">Planning estimate only — the worker visits discovered menus up to a safety max.</div>
           <button
             className="btn-primary"
             disabled={!addForm.name.trim() || addSessionMut.isPending}
@@ -207,13 +211,17 @@ export function SessionPlanPage() {
                   <input className="input" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
                   <input className="input font-mono text-xs" value={editForm.menu_path} onChange={(e) => setEditForm({ ...editForm, menu_path: e.target.value })} />
                   <textarea className="input" rows={2} value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
-                  <input
-                    className="input w-32"
-                    type="number"
-                    min={1}
-                    value={editForm.expected_screens}
-                    onChange={(e) => setEditForm({ ...editForm, expected_screens: Number(e.target.value) || 1 })}
-                  />
+                  <label className="block text-sm">
+                    <span className="font-medium">Est. screens</span>
+                    <input
+                      className="input w-32 mt-1"
+                      type="number"
+                      min={1}
+                      value={editForm.expected_screens}
+                      onChange={(e) => setEditForm({ ...editForm, expected_screens: Number(e.target.value) || 1 })}
+                    />
+                  </label>
+                  <div className="text-xs text-ink-500">Planning estimate only — the worker visits discovered menus up to a safety max.</div>
                   <label className="flex items-center gap-2 text-sm">
                     <input
                       type="checkbox"
@@ -239,7 +247,7 @@ export function SessionPlanPage() {
                       {sessionActions(s).some((action) => ['upload_file', 'import_file'].includes(action)) && (
                         <span className="badge-warning">File I/O requires safe demo</span>
                       )}
-                      <span className="badge-neutral">{s.expected_screens} screens</span>
+                      <span className="badge-neutral">Est. screens: {s.expected_screens}</span>
                     </div>
                   </div>
                   {s.menu_path && <div className="text-xs text-ink-500 font-mono">{s.menu_path}</div>}

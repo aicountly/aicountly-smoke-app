@@ -95,6 +95,7 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
     completed_at: input.completedAt,
     status: 'done',
     screens_observed: input.screensObserved,
+    estimated_screens: session.expected_screens,
     inventory_count: input.inventoryCount,
     ux_issues: input.uxIssues,
     feature_gaps: input.featureGaps,
@@ -128,6 +129,7 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
     severity_summary: sevSummary,
     metrics: {
       screens_observed: input.screensObserved,
+      estimated_screens: session.expected_screens,
       inventory_count: input.inventoryCount,
       ux_issues: input.uxIssues.length,
       feature_gaps: input.featureGaps.length,
@@ -182,6 +184,7 @@ export function renderSessionHtml(p: {
   environment: string;
   status: string;
   screens_observed: number;
+  estimated_screens: number;
   inventory_count: number;
   severity_summary: SeveritySummary;
   ux_issues: UxIssue[];
@@ -252,7 +255,7 @@ details{margin-top:14px}summary{cursor:pointer;font-weight:650}pre{white-space:p
 <p><strong>Product:</strong> ${esc(p.product_name)} &middot; <strong>Env:</strong> ${esc(p.environment)} &middot; <strong>Status:</strong> ${esc(p.status)}<br>
 <strong>Menu path:</strong> ${esc(p.menu_path)}</p>
 <div class="grid">
-  <div class="card"><div>Screens Observed</div><div class="v">${p.screens_observed}</div></div>
+  <div class="card"><div>Screens</div><div class="v">Observed ${p.screens_observed} (est. ${p.estimated_screens})</div></div>
   <div class="card"><div>UI items catalogued</div><div class="v">${p.inventory_count}</div></div>
   <div class="card"><div>Critical UX</div><div class="v">${p.severity_summary.critical}</div></div>
   <div class="card"><div>High UX</div><div class="v">${p.severity_summary.high}</div></div>

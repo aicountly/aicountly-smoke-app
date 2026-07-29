@@ -14,6 +14,7 @@ test('session HTML keeps recommendations readable and links visual evidence', ()
     environment: 'staging',
     status: 'done',
     screens_observed: 1,
+    estimated_screens: 4,
     inventory_count: 2,
     severity_summary: { critical: 0, high: 1, medium: 0, low: 0, suggestion: 1 },
     ux_issues: [{
@@ -63,6 +64,7 @@ test('session HTML keeps recommendations readable and links visual evidence', ()
   assert.match(html, /Visual mockup/);
   assert.match(html, /#attendance-grid/);
   assert.match(html, /class="ribbon">Validate first/);
+  assert.match(html, /Observed 1 \(est\. 4\)/);
 });
 
 test('sample report templates retain readability contract markers', () => {

@@ -1,5 +1,6 @@
 import type { Locator, Page } from 'playwright';
 import { decryptCredential, type ProfileRow } from '../backend.js';
+import { buildJumpPlan, pickJumpTarget } from './jumpTargets.js';
 
 /**
  * AICOUNTLY login is multi-step:
@@ -69,7 +70,7 @@ async function aicountlyLogin(page: Page, profile: ProfileRow, password: string)
     throw new Error(
       'Password step did not appear after submitting email/username. '
       + 'Usually Jump To was not selected, or the account hit OTP/2FA. '
-      + 'Ensure worker login.ts selects #jumptoe (Smart Books) and PM2 was restarted.',
+      + 'Ensure worker login.ts selects #jumptoe for this profile\'s product and PM2 was restarted.',
     );
   }
 
@@ -109,7 +110,8 @@ async function aicountlyLogin(page: Page, profile: ProfileRow, password: string)
 
 /**
  * AICountly login requires a "Jump To" product destination (Smart Books, ERP, etc.).
- * Prefer SMOKE_JUMP_TO / profile product, then accounting products, else first real option.
+ * The destination decides which product host you land on, so it is chosen
+ * product-first from the profile's product_name — never by dropdown order.
  */
 async function selectJumpTo(page: Page, profile: ProfileRow): Promise<void> {
   const select = await findJumpToSelect(page);
@@ -131,24 +133,28 @@ async function selectJumpTo(page: Page, profile: ProfileRow): Promise<void> {
     })),
   );
 
-  const usable = options.filter((o) => {
-    const v = (o.value || '').trim();
-    const l = (o.label || '').trim();
-    if (!v && !l) return false;
-    if (/^select|^choose|^jump|^--|^\s*$/i.test(l)) return false;
-    if (/^select|^choose|^jump|^--$/i.test(v)) return false;
-    return true;
-  });
-
-  if (usable.length === 0) {
-    throw new Error('Login form: Jump To dropdown has no selectable products.');
+  const plan = buildJumpPlan(profile.product_name || '');
+  for (const warning of plan.warnings) {
+    console.warn(`[smoke-worker] Jump To: ${warning}`);
   }
 
-  const preferred = preferredJumpTargets(profile);
-  const picked =
-    usable.find((o) => preferred.some((p) => matchesJump(o.label, o.value, p)))
-    || usable.find((o) => /smart\s*books|books|erp/i.test(`${o.label} ${o.value}`))
-    || usable[0];
+  const pick = pickJumpTarget(options, plan);
+  if (!pick) {
+    throw new Error('Login form: Jump To dropdown has no selectable products.');
+  }
+  const picked = pick.option;
+
+  console.log(
+    `[smoke-worker] Jump To: product="${plan.product || '(none)'}" → "${picked.label}" `
+    + `(value="${picked.value}", match=${pick.source}${pick.matchedPreference ? `:${pick.matchedPreference}` : ''}, `
+    + `preferred=[${plan.preferred.join(', ')}])`,
+  );
+  if (pick.source !== 'preferred' && plan.product) {
+    console.warn(
+      `[smoke-worker] Jump To: no option matched product "${plan.product}"; `
+      + `fell back to "${picked.label}". Available: ${options.map((o) => o.label).filter(Boolean).join(' | ')}`,
+    );
+  }
 
   // Prefer label match for React/select2; fall back to value.
   try {
@@ -174,7 +180,8 @@ async function selectJumpTo(page: Page, profile: ProfileRow): Promise<void> {
   const after = await select.inputValue().catch(() => '');
   if (!after || /^select|^choose|^jump|^--$/i.test(after)) {
     throw new Error(
-      `Login form: could not select Jump To product (tried "${picked.label}"). Set SMOKE_JUMP_TO env if needed.`,
+      `Login form: could not select Jump To product (tried "${picked.label}" for product "${plan.product || 'unknown'}"). `
+      + `Set SMOKE_JUMP_TO_${(plan.product || 'PRODUCT').toUpperCase().replace(/[^A-Z0-9]+/g, '_')} if the label differs on this tenant.`,
     );
   }
 }
@@ -218,29 +225,6 @@ async function findJumpToSelect(page: Page): Promise<Locator | null> {
     }
   }
   return null;
-}
-
-function preferredJumpTargets(profile: ProfileRow): string[] {
-  const env = (process.env.SMOKE_JUMP_TO || '').trim();
-  const product = (profile.product_name || '').trim();
-  const out: string[] = [];
-  if (env) out.push(env);
-  if (product) out.push(product);
-  // Our People ESS is provisioned from HRMS; Jump To on my.aicountly.com is "hrms".
-  if (/^ourpeople$/i.test(product)) out.push('HRMS', 'hrms');
-  // Accounting / books smoke sessions (Sales, Invoices, GST, …)
-  out.push('Smart Books', 'Books', 'ERP', 'ERP (Beta)', 'ERP 3.0', 'ERP 1.0');
-  return out;
-}
-
-function matchesJump(label: string, value: string, preferred: string): boolean {
-  const hay = `${label} ${value}`.toLowerCase().replace(/\s+/g, ' ');
-  const needle = preferred.toLowerCase().replace(/\s+/g, ' ').trim();
-  if (!needle) return false;
-  if (hay.includes(needle)) return true;
-  // "Smart Books" ↔ "smartbooks"
-  const compact = (s: string) => s.replace(/[^a-z0-9]/g, '');
-  return compact(hay).includes(compact(needle));
 }
 
 async function findIdentityField(page: Page): Promise<Locator | null> {
