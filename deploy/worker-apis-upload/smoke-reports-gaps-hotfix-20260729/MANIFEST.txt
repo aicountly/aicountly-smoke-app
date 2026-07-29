@@ -1,0 +1,14 @@
+smoke-reports-gaps-hotfix-20260729
+
+SMOKE API (smoke.aicountly.org):
+- app/Config/Routes.php
+- app/Controllers/WorkerController.php      (+ GET /v1/worker/competitors)
+- app/Controllers/ReportsController.php     (embed PNG data URIs in report HTML)
+- app/Services/Reports/SessionReportBuilder.php
+- samples/reports/session.html.tpl
+
+WORKER (worker.apis.aicountly.com):
+- portals/smoke/runSession.ts
+- portals/smoke/reporter/sessionReportBuilder.ts
+- portals/smoke/reviewer/featureGapEngine.ts
+- portals/smoke/reviewer/competitorComparison.ts
