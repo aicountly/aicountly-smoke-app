@@ -1,0 +1,5 @@
+smoke-scanner-hotfix-20260729
+- portals/smoke/scanner/menuScanner.ts   (string page.evaluate — fixes __name)
+- portals/smoke/scanner/pageScanner.ts
+- portals/smoke/scanner/uiInventory.ts
+- portals/smoke/runSession.ts            (__name polyfill via addInitScript)
