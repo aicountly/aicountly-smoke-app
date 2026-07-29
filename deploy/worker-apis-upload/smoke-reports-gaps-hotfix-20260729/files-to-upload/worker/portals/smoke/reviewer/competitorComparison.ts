@@ -27,7 +27,9 @@ JSON in the same schema you receive.`;
     });
     const final = r.final as { gaps?: FeatureGap[]; feature_gaps?: FeatureGap[] } | FeatureGap[] | null;
     // Never replace heuristics with an empty AI payload (common when brain is deterministic / unconfigured).
-    if (Array.isArray(final) && final.length > 0) return final;
+    if (Array.isArray(final)) {
+      return final.length > 0 ? final : gaps;
+    }
     if (final && Array.isArray(final.gaps) && final.gaps.length > 0) return final.gaps;
     if (final && Array.isArray(final.feature_gaps) && final.feature_gaps.length > 0) return final.feature_gaps;
     return gaps;
