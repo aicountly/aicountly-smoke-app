@@ -40,6 +40,8 @@ export type AskDecisionInput = {
   screenshotPath?: string;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  /** Set after a remembered choice failed, so the operator is asked again. */
+  ignoreMemory?: boolean;
 };
 
 type BrainDecision = {
@@ -71,10 +73,12 @@ const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 export async function askOrRecallDecision(input: AskDecisionInput): Promise<DecisionChoice> {
   if (input.options.length === 0) throw new Error('A navigation decision requires at least one option.');
 
-  const memory = await recallDecision(input.job, input.situationKey).catch(async (error: unknown) => {
-    await log(input.job, `Decision memory lookup failed: ${errorMessage(error)}`, 'warn');
-    return null;
-  });
+  const memory = input.ignoreMemory
+    ? null
+    : await recallDecision(input.job, input.situationKey).catch(async (error: unknown) => {
+      await log(input.job, `Decision memory lookup failed: ${errorMessage(error)}`, 'warn');
+      return null;
+    });
   if (memory) {
     const option = resolveOption(
       memory.payload?.option,

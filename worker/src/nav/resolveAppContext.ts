@@ -109,7 +109,7 @@ async function decide(
   const screenshotPath = resolveOptions.screenshotsDir
     ? await captureScreenshot(page, resolveOptions.screenshotsDir, `decision-${situationKey}`).catch(() => undefined)
     : undefined;
-  const choice = await askOrRecallDecision({
+  const ask = (ignoreMemory: boolean) => askOrRecallDecision({
     job,
     page,
     situationKey,
@@ -117,11 +117,27 @@ async function decide(
     options,
     context,
     screenshotPath,
+    ignoreMemory,
   });
-  const result = await performNavAction(page, job, choice, {
+  const act = (choice: Awaited<ReturnType<typeof askOrRecallDecision>>) => performNavAction(page, job, choice, {
     companyName: choice.option.company_name,
+    screenshotsDir: resolveOptions.screenshotsDir,
   });
-  return { detected: true, ...result };
+
+  const choice = await ask(false);
+  try {
+    return { detected: true, ...await act(choice) };
+  } catch (error) {
+    // A remembered choice that no longer works would otherwise replay and fail
+    // identically on every retry, burning the run without ever asking anyone.
+    if (choice.source !== 'memory') throw error;
+    await log(
+      job,
+      `Remembered choice "${choice.option.label}" failed: ${errorMessage(error)} — asking again.`,
+      'warn',
+    );
+    return { detected: true, ...await act(await ask(true)) };
+  }
 }
 
 type CompanyCard = {
@@ -155,11 +171,12 @@ function pickCompany(cards: CompanyCard[], preferred?: string): CompanyCard {
   return cards.find((card) => card.starred) ?? cards[0];
 }
 
-async function log(job: Job, message: string): Promise<void> {
+async function log(job: Job, message: string, level: 'info' | 'warn' = 'info'): Promise<void> {
   await appendLog({
     run_id: job.run_id,
     session_id: job.session.id,
     job_id: job.job_id,
+    level,
     message,
   }).catch(() => {});
 }

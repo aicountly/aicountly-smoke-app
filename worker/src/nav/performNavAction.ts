@@ -1,5 +1,6 @@
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import type { Job } from '../backend.js';
+import { captureScreenshot } from '../scanner/screenshotCapture.js';
 import { evaluateClick } from '../utils/safeActionGuard.js';
 import { dismissOverlays } from '../utils/dismissOverlays.js';
 import type { DecisionChoice } from './askDecision.js';
@@ -7,6 +8,7 @@ import type { DecisionChoice } from './askDecision.js';
 export type NavActionContext = {
   href?: string;
   companyName?: string;
+  screenshotsDir?: string;
 };
 
 export type NavActionResult = {
@@ -57,7 +59,11 @@ export async function performNavAction(
     if (!choice.explicitApproval || (choice.source !== 'user' && choice.source !== 'memory')) {
       throw new Error('Creating a company requires an explicit user or remembered decision.');
     }
-    await createCompany(page, option.company_name || context.companyName || choice.freeText);
+    await createCompany(
+      page,
+      option.company_name || context.companyName || choice.freeText,
+      context.screenshotsDir,
+    );
     return { navigated: true, rescan: true, skipped: false };
   }
 
@@ -112,24 +118,161 @@ async function openCompany(page: Page, preferred?: string): Promise<void> {
   throw new Error('No visible company could be opened.');
 }
 
-async function createCompany(page: Page, requestedName?: string): Promise<void> {
+const NAME_FIELD_TEXT = /compan|organi[sz]ation|business|firm|entity|name/i;
+const CREATE_COMPANY_TEXT = /(create|add|new|register|setup|set up)[^a-z]*(compan|organi[sz]ation|business|firm|entity)/i;
+const DIALOG_SELECTOR = '[role="dialog"], dialog, [class*="modal" i], [class*="drawer" i], [class*="dialog" i]';
+
+async function createCompany(page: Page, requestedName?: string, screenshotsDir?: string): Promise<void> {
   const name = requestedName?.trim() || process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
-  const create = page.getByRole('button', { name: /create|add|new/i }).filter({ visible: true }).first();
-  if (!await create.count()) throw new Error('No create-company control was found.');
-  await create.click({ timeout: 8_000 });
 
-  const input = page.getByRole('textbox', { name: /company|organisation|organization|business.*name|name/i })
-    .filter({ visible: true })
-    .first();
-  if (!await input.count()) throw new Error('No company-name field was found after opening create company.');
-  await input.fill(name);
+  // Empty-state pages sometimes render the form inline, with no control to click.
+  let field = await findCompanyNameField(page, 1_500);
+  if (!field) {
+    await openCreateCompanyForm(page, screenshotsDir);
+    field = await findCompanyNameField(page, 12_000);
+  }
+  if (!field) {
+    throw new Error(await describeFailure(page, screenshotsDir,
+      'No company-name field was found after opening create company.'));
+  }
 
-  const submit = page.getByRole('button', { name: /create|continue|add company|save/i })
-    .filter({ visible: true })
-    .first();
-  if (!await submit.count()) throw new Error('No create-company submit control was found.');
+  await field.fill(name).catch(() => {});
+  if ((await field.inputValue().catch(() => '')).trim() !== name) {
+    // Controlled React inputs occasionally ignore fill(); real keystrokes dispatch
+    // the input events their state depends on.
+    await field.click({ timeout: 5_000 }).catch(() => {});
+    await field.press('ControlOrMeta+a').catch(() => {});
+    await field.pressSequentially(name, { delay: 25, timeout: 10_000 });
+  }
+
+  const scope = await dialogOrPage(page);
+  const submit = await firstVisible([
+    () => scope.getByRole('button', { name: /^(create|save|continue|submit|add|next|done)\b/i }),
+    () => scope.getByRole('button', { name: CREATE_COMPANY_TEXT }),
+    () => scope.locator('button[type="submit"], input[type="submit"]'),
+  ]);
+  if (!submit) {
+    throw new Error(await describeFailure(page, screenshotsDir,
+      `No create-company submit control was found (name field was filled with "${name}").`));
+  }
   await submit.click({ timeout: 8_000 });
   await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
+}
+
+async function openCreateCompanyForm(page: Page, screenshotsDir?: string): Promise<void> {
+  // Company-specific wording first: a bare /create|add|new/ match happily picks up
+  // an unrelated toolbar or menu control and leaves the page where it was.
+  const create = await firstVisible([
+    () => page.getByRole('button', { name: CREATE_COMPANY_TEXT }),
+    () => page.getByRole('link', { name: CREATE_COMPANY_TEXT }),
+    () => page.locator('[role="button"]').filter({ hasText: CREATE_COMPANY_TEXT }),
+    () => page.getByRole('button', { name: /^(create|add|new)\b/i }),
+    () => page.getByRole('link', { name: /^(create|add|new)\b/i }),
+  ]);
+  if (!create) {
+    throw new Error(await describeFailure(page, screenshotsDir, 'No create-company control was found.'));
+  }
+  await create.click({ timeout: 8_000 });
+  await page.waitForSelector(`${DIALOG_SELECTOR}, form`, { state: 'visible', timeout: 10_000 }).catch(() => {});
+}
+
+/** Prefer a visible dialog so a search box behind the modal is never a candidate. */
+async function dialogOrPage(page: Page): Promise<Page | Locator> {
+  const dialog = page.locator(DIALOG_SELECTOR).filter({ visible: true }).first();
+  return await dialog.count().catch(() => 0) ? dialog : page;
+}
+
+async function findCompanyNameField(page: Page, timeoutMs: number): Promise<Locator | null> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const scoped = await dialogOrPage(page);
+    // Search the dialog first, then the whole page in case the form is inline.
+    const scopes: Array<Page | Locator> = scoped === page ? [page] : [scoped, page];
+    for (const scope of scopes) {
+      const field = await firstVisible([
+        () => scope.getByRole('textbox', { name: NAME_FIELD_TEXT }),
+        () => scope.getByLabel(NAME_FIELD_TEXT),
+        () => scope.getByPlaceholder(NAME_FIELD_TEXT),
+        () => scope.locator(
+          'input[name*="compan" i], input[id*="compan" i], input[formcontrolname*="compan" i],'
+          + 'input[name*="organi" i], input[id*="organi" i]',
+        ),
+        () => scope.locator('input[name*="name" i], input[id*="name" i], input[formcontrolname*="name" i]'),
+        // Last resort: the first plain text box that is clearly not a search field.
+        () => scope.locator(
+          'input[type="text"]:not([name*="search" i]):not([id*="search" i]):not([placeholder*="search" i]),'
+          + 'input:not([type]):not([name*="search" i]):not([id*="search" i])',
+        ),
+      ], { editable: true });
+      if (field) return field;
+    }
+    if (Date.now() >= deadline) return null;
+    await page.waitForTimeout(250);
+  }
+}
+
+async function firstVisible(
+  builders: Array<() => Locator>,
+  opts: { editable?: boolean } = {},
+): Promise<Locator | null> {
+  for (const build of builders) {
+    let candidate: Locator;
+    try {
+      candidate = build().filter({ visible: true }).first();
+    } catch {
+      continue; // one unsupported strategy must not kill the rest
+    }
+    if (!await candidate.count().catch(() => 0)) continue;
+    if (opts.editable && !await candidate.isEditable({ timeout: 500 }).catch(() => false)) continue;
+    return candidate;
+  }
+  return null;
+}
+
+/**
+ * The worker cannot see the tenant's DOM, so a bare "not found" costs another
+ * whole run to diagnose. Attach what was actually on screen instead.
+ */
+async function describeFailure(page: Page, screenshotsDir: string | undefined, message: string): Promise<string> {
+  const parts = [message, `url=${page.url()}`];
+  const inventory = await page.evaluate(`(() => {
+    const visible = (el) => {
+      const r = el.getBoundingClientRect();
+      const s = window.getComputedStyle(el);
+      return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+    };
+    const attr = (el, n) => (el.getAttribute(n) || '').slice(0, 40);
+    const fields = [...document.querySelectorAll('input, textarea')]
+      .filter(visible)
+      .slice(0, 12)
+      .map((el) => [
+        el.tagName.toLowerCase(),
+        'type=' + (attr(el, 'type') || 'text'),
+        attr(el, 'name') && 'name=' + attr(el, 'name'),
+        attr(el, 'id') && 'id=' + attr(el, 'id'),
+        attr(el, 'placeholder') && 'placeholder=' + attr(el, 'placeholder'),
+        attr(el, 'aria-label') && 'aria-label=' + attr(el, 'aria-label'),
+      ].filter(Boolean).join(' '));
+    const buttons = [...document.querySelectorAll('button, [role="button"], a')]
+      .filter(visible)
+      .map((el) => (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40))
+      .filter(Boolean)
+      .slice(0, 15);
+    const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible).length;
+    return { fields, buttons, dialogs };
+  })()`) as { fields: string[]; buttons: string[]; dialogs: number };
+
+  parts.push(`visible_dialogs=${inventory.dialogs}`);
+  parts.push(inventory.fields.length
+    ? `visible_fields=[${inventory.fields.join(' | ')}]`
+    : 'visible_fields=none');
+  parts.push(`visible_controls=[${inventory.buttons.join(' | ')}]`);
+
+  if (screenshotsDir) {
+    const shot = await captureScreenshot(page, screenshotsDir, 'create-company-failed').catch(() => undefined);
+    if (shot) parts.push(`screenshot=${shot}`);
+  }
+  return parts.join(' ');
 }
 
 function parseList(value: string | string[]): string[] {
