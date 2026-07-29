@@ -164,15 +164,38 @@ async function finishDecision(
   choice: Awaited<ReturnType<typeof askOrRecallDecision>>,
   act: (choice: Awaited<ReturnType<typeof askOrRecallDecision>>) => Promise<NavActionResult>,
 ): Promise<ResolveAppContextResult> {
+  const pickerUrl = page.url();
   if (choice.option.action === 'create_company') {
     await log(job, `Creating company "${choice.option.company_name || 'Smoke Test Co'}" (source=${choice.source})`);
   }
   const result = { detected: true as const, ...await act(choice) };
   if (choice.option.action === 'create_company') {
+    await returnToPicker(page, job, pickerUrl);
     await openCreatedCompanyIfListed(page, job, choice.option.company_name);
   }
   await assertWorkspaceReady(page, job, choice.option.action);
   return result;
+}
+
+/**
+ * Creating a company can hand off to a sibling app on another host. The session
+ * belongs to the product we logged into, so come back before opening the company.
+ */
+async function returnToPicker(page: Page, job: Job, pickerUrl: string): Promise<void> {
+  const current = hostOf(page.url());
+  const picker = hostOf(pickerUrl);
+  if (!current || !picker || current === picker) return;
+  await log(job, `Returning to ${picker} after creating the company on ${current}`);
+  await page.goto(pickerUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => {});
+  await page.waitForTimeout(1_000);
+}
+
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
 }
 
 async function openCreatedCompanyIfListed(page: Page, job: Job, preferred?: string): Promise<void> {
