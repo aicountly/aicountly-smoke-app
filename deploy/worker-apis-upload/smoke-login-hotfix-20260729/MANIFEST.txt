@@ -1,0 +1,5 @@
+smoke-login-hotfix-20260729
+- portals/smoke/auth/login.ts          (Jump To #jumptoe + clearer password-step errors)
+- portals/smoke/runSession.ts          (screenshot per action + fail if login stuck)
+- portals/smoke/scanner/menuScanner.ts (broader sidebar discovery)
+- portals/smoke/utils/safeActionGuard.ts
