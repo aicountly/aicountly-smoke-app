@@ -71,6 +71,7 @@ export function RunsPage() {
             <option value="queued">Queued</option>
             <option value="running">Running</option>
             <option value="completed">Completed</option>
+            <option value="blocked">Blocked (no coverage)</option>
             <option value="failed">Failed</option>
             <option value="cancelled">Cancelled</option>
           </select>
@@ -154,7 +155,7 @@ function pct(r: Run): number {
 function statusBadge(s: string): string {
   if (s === 'running') return 'info';
   if (s === 'failed') return 'danger';
-  if (s === 'cancelled') return 'warning';
+  if (s === 'cancelled' || s === 'blocked') return 'warning';
   if (s === 'completed') return 'brand';
   return 'neutral';
 }

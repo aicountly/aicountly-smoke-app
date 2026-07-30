@@ -38,6 +38,7 @@ import type { NetworkEvent } from './scanner/networkCapture.js';
 import { runFileIoScenarios, shouldRunFileIoSession } from './fileIo/fileIoEngine.js';
 import type { FileIoTestResult } from './fileIo/types.js';
 import { computeVisitBudget } from './utils/visitBudget.js';
+import { evaluateSessionCoverage } from './utils/sessionCoverage.js';
 
 const browserMap = { chromium, firefox, webkit } as const;
 
@@ -91,6 +92,10 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   const screenTitles: string[] = [];
   const screenCapturedAt: string[] = [];
   let screensObserved = 0;
+  // Screens reached under the session's own scope. Login and landing are captured
+  // by every session and prove nothing, so they are deliberately excluded.
+  let scopeScreens = 0;
+  let workspaceSkipped = false;
   let inventoryCount = 0;
   let fileIoResults: FileIoTestResult[] = [];
   let estimatedScreens = 0;
@@ -195,6 +200,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     }
 
     // Discover menus and visit session-relevant ones
+    workspaceSkipped = appContext.skipped;
     let menus = await scanMenus(page);
     let targets = appContext.skipped ? [] : selectMenuTargets(menus, job);
     if (!appContext.skipped && targets.length === 0 && menus.length > 0 && isSpecificMenuPath(job.session.menu_path)) {
@@ -225,6 +231,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
           const label = `${String(actionOrdinal).padStart(2, '0')}-direct-${slug(url)}`;
           actionOrdinal++;
           await observeAndPersist(ctx, label);
+          scopeScreens++;
           await appendLog({
             run_id: job.run_id,
             session_id: job.session.id,
@@ -328,6 +335,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
         const label = `${String(actionOrdinal).padStart(2, '0')}-menu-${slug(m.label)}`;
         actionOrdinal++;
         await observeAndPersist(ctx, label);
+        scopeScreens++;
         await appendLog({
           run_id: job.run_id,
           session_id: job.session.id,
@@ -399,6 +407,21 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     networkSink.detach();
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
+  }
+
+  const coverage = evaluateSessionCoverage({
+    scopeScreens,
+    menuPath: job.session.menu_path,
+    workspaceSkipped,
+  });
+  if (coverage.status === 'blocked') {
+    await appendLog({
+      run_id: job.run_id,
+      session_id: job.session.id,
+      job_id: job.job_id,
+      level: 'warn',
+      message: `No coverage for this session: ${coverage.reason}. Reporting it as blocked rather than passed.`,
+    }).catch(() => {});
   }
 
   if (screensObserved < estimatedScreens) {
@@ -552,6 +575,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     startedAt,
     completedAt,
     fileIoTests: fileIoResults,
+    coverage,
   });
 
   await finalizeIfLast(job.run.id);
@@ -559,7 +583,10 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   return {
     started_at: startedAt,
     completed_at: completedAt,
+    coverage: coverage.status,
+    coverage_reason: coverage.reason,
     screens_observed: screensObserved,
+    scope_screens: scopeScreens,
     inventory_count: inventoryCount,
     ux_issues: uxIssues.length,
     feature_gaps: enriched.length,

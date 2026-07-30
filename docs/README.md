@@ -310,6 +310,19 @@ stays recorded as `timed_out`, so the report shows it went unanswered.
 Set `SMOKE_AUTONOMOUS=false` to go back to parking the job and waiting up to 30
 minutes for an operator on every unexpected screen.
 
+### Sessions that covered nothing
+
+Every session captures a login form and a landing page before it does any work of
+its own, so neither is evidence of anything. A session that finishes with nothing
+past them reached none of its scope, and is recorded as `blocked` rather than
+`done`, with the reason on the session row and in its report. Nothing errored, so
+it is not `failed`; it simply tested nothing, and a green tick over an unobserved
+screen is the one result a smoke run must never produce.
+
+A run whose every session came back blocked is `blocked` too, and the feature-gap
+matrix and dashboard keep sourcing from the last genuinely covered run instead.
+Re-running a blocked session works exactly as it does for a failed one.
+
 ## 8. Run identifiers
 
 Every run gets a unique code: `SMOKE-RUN-YYYYMMDD-NNNN` (4-digit daily counter

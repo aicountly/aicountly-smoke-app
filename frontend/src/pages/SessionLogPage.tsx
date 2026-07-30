@@ -31,6 +31,7 @@ type SessionDetail = {
     job_status: string | null;
     attempts: number;
     last_error: string | null;
+    error_message: string | null;
   };
   logs: RunLog[];
   results: ScreenResult[];
@@ -176,7 +177,10 @@ export function SessionLogPage() {
           <h1 className="text-xl font-semibold mt-1 truncate">{sessionName}</h1>
           {data?.session && (
             <p className="text-xs text-ink-500 mt-0.5">
-              status <span className="badge-neutral">{data.session.status}</span>
+              status{' '}
+              <span className={data.session.status === 'blocked' ? 'badge-warning' : 'badge-neutral'}>
+                {data.session.status}
+              </span>
               {' '}&middot; job <span className="badge-neutral">{data.session.job_status ?? '—'}</span>
               {' '}&middot; attempts {data.session.attempts}
               {' '}&middot; {data.logs.length} log(s)
@@ -188,6 +192,12 @@ export function SessionLogPage() {
           Refresh
         </button>
       </div>
+
+      {data?.session.status === 'blocked' && data.session.error_message && (
+        <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 shrink-0">
+          This session finished without testing its scope: {data.session.error_message}
+        </div>
+      )}
 
       {data?.session.last_error && (
         <div className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 shrink-0">

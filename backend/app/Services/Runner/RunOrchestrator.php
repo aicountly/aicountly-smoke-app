@@ -180,18 +180,28 @@ class RunOrchestrator
             'updated_at' => $now,
         ]);
         $this->cancelPendingDecisionsForJob($jobId, $now);
+
+        // A session that reached none of its scope finished without testing
+        // anything. It did not fail — nothing errored — but calling it done would
+        // put a green tick over an unobserved screen, so it gets its own status.
+        $blocked = (string) ($payload['coverage'] ?? 'covered') === 'blocked';
+        $reason  = trim((string) ($payload['coverage_reason'] ?? ''));
+
         $db->table('smoke_sessions')->where('id', $job->session_id)->update([
-            'status'       => 'done',
-            'completed_at' => $now,
-            'updated_at'   => $now,
+            'status'        => $blocked ? 'blocked' : 'done',
+            'completed_at'  => $now,
+            'error_message' => $blocked ? mb_substr($reason, 0, 4000) : null,
+            'updated_at'    => $now,
         ]);
         Services::runLog()->append(
             (int) $job->run_id,
             (int) $job->session_id,
             $jobId,
             'worker',
-            'info',
-            'Session completed successfully',
+            $blocked ? 'warn' : 'info',
+            $blocked
+                ? 'Session finished but covered nothing' . ($reason !== '' ? ': ' . mb_substr($reason, 0, 500) : '')
+                : 'Session completed successfully',
         );
         $db->query('UPDATE smoke_observation_runs SET sessions_done = sessions_done + 1, updated_at = NOW() WHERE id = ?', [$job->run_id]);
         $this->finalizeRunIfDone((int) $job->run_id);
@@ -410,6 +420,25 @@ class RunOrchestrator
             return;
         }
         $finalStatus = ((int) $run->sessions_failed > 0 && (int) $run->sessions_done === 0) ? 'failed' : 'completed';
+
+        // A run whose every session covered nothing is not a pass, whatever the
+        // session count says. Surfacing it as completed is how an empty run gets
+        // mistaken for a clean one.
+        if ($finalStatus === 'completed' && $this->coveredSessionCount($runId) === 0) {
+            $finalStatus = 'blocked';
+            Services::runLog()->append(
+                $runId,
+                null,
+                null,
+                'system',
+                'warn',
+                sprintf(
+                    'Run %s observed no screen in scope in any session — reporting it as blocked, not completed.',
+                    $run->run_code,
+                ),
+            );
+        }
+
         $db->table('smoke_observation_runs')->where('id', $runId)->update([
             'status'       => $finalStatus,
             'completed_at' => date('Y-m-d H:i:s'),
@@ -428,6 +457,20 @@ class RunOrchestrator
         } catch (\Throwable $e) {
             log_message('error', 'FinalReportBuilder failed for run ' . $runId . ': ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Sessions of this run that finished having observed something in scope.
+     */
+    private function coveredSessionCount(int $runId): int
+    {
+        $db = Database::connect();
+
+        return $db->table('smoke_session_jobs j')
+            ->join('smoke_sessions s', 's.id = j.session_id')
+            ->where('j.run_id', $runId)
+            ->where('s.status', 'done')
+            ->countAllResults();
     }
 
     private function allocateRunCode(): string

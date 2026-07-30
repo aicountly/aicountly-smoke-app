@@ -6,6 +6,7 @@ import type { UxIssue } from '../reviewer/uxReviewEngine.js';
 import type { FeatureGap } from '../reviewer/featureGapEngine.js';
 import { buildCursorPromptPack, type CursorPromptContext } from './cursorPromptBuilder.js';
 import type { FileIoTestResult } from '../fileIo/types.js';
+import type { SessionCoverage } from '../utils/sessionCoverage.js';
 
 export type SessionDecision = {
   id?: number;
@@ -41,6 +42,7 @@ export type SessionReportInput = {
   fileIoTests?: FileIoTestResult[];
   startedAt: string;
   completedAt: string;
+  coverage?: SessionCoverage;
 };
 
 export type ScreenshotCard = {
@@ -93,7 +95,8 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
     environment: run.environment,
     started_at: input.startedAt,
     completed_at: input.completedAt,
-    status: 'done',
+    status: input.coverage?.status === 'blocked' ? 'blocked' : 'done',
+    coverage_reason: input.coverage?.reason ?? '',
     screens_observed: input.screensObserved,
     estimated_screens: session.expected_screens,
     inventory_count: input.inventoryCount,
@@ -183,6 +186,7 @@ export function renderSessionHtml(p: {
   product_name: string;
   environment: string;
   status: string;
+  coverage_reason?: string;
   screens_observed: number;
   estimated_screens: number;
   inventory_count: number;
@@ -250,10 +254,16 @@ details{margin-top:14px}summary{cursor:pointer;font-weight:650}pre{white-space:p
 .shot{margin:0;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#fff}
 .shot img{display:block;width:100%;border:1px solid #cbd5e1;border-radius:7px}
 .shot figcaption{margin-top:8px;overflow-wrap:anywhere;font-size:13px}
+.blocked{border:1px solid #f0c36d;background:#fdf6e3;border-radius:8px;padding:10px 12px}
 @media(max-width:760px){.grid{grid-template-columns:repeat(2,1fr)}.visual{grid-template-columns:1fr}}</style></head><body><main>
 <h1>${esc(p.run_code)} - ${esc(p.session_name)}</h1>
 <p><strong>Product:</strong> ${esc(p.product_name)} &middot; <strong>Env:</strong> ${esc(p.environment)} &middot; <strong>Status:</strong> ${esc(p.status)}<br>
 <strong>Menu path:</strong> ${esc(p.menu_path)}</p>
+${p.status === 'blocked'
+  ? `<p class="blocked"><strong>No coverage:</strong> this session never tested its scope${
+      p.coverage_reason ? ` — ${esc(p.coverage_reason)}` : ''
+    }. Treat the findings below as incomplete.</p>`
+  : ''}
 <div class="grid">
   <div class="card"><div>Screens</div><div class="v">Observed ${p.screens_observed} (est. ${p.estimated_screens})</div></div>
   <div class="card"><div>UI items catalogued</div><div class="v">${p.inventory_count}</div></div>

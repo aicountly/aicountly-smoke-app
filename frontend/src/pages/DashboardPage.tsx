@@ -18,6 +18,12 @@ const CARDS: Array<{ key: string; label: string }> = [
   { key: 'critical_ui_issues', label: 'Critical UI Issues' },
 ];
 
+function lastRunBadgeClass(status: string): string {
+  if (status === 'failed') return 'badge-danger';
+  if (status === 'blocked' || status === 'cancelled') return 'badge-warning';
+  return 'badge-brand';
+}
+
 export function DashboardPage() {
   const { data } = useQuery<DashboardSummary>({
     queryKey: ['dashboard'],
@@ -46,7 +52,10 @@ export function DashboardPage() {
           {data?.last_run ? (
             <div className="text-sm mt-2 space-y-1">
               <div className="font-mono">{data.last_run.run_code}</div>
-              <div>{data.last_run.product_name} &middot; <span className="badge-brand">{data.last_run.status}</span></div>
+              <div>
+                {data.last_run.product_name} &middot;{' '}
+                <span className={lastRunBadgeClass(data.last_run.status)}>{data.last_run.status}</span>
+              </div>
               <Link to="/runs" className="btn-secondary mt-2 inline-flex">View runs</Link>
             </div>
           ) : (

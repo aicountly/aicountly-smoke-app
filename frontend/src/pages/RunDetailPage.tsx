@@ -25,6 +25,7 @@ type SessionRow = {
   job_status: string | null;
   attempts: number;
   last_error: string | null;
+  error_message: string | null;
   leased_by: string | null;
 };
 
@@ -131,6 +132,21 @@ function gapModeLabel(mode: string): string {
   if (mode === 'validate_first') return 'validate first';
   if (mode === 'implement') return 'implement';
   return mode;
+}
+
+function runStatusBadgeClass(status: string): string {
+  if (status === 'failed') return 'badge-danger';
+  if (status === 'blocked' || status === 'cancelled') return 'badge-warning';
+  if (status === 'running' || status === 'queued') return 'badge-info';
+  return 'badge-brand';
+}
+
+/** A session that observed nothing in scope must not read like one that passed. */
+function sessionStatusBadgeClass(status: string): string {
+  if (status === 'failed') return 'badge-danger';
+  if (status === 'blocked') return 'badge-warning';
+  if (status === 'done') return 'badge-brand';
+  return 'badge-neutral';
 }
 
 function jobStatusBadgeClass(status: string | null): string {
@@ -346,7 +362,7 @@ export function RunDetailPage() {
           <h1 className="text-xl font-semibold font-mono">{data.data.run_code}</h1>
           <p className="text-sm text-ink-500">
             {data.data.product_name} &middot; {data.data.environment} &middot;{' '}
-            <span className="badge-brand">{data.data.status}</span>
+            <span className={runStatusBadgeClass(data.data.status)}>{data.data.status}</span>
             {' '}&middot; {data.data.sessions_done}/{data.data.sessions_total} done
           </p>
         </div>
@@ -514,7 +530,11 @@ pm2 logs aicountly-smoke-worker --lines 40`}
               <tr key={s.id} className="border-t border-ink-200">
                 <td className="px-4 py-2">{s.ordinal}</td>
                 <td>{s.name}</td>
-                <td><span className="badge-neutral">{s.status}</span></td>
+                <td>
+                  <span className={sessionStatusBadgeClass(s.status)} title={s.error_message ?? undefined}>
+                    {s.status}
+                  </span>
+                </td>
                 <td>
                   <span className={jobStatusBadgeClass(s.job_status)}>
                     {s.job_status ?? '—'}
@@ -522,7 +542,9 @@ pm2 logs aicountly-smoke-worker --lines 40`}
                 </td>
                 <td>{s.attempts}</td>
                 <td className="text-xs text-ink-500">{s.leased_by ?? '—'}</td>
-                <td className="text-xs text-red-700 truncate max-w-xs">{s.last_error ?? ''}</td>
+                <td className="text-xs text-red-700 truncate max-w-xs">
+                  {s.last_error ?? (s.status === 'blocked' ? s.error_message ?? '' : '')}
+                </td>
                 <td className="px-4 py-2 text-right whitespace-nowrap">
                   <Link
                     to={`/runs/${runId}/sessions/${s.id}`}

@@ -49,7 +49,8 @@ async function runOne(job: Job): Promise<void> {
       run_id: job.run_id,
       session_id: job.session.id,
       job_id: job.job_id,
-      message: `Finished session "${job.session.name}" — ${String(result.screens_observed ?? 0)} screens observed`,
+      message: `Finished session "${job.session.name}" — ${String(result.screens_observed ?? 0)} screens observed`
+        + (result.coverage === 'blocked' ? ', but blocked with no coverage of its scope' : ''),
     }).catch(() => {});
     console.log(`[smoke-worker] Completed job=${job.job_id}`);
   } catch (e) {
