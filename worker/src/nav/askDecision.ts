@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import { appendLog, backend, heartbeat, type Job } from '../backend.js';
 import { invokeBrain } from '../brain/ensemble.js';
+import { config } from '../config.js';
 
 export const NAV_ACTIONS = [
   'open_company',
@@ -26,7 +27,7 @@ export type DecisionOption = {
 export type DecisionChoice = {
   option: DecisionOption;
   freeText?: string;
-  source: 'memory' | 'user';
+  source: 'memory' | 'user' | 'auto';
   explicitApproval: true;
 };
 
@@ -86,7 +87,7 @@ export async function askOrRecallDecision(input: AskDecisionInput): Promise<Deci
       input.options,
     );
     if (option) {
-      await persistMemoryDecision(input, option, memory.payload?.free_text ?? undefined).catch(async (error: unknown) => {
+      await persistPreAnsweredDecision(input, option, 'memory', memory.payload?.free_text ?? undefined).catch(async (error: unknown) => {
         await log(input.job, `Could not audit remembered decision: ${errorMessage(error)}`, 'warn');
       });
       await log(input.job, `Reused remembered choice: ${option.label}`);
@@ -101,6 +102,27 @@ export async function askOrRecallDecision(input: AskDecisionInput): Promise<Deci
   }
 
   const proposed = await proposeDecision(input);
+
+  // A parked job is a dead run: nobody is watching a smoke worker at 2am, and the
+  // 30-minute wait below ends in a failed session either way. When autonomy is on
+  // we take the recommended route and record it, so the run keeps moving and the
+  // audit trail still says exactly what was chosen and why.
+  if (config.autonomous) {
+    const auto = autonomousOption(proposed);
+    if (auto) {
+      await persistPreAnsweredDecision(input, auto, 'auto').catch(async (error: unknown) => {
+        await log(input.job, `Could not audit autonomous decision: ${errorMessage(error)}`, 'warn');
+      });
+      await log(input.job, `Decided "${auto.label}" without asking (autonomous mode) for ${input.situationKey}`);
+      return { option: auto, source: 'auto', explicitApproval: true };
+    }
+    await log(
+      input.job,
+      `No safe autonomous option for ${input.situationKey}; asking an operator.`,
+      'warn',
+    );
+  }
+
   const response = await backend.post<{ data: DecisionRow }>('/worker/decisions', {
     run_id: input.job.run_id,
     session_id: input.job.session.id,
@@ -163,9 +185,14 @@ export async function askOrRecallDecision(input: AskDecisionInput): Promise<Deci
   throw new Error(`Timed out waiting ${Math.round(timeoutMs / 60_000)} minutes for decision ${decisionId}.`);
 }
 
-async function persistMemoryDecision(
+/**
+ * Ends the run's own decisions in the same table an operator would answer, so a
+ * remembered or autonomous choice is as auditable as a human one.
+ */
+async function persistPreAnsweredDecision(
   input: AskDecisionInput,
   option: DecisionOption,
+  source: 'memory' | 'auto',
   freeText?: string,
 ): Promise<void> {
   await backend.post<{ data: DecisionRow }>('/worker/decisions', {
@@ -175,17 +202,29 @@ async function persistMemoryDecision(
     situation_key: input.situationKey,
     question: input.question,
     options: input.options,
-    source: 'memory',
+    source,
     selected_option: option.id,
     ...(freeText ? { free_text: freeText } : {}),
     context: {
       ...(input.context ?? {}),
       url: input.page.url(),
       title: await input.page.title().catch(() => ''),
-      source: 'memory',
+      source,
     },
     ...(input.screenshotPath ? { screenshot_path: input.screenshotPath } : {}),
   });
+}
+
+/**
+ * The option to take without an operator. Aborting a session is never something
+ * the run decides for itself, and neither is anything the safety guard would have
+ * asked a human to approve on a live target.
+ */
+function autonomousOption(proposed: BrainDecision): DecisionOption | null {
+  const usable = proposed.options.filter((option) => option.action !== 'abort_session');
+  if (usable.length === 0) return null;
+  const recommended = usable.find((option) => option.id === proposed.recommended);
+  return recommended ?? usable[0];
 }
 
 async function recallDecision(job: Job, situationKey: string): Promise<DecisionMemory | null> {

@@ -256,6 +256,48 @@ Enable a safe test by turning on **Allow safe demo** on the target profile,
 adding upload/import actions to the File I/O session, and enabling its
 destructive toggle before approval. Use only the bundled synthetic fixtures.
 
+### Unexpected forms
+
+A run opens screens nobody wrote a rule for, so it will meet forms nobody
+anticipated. It fills them itself rather than stopping:
+
+1. **Field heuristics** (`worker/src/forms/fieldSynthesis.ts`) read each field's
+   name, id, placeholder, aria-label and `<label>` and answer what they
+   recognise — names, addresses, financial-year dates, contacts, quantities,
+   amounts, references, free text. Money and quantities are always 0 or 1.
+2. **The brain** (`form_fill` task) is asked only about required fields the
+   heuristics could not map, and is sent field labels and types — never page
+   content. Its answers are filtered back through the same safety rules, so it
+   can fill a gap but never overrule a refusal.
+3. **A last-resort placeholder** answers any required field still unanswered, so
+   an unreadable label cannot block the screen behind the form.
+
+Two categories are never filled, whatever the label says: credentials, OTPs,
+CAPTCHAs, API keys and search boxes; and checksum or registry identifiers
+(GSTIN, CIN, TIN, Aadhaar, bank account, IFSC, UPI, SWIFT, card numbers) — an
+invented one is rejected anyway and reads worse in a report than the form's own
+validation message.
+
+Filling is safe everywhere; **submitting is not**, so it runs through the same
+`SafeActionGuard` check as any other click on the submit control's own label.
+That means `Save`/`Submit`/`Confirm` need a non-observer tier plus
+`allow_safe_demo` and `destructive_allowed`, while a plain `Next`/`Continue`
+works anywhere. When the guard says no, the form is filled as evidence and then
+closed so the run continues. A rejected submit is retried once using the form's
+own validation text, then screenshotted and reported.
+
+### Autonomous decisions
+
+When the run meets a situation it cannot resolve — an empty company picker, a
+click it cannot land — it takes the recommended option and records it in
+`smoke_run_decisions` with `source=auto`, shown as **Decided by the run**. It
+never chooses to abort a session, and it may only create a company on its own in
+`sandbox`, `gh_staging` or `production_full_access`; elsewhere that still needs a
+human or a remembered human choice.
+
+Set `SMOKE_AUTONOMOUS=false` to go back to parking the job and waiting up to 30
+minutes for an operator on every unexpected screen.
+
 ## 8. Run identifiers
 
 Every run gets a unique code: `SMOKE-RUN-YYYYMMDD-NNNN` (4-digit daily counter

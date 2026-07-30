@@ -75,7 +75,9 @@ class WorkerController extends BaseController
         $options = $body['options'] ?? null;
         $source = strtolower(trim((string) ($body['source'] ?? 'user')));
         $selectedOption = trim((string) ($body['selected_option'] ?? ''));
-        $appliedFromMemory = $source === 'memory';
+        // A remembered choice and an autonomous one both arrive already decided:
+        // they are recorded for audit, never parked for an operator.
+        $preAnswered = in_array($source, ['memory', 'auto'], true);
 
         if ($runId <= 0 || $sessionId <= 0 || $jobId <= 0 || $situationKey === '' || $question === '') {
             return $this->jsonError(
@@ -95,10 +97,14 @@ class WorkerController extends BaseController
                 return $this->jsonError('invalid_request', 'Each option requires id, label, and action.', 400);
             }
         }
-        if ($appliedFromMemory && $selectedOption === '') {
-            return $this->jsonError('invalid_request', 'selected_option is required when source=memory.', 400);
+        if ($preAnswered && $selectedOption === '') {
+            return $this->jsonError(
+                'invalid_request',
+                'selected_option is required when source=memory or source=auto.',
+                400,
+            );
         }
-        if ($appliedFromMemory) {
+        if ($preAnswered) {
             $validOption = false;
             foreach ($options as $option) {
                 if (is_array($option) && (string) ($option['id'] ?? '') === $selectedOption) {
@@ -125,7 +131,7 @@ class WorkerController extends BaseController
             return $this->jsonError('invalid_job_state', 'Job is not actively leased.', 409);
         }
 
-        if (! $appliedFromMemory) {
+        if (! $preAnswered) {
             $existing = $db->table('smoke_run_decisions')
                 ->where('job_id', $jobId)
                 ->where('situation_key', $situationKey)
@@ -154,7 +160,7 @@ class WorkerController extends BaseController
 
         $now = date('Y-m-d H:i:s');
         $context = is_array($body['context'] ?? null) ? $body['context'] : [];
-        $context['source'] = $appliedFromMemory ? 'memory' : ($context['source'] ?? 'user');
+        $context['source'] = $preAnswered ? $source : ($context['source'] ?? 'user');
         $freeText = trim((string) ($body['free_text'] ?? ''));
         $db->transBegin();
         $lockedJob = $db->query(
@@ -165,7 +171,7 @@ class WorkerController extends BaseController
             $db->transRollback();
             return $this->jsonError('invalid_job_state', 'Job is no longer actively leased.', 409);
         }
-        if (! $appliedFromMemory) {
+        if (! $preAnswered) {
             $existing = $db->table('smoke_run_decisions')
                 ->where('job_id', $jobId)
                 ->where('situation_key', $situationKey)
@@ -193,12 +199,12 @@ class WorkerController extends BaseController
             'screenshot_path' => ($body['screenshot_path'] ?? '') !== ''
                 ? mb_substr((string) $body['screenshot_path'], 0, 512)
                 : null,
-            'status'          => $appliedFromMemory ? 'answered' : 'pending',
+            'status'          => $preAnswered ? 'answered' : 'pending',
             'remember'        => true,
             'created_at'      => $now,
             'updated_at'      => $now,
         ];
-        if ($appliedFromMemory) {
+        if ($preAnswered) {
             $insert['selected_option'] = mb_substr($selectedOption, 0, 191);
             $insert['free_text'] = $freeText !== '' ? $freeText : null;
             $insert['answered_at'] = $now;
@@ -206,7 +212,7 @@ class WorkerController extends BaseController
         }
         $db->table('smoke_run_decisions')->insert($insert);
         $decisionId = (int) $db->insertID();
-        if (! $appliedFromMemory) {
+        if (! $preAnswered) {
             $db->table('smoke_session_jobs')->where('id', $jobId)->update([
                 'status'     => 'awaiting_decision',
                 'updated_at' => $now,
@@ -231,14 +237,16 @@ class WorkerController extends BaseController
             $jobId,
             'worker',
             'info',
-            $appliedFromMemory
-                ? ('Reused remembered choice: ' . $chosenLabel)
-                : ('Worker needs a decision: ' . $question),
+            match (true) {
+                $source === 'memory' => 'Reused remembered choice: ' . $chosenLabel,
+                $source === 'auto'   => 'Decided without asking (autonomous): ' . $chosenLabel,
+                default              => 'Worker needs a decision: ' . $question,
+            },
             [
                 'decision_id'     => $decisionId,
                 'situation_key'   => $situationKey,
-                'source'          => $appliedFromMemory ? 'memory' : 'user',
-                'selected_option' => $appliedFromMemory ? $selectedOption : null,
+                'source'          => $preAnswered ? $source : 'user',
+                'selected_option' => $preAnswered ? $selectedOption : null,
             ],
         );
 
@@ -795,7 +803,7 @@ class WorkerController extends BaseController
             $status === 'timed_out' => 'timeout',
             $status === 'cancelled' => 'cancelled',
             $status === 'pending' => 'pending',
-            in_array($explicit, ['memory', 'user', 'timeout'], true) => $explicit,
+            in_array($explicit, ['memory', 'auto', 'user', 'timeout'], true) => $explicit,
             ($row['answered_by'] ?? null) === null && trim((string) ($row['selected_option'] ?? '')) !== '' => 'memory',
             default => 'user',
         };

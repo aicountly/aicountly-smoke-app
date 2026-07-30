@@ -232,7 +232,7 @@ class DecisionsController extends BaseController
             return 'pending';
         }
         $explicit = strtolower(trim((string) ($context['source'] ?? '')));
-        if (in_array($explicit, ['memory', 'user', 'timeout'], true)) {
+        if (in_array($explicit, ['memory', 'auto', 'user', 'timeout'], true)) {
             return $explicit;
         }
         if (($row['answered_by'] ?? null) === null && trim((string) ($row['selected_option'] ?? '')) !== '') {

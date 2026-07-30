@@ -66,6 +66,14 @@ class DeterministicAdapter extends AbstractAdapter
             case 'ask_user':
                 $output = $this->fallbackDecision($task, $userPrompt, $options);
                 break;
+            case 'form_fill':
+                // The worker's own field heuristics already ran before it asked, so
+                // proposing nothing here leaves those values in place untouched.
+                $output = [
+                    'values' => [],
+                    'note'   => 'Deterministic fallback: the worker fills forms from its own field heuristics. Configure an AI provider to answer fields it cannot map.',
+                ];
+                break;
             default:
                 $output = ['note' => 'Deterministic fallback active. Configure an AI provider for richer output.'];
         }

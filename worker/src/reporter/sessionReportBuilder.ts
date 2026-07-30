@@ -291,18 +291,20 @@ async function fetchSessionDecisions(runId: number, sessionId: number): Promise<
   return Array.isArray(response.data.data) ? response.data.data : [];
 }
 
+const DECISION_SOURCE_LABELS: Record<string, string> = {
+  memory: 'Reused from memory',
+  auto: 'Decided by the run',
+  timeout: 'Timed out waiting',
+  cancelled: 'Cancelled',
+  user: 'Answered by operator',
+};
+
 function formatDecisionCard(decision: SessionDecision) {
   const options = Array.isArray(decision.options) ? decision.options : [];
   const selectedId = String(decision.selected_option ?? '');
   const chosen = options.find((option) => String(option.id ?? '') === selectedId);
   const source = String(decision.source ?? (decision.status === 'timed_out' ? 'timeout' : 'user'));
-  const sourceLabel = source === 'memory'
-    ? 'Reused from memory'
-    : source === 'timeout'
-      ? 'Timed out waiting'
-      : source === 'cancelled'
-        ? 'Cancelled'
-        : 'Answered by operator';
+  const sourceLabel = DECISION_SOURCE_LABELS[source] ?? 'Answered by operator';
   return {
     situation_label: situationLabel(String(decision.situation_key ?? '')),
     question: String(decision.question ?? ''),

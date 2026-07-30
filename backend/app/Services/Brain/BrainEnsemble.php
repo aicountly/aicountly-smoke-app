@@ -90,6 +90,9 @@ class BrainEnsemble
             $contextOptions['parallel_outputs'] = $parallelResults;
             $arbiterResult = $this->deterministic->complete($systemPrompt, $userPrompt, $contextOptions);
         }
+        if ($task === 'form_fill') {
+            $arbiterResult['output'] = $this->sanitizeFormFill($arbiterResult['output'] ?? null, $contextOptions);
+        }
 
         return [
             'task'       => $task,
@@ -208,6 +211,52 @@ class BrainEnsemble
         return isset($output['verdict'])
             && is_array($output['recommendations'] ?? null)
             && is_array($output['competitor_refs'] ?? null);
+    }
+
+    /**
+     * Form-fill answers get typed into a live product, so only scalar values keyed
+     * by a requested field survive. Anything else — prose, nested objects, keys
+     * nobody asked about — is dropped rather than handed back to the worker.
+     *
+     * @param mixed $output
+     * @param array<string,mixed> $contextOptions
+     * @return array{values:array<string,string>}
+     */
+    private function sanitizeFormFill($output, array $contextOptions = []): array
+    {
+        if (! is_array($output)) {
+            return ['values' => []];
+        }
+        $raw = is_array($output['values'] ?? null) ? $output['values'] : $output;
+        $requested = [];
+        foreach ((array) ($contextOptions['context']['fields'] ?? []) as $field) {
+            if (is_array($field) && ($field['key'] ?? '') !== '') {
+                $requested[(string) $field['key']] = true;
+            }
+        }
+
+        $values = [];
+        foreach ($raw as $key => $value) {
+            $key = trim((string) $key);
+            if ($key === '' || $key === 'note' || $key === 'values') {
+                continue;
+            }
+            if ($requested !== [] && ! isset($requested[$key])) {
+                continue;
+            }
+            if (is_bool($value)) {
+                $value = $value ? 'true' : 'false';
+            }
+            if (! is_scalar($value)) {
+                continue;
+            }
+            $value = trim((string) $value);
+            if ($value === '' || mb_strlen($value) > 200) {
+                continue;
+            }
+            $values[$key] = $value;
+        }
+        return ['values' => $values];
     }
 
     /**

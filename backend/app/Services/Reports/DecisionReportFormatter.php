@@ -99,7 +99,7 @@ class DecisionReportFormatter
             return 'pending';
         }
         $explicit = strtolower(trim((string) ($context['source'] ?? '')));
-        if (in_array($explicit, ['memory', 'user', 'timeout'], true)) {
+        if (in_array($explicit, ['memory', 'auto', 'user', 'timeout'], true)) {
             return $explicit;
         }
         if (($row['answered_by'] ?? null) === null && trim((string) ($row['selected_option'] ?? '')) !== '') {
@@ -112,6 +112,7 @@ class DecisionReportFormatter
     {
         return match ($source) {
             'memory' => 'Reused from memory',
+            'auto' => 'Decided by the run',
             'user' => 'Answered by operator',
             'timeout' => 'Timed out waiting',
             'cancelled' => 'Cancelled',

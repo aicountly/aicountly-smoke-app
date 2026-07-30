@@ -2,14 +2,25 @@ import type { Locator, Page } from 'playwright';
 import type { Job } from '../backend.js';
 import { captureScreenshot } from '../scanner/screenshotCapture.js';
 import { evaluateClick } from '../utils/safeActionGuard.js';
+import { allowsFullAccess } from '../utils/environments.js';
 import { dismissOverlays } from '../utils/dismissOverlays.js';
 import type { DecisionChoice } from './askDecision.js';
 import { bodyMentionsCompany, hasEmptyCompanyCopy } from './companyPicker.js';
+import { lastResortValue, synthesizeFieldValue } from '../forms/fieldSynthesis.js';
 import {
-  isPlaceholderOption,
-  synthesizeCompanyFieldValue,
-  type CompanyFormField,
-} from './companyFormFields.js';
+  collectFormErrors,
+  describeField,
+  describeVisibleControls,
+  DIALOG_SELECTOR,
+  dialogOrPage,
+  fillTextField,
+  firstRealOption,
+  firstVisible,
+  formScope,
+  isWritableType,
+  scopeText,
+  type FormScope,
+} from '../forms/formDom.js';
 
 export type NavActionContext = {
   href?: string;
@@ -62,9 +73,7 @@ export async function performNavAction(
   }
 
   if (option.action === 'create_company') {
-    if (!choice.explicitApproval || (choice.source !== 'user' && choice.source !== 'memory')) {
-      throw new Error('Creating a company requires an explicit user or remembered decision.');
-    }
+    assertMayCreateCompany(job, choice);
     await createCompany(
       page,
       option.company_name || context.companyName || choice.freeText,
@@ -74,6 +83,24 @@ export async function performNavAction(
   }
 
   return { navigated: false, rescan: false, skipped: false };
+}
+
+/**
+ * "Create a company" reads as a harmless label, so the restricted-token guard
+ * lets it through; approval is what actually gates it. A human or a remembered
+ * human choice may create anywhere, but the run may only decide this for itself
+ * on a tier that already permits mutations.
+ */
+function assertMayCreateCompany(job: Job, choice: DecisionChoice): void {
+  if (!choice.explicitApproval) {
+    throw new Error('Creating a company requires an explicit decision.');
+  }
+  if (choice.source === 'user' || choice.source === 'memory') return;
+  if (!allowsFullAccess(job.profile.environment)) {
+    throw new Error(
+      `Autonomous company creation needs sandbox, gh_staging or production_full_access, not ${job.profile.environment}.`,
+    );
+  }
 }
 
 function assertActionAllowed(job: Job, choice: DecisionChoice): void {
@@ -126,7 +153,6 @@ async function openCompany(page: Page, preferred?: string): Promise<void> {
 
 const NAME_FIELD_TEXT = /compan|organi[sz]ation|business|firm|entity|name/i;
 const CREATE_COMPANY_TEXT = /(create|add|new|register|setup|set up)[^a-z]*(compan|organi[sz]ation|business|firm|entity)/i;
-const DIALOG_SELECTOR = '[role="dialog"], dialog, [class*="modal" i], [class*="drawer" i], [class*="dialog" i]';
 
 /**
  * The create control can hand off to a sibling app that boots on its own
@@ -181,16 +207,6 @@ async function createCompany(page: Page, requestedName?: string, screenshotsDir?
   await assertCompanyCreateLanded(page, name, screenshotsDir, submitLabel, filled);
 }
 
-async function fillTextField(field: Locator, value: string): Promise<void> {
-  await field.fill(value).catch(() => {});
-  if ((await field.inputValue().catch(() => '')).trim() === value) return;
-  // Controlled React inputs occasionally ignore fill(); real keystrokes dispatch
-  // the input events their state depends on.
-  await field.click({ timeout: 5_000 }).catch(() => {});
-  await field.press('ControlOrMeta+a').catch(() => {});
-  await field.pressSequentially(value, { delay: 25, timeout: 10_000 }).catch(() => {});
-}
-
 /**
  * Waits out a cross-app handoff. The sibling app may boot on its own dashboard
  * first, so poll for the field and only then try the create routes directly.
@@ -225,8 +241,10 @@ function originOf(url: string): string | null {
  * "label=value" pairs so a failed submit can say what was actually entered.
  */
 async function fillCompanyForm(page: Page, companyName: string): Promise<string[]> {
-  const scope = await companyFormScope(page);
-  const controls = scope.locator('input, select, textarea');
+  const scope = await formScope(page);
+  const controls = scope === page
+    ? page.locator('input, select, textarea')
+    : (scope as Locator).locator('input, select, textarea');
   const total = Math.min(await controls.count().catch(() => 0), 80);
   const email = process.env.SMOKE_COMPANY_EMAIL?.trim() || undefined;
   const filled: string[] = [];
@@ -238,7 +256,7 @@ async function fillCompanyForm(page: Page, companyName: string): Promise<string[
 
     const info = await describeField(control);
     if (!info) continue;
-    if (['hidden', 'submit', 'button', 'reset', 'file', 'checkbox', 'radio', 'image'].includes(info.type)) continue;
+    if (!isWritableType(info.type)) continue;
     if (info.value.trim() !== '') continue;
 
     if (info.tag === 'select') {
@@ -249,7 +267,8 @@ async function fillCompanyForm(page: Page, companyName: string): Promise<string[
       continue;
     }
 
-    const value = synthesizeCompanyFieldValue(info, companyName, { email });
+    const value = synthesizeFieldValue(info, { entityName: companyName, email })
+      ?? (info.required ? lastResortValue(info) : null);
     if (value === null) continue;
     await fillTextField(control, value);
     filled.push(`${info.name || info.label || info.placeholder || 'field'}=${value}`);
@@ -260,80 +279,12 @@ async function fillCompanyForm(page: Page, companyName: string): Promise<string[
 /** Confirms the open form is company creation and not another entity's "Add" form. */
 async function looksLikeCompanyForm(page: Page): Promise<boolean> {
   if (/compan/i.test(page.url())) return true;
-  const scope = await companyFormScope(page);
-  const text = scope === page
-    ? await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '')
-    : await (scope as Locator).innerText({ timeout: 5_000 }).catch(() => '');
-  const haystack = text.slice(0, 10_000);
+  const haystack = await scopeText(page, await formScope(page));
   if (/\b(branch|employee|department|designation|invoice|voucher|user)\b/i.test(haystack)
     && !/compan|organi[sz]ation/i.test(haystack)) {
     return false;
   }
   return /compan|organi[sz]ation|firm|entity/i.test(haystack);
-}
-
-/** Prefer the form holding the company-name field so a page search box is never in scope. */
-async function companyFormScope(page: Page): Promise<Page | Locator> {
-  const dialog = page.locator(DIALOG_SELECTOR).filter({ visible: true }).first();
-  if (await dialog.count().catch(() => 0)) return dialog;
-  const form = page.locator('form').filter({ visible: true }).first();
-  if (await form.count().catch(() => 0)) return form;
-  return page;
-}
-
-async function describeField(control: Locator): Promise<(CompanyFormField & { value: string }) | null> {
-  return control.evaluate((node) => {
-    const el = node as HTMLInputElement;
-    const labels = 'labels' in el && el.labels
-      ? Array.from(el.labels).map((label) => label.textContent ?? '').join(' ')
-      : '';
-    return {
-      tag: el.tagName.toLowerCase() as 'input' | 'select' | 'textarea',
-      type: (el.getAttribute('type') || el.type || 'text').toLowerCase(),
-      name: el.getAttribute('name') || '',
-      id: el.getAttribute('id') || '',
-      placeholder: el.getAttribute('placeholder') || '',
-      ariaLabel: el.getAttribute('aria-label') || '',
-      label: labels.replace(/\s+/g, ' ').trim().slice(0, 80),
-      required: el.required || el.getAttribute('aria-required') === 'true',
-      value: String(el.value ?? ''),
-    };
-  }).catch(() => null);
-}
-
-async function firstRealOption(select: Locator): Promise<{ value: string; text: string } | null> {
-  const options = await select.evaluate((node) => Array.from((node as HTMLSelectElement).options)
-    .filter((option) => !option.disabled)
-    .map((option) => ({ value: option.value, text: (option.textContent ?? '').trim() }))).catch(() => []);
-  return options.find((option) => !isPlaceholderOption(option.value, option.text)) ?? null;
-}
-
-/**
- * The form's own validation text is the fastest route to a fix, so surface it
- * verbatim instead of only reporting that the company never appeared.
- */
-async function collectFormErrors(page: Page): Promise<string[]> {
-  const messages = await page.evaluate(`(() => {
-    const selector = [
-      '[role="alert"]', '.invalid-feedback', '.field-error', '.error-message',
-      '.error', '.text-danger', '.help-block', '[class*="errorText" i]',
-      '[class*="text-red" i]', '[class*="Mui-error" i]',
-    ].join(', ');
-    const visible = (el) => {
-      const r = el.getBoundingClientRect();
-      const s = window.getComputedStyle(el);
-      return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
-    };
-    const texts = [...document.querySelectorAll(selector)]
-      .filter(visible)
-      .map((el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim())
-      .filter((text) => text.length > 0 && text.length < 200);
-    const invalid = [...document.querySelectorAll('[aria-invalid="true"]')]
-      .filter(visible)
-      .map((el) => 'invalid:' + (el.getAttribute('name') || el.getAttribute('id') || 'field'));
-    return [...new Set([...texts, ...invalid])].slice(0, 10);
-  })()`).catch(() => [] as string[]);
-  return messages as string[];
 }
 
 async function openCreateCompanyForm(page: Page, screenshotsDir?: string): Promise<void> {
@@ -353,18 +304,12 @@ async function openCreateCompanyForm(page: Page, screenshotsDir?: string): Promi
   await page.waitForSelector(`${DIALOG_SELECTOR}, form`, { state: 'visible', timeout: 10_000 }).catch(() => {});
 }
 
-/** Prefer a visible dialog so a search box behind the modal is never a candidate. */
-async function dialogOrPage(page: Page): Promise<Page | Locator> {
-  const dialog = page.locator(DIALOG_SELECTOR).filter({ visible: true }).first();
-  return await dialog.count().catch(() => 0) ? dialog : page;
-}
-
 async function findCompanyNameField(page: Page, timeoutMs: number): Promise<Locator | null> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const scoped = await dialogOrPage(page);
     // Search the dialog first, then the whole page in case the form is inline.
-    const scopes: Array<Page | Locator> = scoped === page ? [page] : [scoped, page];
+    const scopes: FormScope[] = scoped === page ? [page] : [scoped, page];
     for (const scope of scopes) {
       const field = await firstVisible([
         () => scope.getByRole('textbox', { name: NAME_FIELD_TEXT }),
@@ -424,79 +369,13 @@ async function assertCompanyCreateLanded(
   throw new Error(await describeFailure(page, screenshotsDir, detail));
 }
 
-async function firstVisible(
-  builders: Array<() => Locator>,
-  opts: { editable?: boolean; rejectSearch?: boolean } = {},
-): Promise<Locator | null> {
-  for (const build of builders) {
-    let matches: Locator;
-    try {
-      matches = build().filter({ visible: true });
-    } catch {
-      continue; // one unsupported strategy must not kill the rest
-    }
-    const count = Math.min(await matches.count().catch(() => 0), 8);
-    for (let index = 0; index < count; index++) {
-      const candidate = matches.nth(index);
-      if (opts.editable && !await candidate.isEditable({ timeout: 500 }).catch(() => false)) continue;
-      if (opts.rejectSearch && await looksLikeSearchField(candidate)) continue;
-      return candidate;
-    }
-  }
-  return null;
-}
-
-/** Picker search ("Search companies...") must never be treated as the company name input. */
-async function looksLikeSearchField(locator: Locator): Promise<boolean> {
-  const attrs = await locator.evaluate((el) => {
-    const input = el as HTMLInputElement;
-    return {
-      name: input.getAttribute('name') || '',
-      id: input.getAttribute('id') || '',
-      type: (input.getAttribute('type') || input.type || '').toLowerCase(),
-      placeholder: input.getAttribute('placeholder') || '',
-      ariaLabel: input.getAttribute('aria-label') || '',
-      role: input.getAttribute('role') || '',
-    };
-  }).catch(() => null);
-  if (!attrs) return false;
-  if (attrs.type === 'search') return true;
-  const blob = [attrs.name, attrs.id, attrs.placeholder, attrs.ariaLabel, attrs.role].join(' ');
-  return /\bsearch\b/i.test(blob);
-}
-
 /**
  * The worker cannot see the tenant's DOM, so a bare "not found" costs another
  * whole run to diagnose. Attach what was actually on screen instead.
  */
 async function describeFailure(page: Page, screenshotsDir: string | undefined, message: string): Promise<string> {
   const parts = [message, `url=${page.url()}`];
-  const inventory = await page.evaluate(`(() => {
-    const visible = (el) => {
-      const r = el.getBoundingClientRect();
-      const s = window.getComputedStyle(el);
-      return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
-    };
-    const attr = (el, n) => (el.getAttribute(n) || '').slice(0, 40);
-    const fields = [...document.querySelectorAll('input, textarea')]
-      .filter(visible)
-      .slice(0, 12)
-      .map((el) => [
-        el.tagName.toLowerCase(),
-        'type=' + (attr(el, 'type') || 'text'),
-        attr(el, 'name') && 'name=' + attr(el, 'name'),
-        attr(el, 'id') && 'id=' + attr(el, 'id'),
-        attr(el, 'placeholder') && 'placeholder=' + attr(el, 'placeholder'),
-        attr(el, 'aria-label') && 'aria-label=' + attr(el, 'aria-label'),
-      ].filter(Boolean).join(' '));
-    const buttons = [...document.querySelectorAll('button, [role="button"], a')]
-      .filter(visible)
-      .map((el) => (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40))
-      .filter(Boolean)
-      .slice(0, 15);
-    const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible).length;
-    return { fields, buttons, dialogs };
-  })()`) as { fields: string[]; buttons: string[]; dialogs: number };
+  const inventory = await describeVisibleControls(page);
 
   parts.push(`visible_dialogs=${inventory.dialogs}`);
   parts.push(inventory.fields.length

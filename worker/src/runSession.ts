@@ -32,6 +32,7 @@ import { dismissOverlays } from './utils/dismissOverlays.js';
 import { askOrRecallDecision, type DecisionOption } from './nav/askDecision.js';
 import { performNavAction } from './nav/performNavAction.js';
 import { isEmptyCompanyPicker, resolveAppContext } from './nav/resolveAppContext.js';
+import { hasBlockingForm, resolveBlockingForm } from './forms/formEngine.js';
 import type { ConsoleEvent } from './scanner/consoleCapture.js';
 import type { NetworkEvent } from './scanner/networkCapture.js';
 import { runFileIoScenarios, shouldRunFileIoSession } from './fileIo/fileIoEngine.js';
@@ -312,6 +313,17 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
         const opened = await openMenuWithRecovery(page, job, m, screenshotsDir);
         if (!opened) continue;
         await sleep(500);
+
+        // A screen that greets the run with a dialog cannot be observed until the
+        // dialog is dealt with, so fill it or close it before capturing anything.
+        if (await hasBlockingForm(page)) {
+          await resolveBlockingForm(page, job, {
+            label: m.label,
+            screenshotsDir,
+            entityName: process.env.SMOKE_COMPANY_NAME?.trim() || undefined,
+          });
+          await sleep(500);
+        }
 
         const label = `${String(actionOrdinal).padStart(2, '0')}-menu-${slug(m.label)}`;
         actionOrdinal++;
@@ -752,7 +764,29 @@ async function openMenuWithRecovery(
         await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
         return true;
       } catch {
-        // The user decision is the final recovery path.
+        // A form in the way is the next thing to try, then a decision.
+      }
+    }
+
+    // Escape only closes a dialog that wants nothing; one that wants data has to be
+    // answered. Doing that here is what keeps an unexpected form from costing the
+    // run an operator round trip.
+    if (await hasBlockingForm(page)) {
+      const attempt = await resolveBlockingForm(page, job, {
+        label: menu.label,
+        screenshotsDir,
+        entityName: process.env.SMOKE_COMPANY_NAME?.trim() || undefined,
+      });
+      if (attempt.cleared) {
+        const afterForm = await findMenuByLabel(page, menu.label);
+        if (afterForm) {
+          try {
+            await clickCurrentMenu(page, afterForm);
+            return true;
+          } catch {
+            // Fall through to the decision below.
+          }
+        }
       }
     }
 
