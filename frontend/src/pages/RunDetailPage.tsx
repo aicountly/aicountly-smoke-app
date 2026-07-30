@@ -142,10 +142,16 @@ function runStatusBadgeClass(status: string): string {
   return 'badge-brand';
 }
 
-/** A session that observed nothing in scope must not read like one that passed. */
+/**
+ * A session that observed nothing in scope must not read like one that passed,
+ * and a session that reached its scope but never finished cleanly (budget
+ * exhausted, no create verified) must not read like an untested one either —
+ * 'partial' gets its own warning shade distinct from 'blocked'.
+ */
 function sessionStatusBadgeClass(status: string): string {
   if (status === 'failed') return 'badge-danger';
   if (status === 'blocked') return 'badge-warning';
+  if (status === 'partial') return 'badge-info';
   if (status === 'done') return 'badge-brand';
   return 'badge-neutral';
 }
@@ -507,7 +513,7 @@ pm2 logs aicountly-smoke-worker --lines 40`}
                 <td>{s.attempts}</td>
                 <td className="text-xs text-ink-500">{s.leased_by ?? '—'}</td>
                 <td className="text-xs text-red-700 truncate max-w-xs">
-                  {s.last_error ?? (s.status === 'blocked' ? s.error_message ?? '' : '')}
+                  {s.last_error ?? ((s.status === 'blocked' || s.status === 'partial') ? s.error_message ?? '' : '')}
                 </td>
                 <td className="px-4 py-2 text-right whitespace-nowrap">
                   <Link

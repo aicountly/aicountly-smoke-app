@@ -514,6 +514,21 @@ const REASON_ALREADY_ADMITS_CONTROL_WAS_USED =
   /not (?:in|on|appear|show|list|found in)|missing from (?:the )?list|does not appear/i;
 
 /**
+ * A `blocked` reason that already names a server-side refusal (permissions,
+ * authorization, a 4xx/5xx) is not the "I cannot find the control" claim
+ * `evaluateBlockedDecision` exists to refute either — the control was found
+ * and used, and the target itself rejected it. Sending the agent back to
+ * "scroll and try again" against a permissions error only burns the rest of
+ * the step budget re-walking a form that was never going to be let through.
+ */
+const REASON_REPORTS_A_SERVER_REFUSAL =
+  /insufficient permission|permission denied|access denied|not authori[sz]ed|unauthori[sz]ed|forbidden|\b(?:401|403|500|502|503|504)\b|server error/i;
+
+function blockDescribesTheOutcome(reason: string): boolean {
+  return REASON_ALREADY_ADMITS_CONTROL_WAS_USED.test(reason) || REASON_REPORTS_A_SERVER_REFUSAL.test(reason);
+}
+
+/**
  * A reason to send the agent back rather than end the session, or null to accept
  * the block. Judged on what the session did, never on how the model phrased it:
  * a model that has already clicked "Create employee master" three times cannot
@@ -527,7 +542,7 @@ export function evaluateBlockedDecision(input: {
   reason: string;
 }): string | null {
   if (input.refusalsUsed >= 1) return null;
-  if (input.submitted.length && !REASON_ALREADY_ADMITS_CONTROL_WAS_USED.test(input.reason)) {
+  if (input.submitted.length && !blockDescribesTheOutcome(input.reason)) {
     const list = input.submitted
       .map((control) => `"${control.label}" (mark ${control.mark}, step ${control.step})`)
       .join(', ');

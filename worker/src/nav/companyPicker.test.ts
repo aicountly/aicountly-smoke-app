@@ -6,6 +6,8 @@ import {
   isCompanyRowText,
   isDuplicateCompanyError,
   isEmptyCompanyWorkspace,
+  isPickerScreen,
+  isPickerUrl,
   looksLikeCompanyPicker,
   readCompanyCount,
 } from './companyPicker.js';
@@ -126,6 +128,64 @@ describe('isCompanyRowText', () => {
     ]) {
       assert.equal(isCompanyRowText(chrome), false, chrome);
     }
+  });
+});
+
+describe('isPickerUrl', () => {
+  it('matches picker-shaped routes only', () => {
+    assert.equal(isPickerUrl('https://hrms.aicountly.com/company'), true);
+    assert.equal(isPickerUrl('https://manage.aicountly.com/#/company/all'), true);
+    assert.equal(isPickerUrl('https://auditor.aicountly.com/engagements/new'), false);
+  });
+});
+
+describe('isPickerScreen', () => {
+  it('is not fooled by a persistent "Switch company" control on a feature route', async () => {
+    // The auditor shell carries "Switch company" on every screen. Without a URL
+    // match, a printed count, or empty-state copy, a row-fallback list (which a
+    // wizard's own step list can satisfy) must not be believed.
+    const verdict = await isPickerScreen({
+      url: 'https://auditor.aicountly.com/engagements/new',
+      bodyText: 'Switch company\nNew engagement\n1. Context 2. Audit type 3. Applicability',
+      findCards: async () => [{ source: 'row_fallback' }, { source: 'row_fallback' }],
+    });
+    assert.equal(verdict, false);
+  });
+
+  it('trusts a printed count even off a picker-shaped URL', async () => {
+    const verdict = await isPickerScreen({
+      url: 'https://auditor.aicountly.com/engagements/new',
+      bodyText: 'Switch company\nAll Companies (2)',
+      findCards: async () => [],
+    });
+    assert.equal(verdict, true);
+  });
+
+  it('is true on a real picker URL once cards are found', async () => {
+    const verdict = await isPickerScreen({
+      url: 'https://hrms.aicountly.com/company',
+      bodyText: 'Select a company to continue working in HRMS',
+      findCards: async () => [{ source: 'row_fallback' }],
+    });
+    assert.equal(verdict, true);
+  });
+
+  it('requires genuinely tagged cards, not row fallback, off a picker-shaped URL', async () => {
+    const verdict = await isPickerScreen({
+      url: 'https://auditor.aicountly.com/dashboard',
+      bodyText: 'Select a company to switch context',
+      findCards: async () => [{ source: 'selector' }],
+    });
+    assert.equal(verdict, true);
+  });
+
+  it('is false when the URL and body never look like the picker at all', async () => {
+    const verdict = await isPickerScreen({
+      url: 'https://auditor.aicountly.com/dashboard',
+      bodyText: 'Attendance calendar',
+      findCards: async () => [{ source: 'selector' }],
+    });
+    assert.equal(verdict, false);
   });
 });
 

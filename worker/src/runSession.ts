@@ -318,9 +318,18 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       context: { steps: loop.steps.length, goal },
     }).catch(() => {});
 
-    if (await isOnCompanyPicker(page)) {
+    // Ending on the picker says nothing about whether the workspace was ever
+    // open earlier in the session: a session can open a company, do 38 screens
+    // of real work, and simply route back through the picker on its way out (or
+    // be misdetected there — see companyPicker.isPickerScreen). Zeroing
+    // scopeScreens in that case would erase coverage the session actually
+    // earned, so this only marks the workspace skipped when no in-scope screen
+    // was reached at all; otherwise it is a no-op beyond skipping the
+    // storage-state save, since a picker is not a signed-into-workspace state
+    // worth persisting.
+    const endedOnPicker = await isOnCompanyPicker(page);
+    if (endedOnPicker && scopeScreens === 0) {
       workspaceSkipped = true;
-      scopeScreens = 0;
       await appendLog({
         run_id: job.run_id,
         session_id: job.session.id,
@@ -328,7 +337,16 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
         level: 'warn',
         message: `Vision agent ended while still on the company picker (${page.url()}); reporting no scope coverage.`,
       }).catch(() => {});
-    } else {
+    } else if (endedOnPicker) {
+      await appendLog({
+        run_id: job.run_id,
+        session_id: job.session.id,
+        job_id: job.job_id,
+        message: `Vision agent ended on the company picker (${page.url()}) after ${scopeScreens} in-scope `
+          + 'screen(s) earlier in the session; that coverage stands.',
+      }).catch(() => {});
+    }
+    if (!endedOnPicker) {
       await saveStorageState(context, job).catch(async (err: unknown) => {
         await appendLog({
           run_id: job.run_id,

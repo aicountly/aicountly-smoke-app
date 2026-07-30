@@ -122,6 +122,38 @@ function detectRecordAbsentFromList(steps: AgentStepRecord[]): UxIssue[] {
   return findings;
 }
 
+const PERMISSION_DENIED_REGEX =
+  /insufficient permission|permission denied|access denied|not authori[sz]ed|unauthori[sz]ed|forbidden|\b401\b|\b403\b/i;
+
+/** A `blocked` step reporting the target itself refused a submit on permissions/authorization. */
+function detectPermissionDeniedSubmit(steps: AgentStepRecord[]): UxIssue[] {
+  const findings: UxIssue[] = [];
+  for (let i = 0; i < steps.length; i += 1) {
+    const step = steps[i]!;
+    if (step.action.type !== 'blocked') continue;
+    const reason = step.action.reason || step.outcome_observation || '';
+    if (!PERMISSION_DENIED_REGEX.test(reason)) continue;
+    const priorSubmit = steps
+      .slice(Math.max(0, i - LOOKBACK_STEPS), i)
+      .reverse()
+      .find((candidate) => isSubmitLikeClick(candidate));
+    if (!priorSubmit) continue;
+    findings.push({
+      category: 'permissions',
+      severity: 'high',
+      title: 'Create/submit rejected on permissions',
+      description: `"${priorSubmit.target_label}" was submitted on ${priorSubmit.signature_before.url}, `
+        + `but the target refused it: ${reason.trim()}`,
+      recommendation: 'Confirm this account/role should hold the permission to complete this action; '
+        + 'if it should, fix the authorization check that is rejecting it.',
+      human_summary: '',
+      developer_prompt: '',
+      evidence: evidenceFor([priorSubmit, step]),
+    });
+  }
+  return findings;
+}
+
 function isBlankLabel(label: string): boolean {
   const trimmed = label.trim();
   if (!trimmed) return true;
@@ -199,6 +231,7 @@ export function detectAgentFindings(steps: AgentStepRecord[]): UxIssue[] {
     ...detectBrokenControls(steps),
     ...detectUnhelpfulValidation(steps),
     ...detectRecordAbsentFromList(steps),
+    ...detectPermissionDeniedSubmit(steps),
     ...detectUnlabelledControls(steps),
     ...detectScopeMissing(steps),
     ...detectDuplicateKeyPassed(steps),

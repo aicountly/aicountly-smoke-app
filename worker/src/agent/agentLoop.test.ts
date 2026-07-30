@@ -288,6 +288,44 @@ test('blocked is accepted even after a submit when the model already admits the 
   }
 });
 
+test('blocked is accepted after a submit when the reason names a server-side refusal', () => {
+  const steps = [step({ ordinal: 19 })];
+  const submitted = submittedControls(steps);
+  const scroll = { y: 900, maxY: 900, deepestSeen: 900 };
+
+  // The submit control was found and clicked; the target rejected it. That is
+  // not a "cannot find the control" claim, so it must not be sent back to
+  // scroll-and-retry against an error that scrolling cannot fix.
+  for (const reason of [
+    'The engagement was not created: Insufficient permissions.',
+    'Save failed with "Permission denied" from the server.',
+    'The request was rejected: 403 Forbidden.',
+    'Create failed with a 500 server error.',
+    'The user is not authorized to perform this action.',
+  ]) {
+    assert.equal(
+      evaluateBlockedDecision({ steps, submitted, scroll, refusalsUsed: 0, reason }),
+      null,
+      reason,
+    );
+  }
+});
+
+test('blocked still refutes a missing-control claim even when it mentions an unrelated status-shaped number', () => {
+  const steps = [step({ ordinal: 19 })];
+  const submitted = submittedControls(steps);
+  const scroll = { y: 900, maxY: 900, deepestSeen: 900 };
+
+  const refutation = evaluateBlockedDecision({
+    steps,
+    submitted,
+    scroll,
+    refusalsUsed: 0,
+    reason: 'I cannot find any create control on this screen.',
+  });
+  assert.match(String(refutation), /Create employee master/);
+});
+
 test('blocked is refused when part of the page was never scrolled into view', () => {
   const refutation = evaluateBlockedDecision({
     steps: [],

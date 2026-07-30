@@ -10,10 +10,8 @@
 
 import type { Locator, Page } from 'playwright';
 import {
-  hasEmptyCompanyCopy,
   isCompanyRowText,
-  looksLikeCompanyPicker,
-  readCompanyCount,
+  isPickerScreen,
 } from './companyPicker.js';
 
 export type CompanyCard = {
@@ -118,14 +116,17 @@ export function describeCards(cards: CompanyCard[]): string {
  * Whether we are still standing on the company picker.
  *
  * A company-scoped route can carry /company in its path, so the URL alone is not
- * enough: require the screen to be listing or counting companies as well.
+ * enough: require the screen to be listing or counting companies as well. See
+ * `isPickerScreen` for why a route that does not look like the picker needs more
+ * than a text-shaped row match.
  */
 export async function isOnCompanyPicker(page: Page): Promise<boolean> {
   const bodyText = await readBodyText(page);
-  if (!looksLikeCompanyPicker(page.url(), bodyText)) return false;
-  if (readCompanyCount(bodyText) !== null) return true;
-  if (hasEmptyCompanyCopy(bodyText)) return true;
-  return (await findCompanyCards(page)).length > 0;
+  return isPickerScreen({
+    url: page.url(),
+    bodyText,
+    findCards: () => findCompanyCards(page),
+  });
 }
 
 /**

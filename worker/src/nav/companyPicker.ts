@@ -10,11 +10,40 @@ export function hasEmptyCompanyCopy(bodyText: string): boolean {
     || /\bno\s+compan(?:y|ies)\s+yet\b/i.test(text);
 }
 
+/** Whether the URL itself is shaped like a company-picker route. */
+export function isPickerUrl(url: string): boolean {
+  return /#\/company\/all|\/compan(?:y|ies)(?:\/|$)/i.test(url);
+}
+
 export function looksLikeCompanyPicker(url: string, bodyText: string): boolean {
   const text = bodyText.slice(0, 30_000);
-  return /#\/company\/all|\/compan(?:y|ies)(?:\/|$)/i.test(url)
+  return isPickerUrl(url)
     || /\b(select|choose|switch)\s+(a\s+)?(company|organisation|organization)\b/i.test(text)
     || hasEmptyCompanyCopy(text);
+}
+
+/**
+ * The full "are we standing on the picker" verdict, kept free of Playwright so
+ * it can run against fixed strings in tests.
+ *
+ * `looksLikeCompanyPicker` also fires on body text alone (e.g. a persistent
+ * "Switch company" control in the app shell), which is not enough on a route
+ * that is not picker-shaped: a card-shaped list exists on plenty of feature
+ * screens too. When the URL itself does not look like a picker, only a printed
+ * count, explicit empty-state copy, or genuinely tagged (not row-fallback)
+ * cards are believed.
+ */
+export async function isPickerScreen(input: {
+  url: string;
+  bodyText: string;
+  findCards: () => Promise<Array<{ source: 'selector' | 'row_fallback' }>>;
+}): Promise<boolean> {
+  if (!looksLikeCompanyPicker(input.url, input.bodyText)) return false;
+  if (readCompanyCount(input.bodyText) !== null) return true;
+  if (hasEmptyCompanyCopy(input.bodyText)) return true;
+  if (isPickerUrl(input.url)) return (await input.findCards()).length > 0;
+  const cards = await input.findCards();
+  return cards.some((card) => card.source === 'selector');
 }
 
 export function bodyMentionsCompany(bodyText: string, companyName: string): boolean {

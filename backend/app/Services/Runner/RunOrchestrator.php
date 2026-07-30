@@ -184,27 +184,38 @@ class RunOrchestrator
         // A session that reached none of its scope finished without testing
         // anything. It did not fail — nothing errored — but calling it done would
         // put a green tick over an unobserved screen, so it gets its own status.
-        $blocked = (string) ($payload['coverage'] ?? 'covered') === 'blocked';
-        $reason  = trim((string) ($payload['coverage_reason'] ?? ''));
+        // A session that reached its scope but never finished cleanly (budget
+        // exhausted, no create verified) is not that either: it did real work,
+        // but logging it as "completed successfully" hides that it did not
+        // actually finish the job, so it keeps its own status and reason too.
+        $coverage = (string) ($payload['coverage'] ?? 'covered');
+        $blocked  = $coverage === 'blocked';
+        $partial  = $coverage === 'partial';
+        $reason   = trim((string) ($payload['coverage_reason'] ?? ''));
 
+        $status = $blocked ? 'blocked' : ($partial ? 'partial' : 'done');
         $db->table('smoke_sessions')->where('id', $job->session_id)->update([
-            'status'        => $blocked ? 'blocked' : 'done',
+            'status'        => $status,
             'completed_at'  => $now,
-            'error_message' => $blocked ? mb_substr($reason, 0, 4000) : null,
+            'error_message' => ($blocked || $partial) ? mb_substr($reason, 0, 4000) : null,
             'agent_steps_json' => json_encode(
                 is_array($payload['agent_steps'] ?? null) ? $payload['agent_steps'] : [],
             ),
             'updated_at'    => $now,
         ]);
+        $logMessage = 'Session completed successfully';
+        if ($blocked) {
+            $logMessage = 'Session finished but covered nothing' . ($reason !== '' ? ': ' . mb_substr($reason, 0, 500) : '');
+        } elseif ($partial) {
+            $logMessage = 'Session finished without a clean pass' . ($reason !== '' ? ': ' . mb_substr($reason, 0, 500) : '');
+        }
         Services::runLog()->append(
             (int) $job->run_id,
             (int) $job->session_id,
             $jobId,
             'worker',
-            $blocked ? 'warn' : 'info',
-            $blocked
-                ? 'Session finished but covered nothing' . ($reason !== '' ? ': ' . mb_substr($reason, 0, 500) : '')
-                : 'Session completed successfully',
+            ($blocked || $partial) ? 'warn' : 'info',
+            $logMessage,
         );
         $db->query('UPDATE smoke_observation_runs SET sessions_done = sessions_done + 1, updated_at = NOW() WHERE id = ?', [$job->run_id]);
         $this->finalizeRunIfDone((int) $job->run_id);
@@ -469,10 +480,13 @@ class RunOrchestrator
     {
         $db = Database::connect();
 
+        // A 'partial' session reached and exercised its scope, even if it did not
+        // finish cleanly — it counts as coverage for run-level purposes the same
+        // way 'done' does. Only 'blocked' (no scope ever reached) does not.
         return $db->table('smoke_session_jobs j')
             ->join('smoke_sessions s', 's.id = j.session_id')
             ->where('j.run_id', $runId)
-            ->where('s.status', 'done')
+            ->whereIn('s.status', ['done', 'partial'])
             ->countAllResults();
     }
 

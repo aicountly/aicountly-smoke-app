@@ -112,6 +112,65 @@ test('does not flag a record-absent blocked step with no preceding submit', () =
   assert.equal(findings.find((f) => f.title === 'Record may not appear in list after save'), undefined);
 });
 
+test('flags a permission-denied blocked step that follows a successful submit', () => {
+  const findings = detectAgentFindings([
+    step({
+      ordinal: 1,
+      action: { type: 'click', mark: 38 },
+      target_label: 'Create engagement',
+      outcome: 'executed',
+      signature_before: sig('/engagements/new'),
+      signature_after: sig('/engagements/new'),
+      signature_changed: false,
+    }),
+    step({
+      ordinal: 2,
+      action: { type: 'blocked', reason: 'Insufficient permissions.' },
+      outcome: 'terminal',
+      outcome_observation: 'Insufficient permissions.',
+    }),
+  ]);
+  const finding = findings.find((f) => f.title === 'Create/submit rejected on permissions');
+  assert.ok(finding);
+  assert.equal(finding?.category, 'permissions');
+  assert.equal(finding?.severity, 'high');
+  assert.match(finding!.description, /Create engagement/);
+  assert.match(finding!.description, /Insufficient permissions/);
+});
+
+test('does not flag a permission-denied blocked step with no preceding submit', () => {
+  const findings = detectAgentFindings([
+    step({
+      ordinal: 1,
+      action: { type: 'blocked', reason: 'Insufficient permissions.' },
+      outcome: 'terminal',
+      outcome_observation: 'Insufficient permissions.',
+    }),
+  ]);
+  assert.equal(findings.find((f) => f.title === 'Create/submit rejected on permissions'), undefined);
+});
+
+test('does not flag a blocked step for an unrelated reason after a submit', () => {
+  const findings = detectAgentFindings([
+    step({
+      ordinal: 1,
+      action: { type: 'click', mark: 38 },
+      target_label: 'Create engagement',
+      outcome: 'executed',
+      signature_before: sig('/engagements/new'),
+      signature_after: sig('/engagements/new'),
+      signature_changed: false,
+    }),
+    step({
+      ordinal: 2,
+      action: { type: 'blocked', reason: 'No further steps remain in the wizard.' },
+      outcome: 'terminal',
+      outcome_observation: 'No further steps remain in the wizard.',
+    }),
+  ]);
+  assert.equal(findings.find((f) => f.title === 'Create/submit rejected on permissions'), undefined);
+});
+
 test('flags interactive controls with no accessible name', () => {
   const findings = detectAgentFindings([
     step({ ordinal: 1, action: { type: 'click', mark: 2 }, target_label: '\u2014' }),

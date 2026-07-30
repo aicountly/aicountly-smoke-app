@@ -178,7 +178,13 @@ export function SessionLogPage() {
           {data?.session && (
             <p className="text-xs text-ink-500 mt-0.5">
               status{' '}
-              <span className={data.session.status === 'blocked' ? 'badge-warning' : 'badge-neutral'}>
+              <span className={
+                data.session.status === 'blocked'
+                  ? 'badge-warning'
+                  : data.session.status === 'partial'
+                    ? 'badge-info'
+                    : 'badge-neutral'
+              }>
                 {data.session.status}
               </span>
               {' '}&middot; job <span className="badge-neutral">{data.session.job_status ?? '—'}</span>
@@ -196,6 +202,12 @@ export function SessionLogPage() {
       {data?.session.status === 'blocked' && data.session.error_message && (
         <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 shrink-0">
           This session finished without testing its scope: {data.session.error_message}
+        </div>
+      )}
+
+      {data?.session.status === 'partial' && data.session.error_message && (
+        <div className="mb-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 shrink-0">
+          This session reached its scope but did not finish cleanly: {data.session.error_message}
         </div>
       )}
 
