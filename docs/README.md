@@ -295,11 +295,17 @@ click it cannot land — it takes the recommended option and records it in
 It only ever chooses an option this target permits. Ending a session is always a
 human call, and creating a company on its own needs `sandbox`, `gh_staging` or
 `production_full_access`. Where an option is closed to it, the run falls back
-through dismiss → navigate → open → skip → rescan rather than attempting it: on
-an observer-only tier an empty picker therefore skips company-scoped navigation
-and the session still completes, instead of failing on a guard it was never
-going to pass. A human, or a remembered human choice, may still create a company
-on any tier.
+through dismiss → navigate → open → skip → rescan rather than attempting it and
+failing on a guard it was never going to pass.
+
+Deciding alone stops where it stops helping. If every option still open to the
+run only gives up on the screen — skip or rescan — while an operator could have
+unblocked it, the run asks instead of skipping quietly; otherwise it would hand
+back a green session that observed nothing. That is the empty-picker case on an
+observer-only tier: only a human may approve the company, so only a human is
+asked. Answer once and it is remembered for the rest of the run. If nobody
+answers within 30 minutes the run continues with the fallback and the decision
+stays recorded as `timed_out`, so the report shows it went unanswered.
 
 Set `SMOKE_AUTONOMOUS=false` to go back to parking the job and waiting up to 30
 minutes for an operator on every unexpected screen.

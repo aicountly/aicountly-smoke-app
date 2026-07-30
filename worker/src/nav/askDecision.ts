@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import { appendLog, backend, heartbeat, type Job } from '../backend.js';
 import { invokeBrain } from '../brain/ensemble.js';
 import { config } from '../config.js';
-import { autonomousOption } from './autonomousChoice.js';
+import { autonomousOption, humanCouldDoMore } from './autonomousChoice.js';
 
 export const NAV_ACTIONS = [
   'open_company',
@@ -108,21 +108,38 @@ export async function askOrRecallDecision(input: AskDecisionInput): Promise<Deci
   // 30-minute wait below ends in a failed session either way. When autonomy is on
   // we take the recommended route and record it, so the run keeps moving and the
   // audit trail still says exactly what was chosen and why.
-  if (config.autonomous) {
-    const auto = autonomousOption(input.job.profile.environment, proposed.options, proposed.recommended);
-    if (auto) {
-      const passedOver = proposed.recommended && auto.id !== proposed.recommended
-        ? ` (${proposed.recommended} is not permitted on ${input.job.profile.environment})`
+  const environment = input.job.profile.environment;
+  const fallback = config.autonomous
+    ? autonomousOption(environment, proposed.options, proposed.recommended)
+    : null;
+
+  if (fallback) {
+    // Deciding alone is only an improvement while the run can actually get past
+    // the screen. Where the only moves left to it are to give up, an operator can
+    // do strictly more, and skipping quietly would hand back a green run that
+    // observed nothing.
+    if (humanCouldDoMore(environment, proposed.options)) {
+      await log(
+        input.job,
+        `Not deciding ${input.situationKey} alone: every option open to the run on ${environment} `
+        + `gives up on this screen, and an operator could unblock it. Asking, and falling back to `
+        + `"${fallback.label}" if nobody answers.`,
+        'warn',
+      );
+    } else {
+      const passedOver = proposed.recommended && fallback.id !== proposed.recommended
+        ? ` (${proposed.recommended} is not permitted on ${environment})`
         : '';
-      await persistPreAnsweredDecision(input, auto, 'auto').catch(async (error: unknown) => {
+      await persistPreAnsweredDecision(input, fallback, 'auto').catch(async (error: unknown) => {
         await log(input.job, `Could not audit autonomous decision: ${errorMessage(error)}`, 'warn');
       });
       await log(
         input.job,
-        `Decided "${auto.label}" without asking (autonomous mode) for ${input.situationKey}${passedOver}`,
+        `Decided "${fallback.label}" without asking (autonomous mode) for ${input.situationKey}${passedOver}`,
       );
-      return { option: auto, source: 'auto', explicitApproval: true };
+      return { option: fallback, source: 'auto', explicitApproval: true };
     }
+  } else if (config.autonomous) {
     await log(
       input.job,
       `No safe autonomous option for ${input.situationKey}; asking an operator.`,
@@ -189,7 +206,18 @@ export async function askOrRecallDecision(input: AskDecisionInput): Promise<Deci
   await backend.post(`/worker/decisions/${decisionId}/timeout`).catch(async (error: unknown) => {
     await log(input.job, `Could not mark decision timed_out: ${errorMessage(error)}`, 'warn');
   });
-  throw new Error(`Timed out waiting ${Math.round(timeoutMs / 60_000)} minutes for decision ${decisionId}.`);
+  const waited = Math.round(timeoutMs / 60_000);
+  // Nobody answered, so take the fallback rather than lose the session entirely.
+  // The decision row stays timed_out, so the report still says it went unanswered.
+  if (fallback) {
+    await log(
+      input.job,
+      `Nobody answered decision ${decisionId} in ${waited} minutes; continuing with "${fallback.label}".`,
+      'warn',
+    );
+    return { option: fallback, source: 'auto', explicitApproval: true };
+  }
+  throw new Error(`Timed out waiting ${waited} minutes for decision ${decisionId}.`);
 }
 
 /**

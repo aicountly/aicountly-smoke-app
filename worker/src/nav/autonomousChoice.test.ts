@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { autonomousOption, isAutonomouslyAllowed } from './autonomousChoice.js';
+import { autonomousOption, humanCouldDoMore, isAutonomouslyAllowed } from './autonomousChoice.js';
 import type { DecisionOption } from './askDecision.js';
 
 /** The options resolveAppContext offers when the company picker is empty. */
@@ -64,5 +64,36 @@ describe('autonomousOption', () => {
   it('ignores a recommendation that is not on offer', () => {
     const choice = autonomousOption('sandbox', BLOCKED_CLICK, 'something_else');
     assert.equal(choice?.id, 'dismiss_and_retry');
+  });
+});
+
+describe('humanCouldDoMore', () => {
+  it('is true when only a human may create the company this screen needs', () => {
+    assert.equal(humanCouldDoMore('production_restricted', EMPTY_PICKER), true);
+    assert.equal(humanCouldDoMore('production_readonly', EMPTY_PICKER), true);
+  });
+
+  it('is false once the run may create the company itself', () => {
+    assert.equal(humanCouldDoMore('production_full_access', EMPTY_PICKER), false);
+    assert.equal(humanCouldDoMore('sandbox', EMPTY_PICKER), false);
+  });
+
+  it('is false when the run can get past the screen on its own', () => {
+    // Dismissing an overlay is real progress, so there is nothing to ask about.
+    assert.equal(humanCouldDoMore('production_restricted', BLOCKED_CLICK), false);
+  });
+
+  it('is true when abort is the only thing left', () => {
+    const onlyAbort: DecisionOption[] = [{ id: 'abort_session', label: 'Abort', action: 'abort_session' }];
+    assert.equal(humanCouldDoMore('sandbox', onlyAbort), true);
+  });
+
+  it('is false when giving up is genuinely all anyone could do', () => {
+    const skipOnly: DecisionOption[] = [
+      { id: 'skip_control', label: 'Skip', action: 'skip_target' },
+      { id: 'rescan_menus', label: 'Rescan', action: 'rescan_menus' },
+      { id: 'abort_session', label: 'Abort', action: 'abort_session' },
+    ];
+    assert.equal(humanCouldDoMore('production_restricted', skipOnly), false);
   });
 });

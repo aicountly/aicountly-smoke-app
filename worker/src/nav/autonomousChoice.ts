@@ -23,6 +23,27 @@ export const AUTONOMOUS_FALLBACK_ORDER: NavAction[] = [
   'rescan_menus',
 ];
 
+/**
+ * Actions that give up on the target rather than get past it. Choosing one is a
+ * legitimate answer, but it observes nothing, so it must never be chosen quietly
+ * while an operator could have unblocked the screen instead.
+ */
+const GIVES_UP: NavAction[] = ['skip_target', 'rescan_menus'];
+
+/**
+ * True when an operator has options here that the run does not — a create the
+ * tier reserves for a human, say. The run can still carry on alone, but it would
+ * be carrying on past a screen somebody could have opened for it, so the honest
+ * move is to ask and only fall back if nobody answers.
+ */
+export function humanCouldDoMore(environment: string, options: DecisionOption[]): boolean {
+  const ours = options.filter((option) => isAutonomouslyAllowed(environment, option.action));
+  if (ours.length === 0) return true;
+  if (ours.some((option) => !GIVES_UP.includes(option.action))) return false;
+  return options.some((option) => option.action !== 'abort_session'
+    && !isAutonomouslyAllowed(environment, option.action));
+}
+
 export function isAutonomouslyAllowed(environment: string, action: NavAction): boolean {
   // Ending a session is a judgement call that stays with a human.
   if (action === 'abort_session') return false;
