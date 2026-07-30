@@ -1,6 +1,12 @@
 import path from 'node:path';
 import type { FeatureGap } from '../reviewer/featureGapEngine.js';
 import type { UxIssue } from '../reviewer/uxReviewEngine.js';
+import {
+  DEFAULT_REPO_RULES,
+  resolveOwnership,
+  type RepoOwnership,
+  type RepoRule,
+} from './repoAttribution.js';
 
 export type CursorPromptContext = {
   product_name: string;
@@ -8,6 +14,7 @@ export type CursorPromptContext = {
   run_code: string;
   session_name: string;
   menu_path: string;
+  repo_rules?: RepoRule[];
 };
 
 export function buildUxHumanSummary(issue: UxIssue): string {
@@ -53,6 +60,8 @@ export function buildUxCursorPrompt(issue: UxIssue, context: CursorPromptContext
     ...sampleLines('Console', evidence.console_events ?? evidence.events),
     ...sampleLines('Network', evidence.network_events ?? evidence.sample),
   ];
+  const fileIo = issue.category === 'file_io';
+  const ownership = ownershipFor(context, urls);
 
   return [
     `# ${issue.title}`,
@@ -70,25 +79,33 @@ export function buildUxCursorPrompt(issue: UxIssue, context: CursorPromptContext
       ...inventory,
       ...runtime,
     ]),
+    section('Owner repository', ownerRepositoryLines(ownership)),
     section('Task', [
-      `In the ${context.product_name} product repository, ${sentence(issue.recommendation)}`,
+      ...taskLines(ownership, context, fileIo
+        ? `fix the file upload/download/export fidelity failure. ${sentence(issue.recommendation)}`
+        : sentence(issue.recommendation)),
       'Keep the implementation on the affected product surface; do not modify the smoke-testing application.',
     ]),
-    section('Done when', doneWhenForUx(issue)),
-    section('Constraints', constraints()),
+    section('Done when', fileIo ? [
+      '- The same synthetic fixture uploads or imports successfully in a safe demo environment.',
+      '- The downloaded/exported artifact preserves expected MIME, structure, and content.',
+      '- Product tests cover success, validation, and failed-transfer states.',
+    ] : doneWhenForUx(issue)),
+    section('Constraints', constraints(ownership.groups.length > 1)),
   ].join('\n\n');
 }
 
 export function buildFeatureGapCursorPrompt(gap: FeatureGap, context: CursorPromptContext): string {
   const evidence = gap.evidence ?? { sample_labels: [], screens_checked: [] };
   const validateFirst = gap.mode === 'validate_first';
+  const ownership = ownershipFor(context, evidence.screens_checked);
   const task = validateFirst
     ? [
-        `Confirm in the ${context.product_name} product repository and with the product owner whether "${gap.expected_feature}" already exists, is intentionally out of scope, or belongs on the backlog.`,
+        ...taskLines(ownership, context, `confirm with the product owner whether "${gap.expected_feature}" already exists, is intentionally out of scope, or belongs on the backlog.`),
         'If it is genuinely missing and approved, open a scoped implementation ticket with fresh product evidence. This is not a build order.',
       ]
     : [
-        `In the ${context.product_name} product repository, implement the missing "${gap.expected_feature}" capability on the session surface.`,
+        ...taskLines(ownership, context, `implement the missing "${gap.expected_feature}" capability on the session surface.`),
         sentence(gap.recommendation),
       ];
 
@@ -113,6 +130,7 @@ export function buildFeatureGapCursorPrompt(gap: FeatureGap, context: CursorProm
       ...gap.sources.slice(0, 3).map((source) => `- Research source: ${source.title ?? source.url ?? 'competitor reference'}${source.url ? ` (${source.url})` : ''}`),
       ...(evidence.sample_labels.length || gap.competitor_ref ? [] : ['- No strong product evidence was captured.']),
     ]),
+    section('Owner repository', ownerRepositoryLines(ownership)),
     section('Task', task),
     section('Done when', validateFirst
       ? [
@@ -126,8 +144,12 @@ export function buildFeatureGapCursorPrompt(gap: FeatureGap, context: CursorProm
           '- Relevant product tests cover the primary path and failure states.',
         ]),
     section('Constraints', validateFirst
-      ? ['- Do not implement from competitor marketing copy alone.', '- Treat competitor references as research hints, not requirements.', ...constraints()]
-      : constraints()),
+      ? [
+          '- Do not implement from competitor marketing copy alone.',
+          '- Treat competitor references as research hints, not requirements.',
+          ...constraints(ownership.groups.length > 1),
+        ]
+      : constraints(ownership.groups.length > 1)),
   ].join('\n\n');
 }
 
@@ -140,10 +162,23 @@ export function buildCursorPromptPack(
     ...uxIssues.map((issue) => issue.developer_prompt || buildUxCursorPrompt(issue, context)),
     ...featureGaps.map((gap) => gap.developer_prompt || buildFeatureGapCursorPrompt(gap, context)),
   ];
+  const ownership = ownershipFor(context, [
+    ...uxIssues.flatMap((issue) => stringList(issue.evidence?.affected_urls ?? issue.evidence?.url)),
+    ...featureGaps.flatMap((gap) => stringList(gap.evidence?.screens_checked)),
+  ]);
+  const repos = ownership.groups.map((group) => group.repo);
   return [
     `# Cursor prompts: ${context.run_code} / ${context.session_name}`,
     '',
-    `Generated for the ${context.product_name} product repository.`,
+    ...(repos.length
+      ? [
+          `Owner repositories in this run: ${repos.join(', ')}.`,
+          'Each prompt names the repository that owns the change; do not apply changes outside the repository named in the prompt.',
+        ]
+      : [
+          'Owner repository was not resolved from the observed URLs.',
+          'Ownership must be confirmed before changing code; do not apply changes outside the repository named in the prompt.',
+        ]),
     '',
     ...prompts.flatMap((prompt, index) => [index ? '\n---\n' : '', prompt]),
     '',
@@ -168,11 +203,50 @@ function doneWhenForUx(issue: UxIssue): string[] {
   ];
 }
 
-function constraints(): string[] {
+function constraints(spansMultipleRepos = false): string[] {
   return [
     '- Stay on this product surface and do not expand scope to unrelated modules.',
     '- Reuse the existing product architecture and design-system components.',
+    ...(spansMultipleRepos
+      ? ['- Do not port a fix from one product’s stack into another; each repository has its own framework and design system.']
+      : []),
     '- Do not edit or add behavior to the smoke-testing application.',
+  ];
+}
+
+function ownershipFor(context: CursorPromptContext, urls: readonly string[]): RepoOwnership {
+  return resolveOwnership(urls, context.repo_rules ?? DEFAULT_REPO_RULES);
+}
+
+function ownerRepositoryLines(ownership: RepoOwnership): string[] {
+  const lines = ownership.groups.flatMap((group) => [
+    `- Repository: ${group.repo}`,
+    ...group.urls.map((url) => `  - ${url}`),
+  ]);
+  if (ownership.unresolved.length) {
+    lines.push('- Ownership could not be determined for the following URL(s); confirm the owning repository before changing code:');
+    lines.push(...ownership.unresolved.map((url) => `  - ${url}`));
+  }
+  if (!lines.length) {
+    lines.push('- No URL was captured, so ownership could not be determined; confirm the owning repository before changing code.');
+  }
+  return lines;
+}
+
+function taskLines(ownership: RepoOwnership, context: CursorPromptContext, instruction: string): string[] {
+  const repos = ownership.groups.map((group) => group.repo);
+  if (repos.length === 1) {
+    return [`In the ${repos[0]} repository, ${instruction}`];
+  }
+  if (repos.length > 1) {
+    return [
+      `Address the repositories listed in the Owner repository section (${repos.join(', ')}): ${instruction}`,
+      'Each surface must be fixed in the repository that owns it: open one pull request per repository.',
+    ];
+  }
+  return [
+    `In the repository that owns the affected ${context.product_name} surface, ${instruction}`,
+    'Ownership was not resolved from the observed URLs; confirm which repository owns the surface before writing code.',
   ];
 }
 
@@ -205,7 +279,7 @@ function sentence(value: string): string {
 function plainSentence(value: string | undefined): string {
   const trimmed = String(value ?? '').trim();
   if (!trimmed) return '';
-  if (/[#.\[\]>`]|selector|component|css|xpath/i.test(trimmed) && trimmed.length < 120) {
+  if (/[#.[\]>`]|selector|component|css|xpath/i.test(trimmed) && trimmed.length < 120) {
     return '';
   }
   return sentence(trimmed);

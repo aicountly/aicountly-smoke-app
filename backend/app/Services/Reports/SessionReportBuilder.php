@@ -43,7 +43,7 @@ class SessionReportBuilder
             }
         }
         $cursorPrompts = '# Cursor prompts: ' . $run['run_code'] . ' / ' . $sess['name']
-            . "\n\nGenerated for the " . $run['product_name'] . " product repository.\n\n"
+            . "\n\n" . $this->promptPackOwnershipHeader($cursorPromptParts) . "\n\n"
             . implode("\n\n---\n\n", $cursorPromptParts) . "\n";
 
         $severityCount = ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0, 'suggestion' => 0];
@@ -139,6 +139,35 @@ class SessionReportBuilder
         }
 
         return ['report_id' => $reportId, 'html_path' => $htmlPath, 'json_path' => $jsonPath, 'cursor_prompts_path' => $cursorPromptsPath];
+    }
+
+    /**
+     * A smoke session crosses hosts owned by different repositories, so the pack
+     * header must not claim a single one. The worker resolves ownership per URL;
+     * here we only read back the "- Repository:" lines it already wrote, keeping
+     * the URL -> repository mapping in one place.
+     *
+     * @param string[] $promptParts
+     */
+    private function promptPackOwnershipHeader(array $promptParts): string
+    {
+        $repos = [];
+        foreach ($promptParts as $prompt) {
+            if (preg_match_all('/^\s*-\s*Repository:\s*(\S.*?)\s*$/m', (string) $prompt, $matches) > 0) {
+                foreach ($matches[1] as $repo) {
+                    $repos[$repo] = true;
+                }
+            }
+        }
+        if ($repos === []) {
+            return "Owner repository is stated per prompt and must be confirmed before changing code.\n"
+                . 'Do not apply changes outside the repository named in the prompt.';
+        }
+        $names = array_keys($repos);
+        sort($names);
+
+        return 'Owner repositories in this run: ' . implode(', ', $names) . ".\n"
+            . 'Each prompt names the repository that owns the change; do not apply changes outside the repository named in the prompt.';
     }
 
     private function buildScreenshotCards(array $results, string $reportsDir, ReportArtifactResolver $resolver): array

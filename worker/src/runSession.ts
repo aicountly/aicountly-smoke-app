@@ -26,6 +26,7 @@ import {
   buildUxHumanSummary,
   type CursorPromptContext,
 } from './reporter/cursorPromptBuilder.js';
+import { loadRepoRules } from './reporter/repoAttribution.js';
 import { parseAllowedActions } from './utils/safeActionGuard.js';
 import { evaluateHostGuard } from './utils/hostGuard.js';
 import { isOnCompanyPicker } from './nav/companyCards.js';
@@ -436,6 +437,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     run_code: job.run.run_code,
     session_name: job.session.name,
     menu_path: job.session.menu_path,
+    repo_rules: loadRepoRules(),
   };
   const uxIssues = dedupeUxIssues(allUx);
   for (const issue of uxIssues) {

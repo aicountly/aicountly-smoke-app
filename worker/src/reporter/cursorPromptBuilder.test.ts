@@ -15,28 +15,61 @@ const context = {
   menu_path: '/attendance',
 };
 
-test('UX prompt contains every required section and targets product repo', () => {
-  const prompt = buildUxCursorPrompt({
-    category: 'navigation',
-    severity: 'low',
-    title: 'Breadcrumb missing',
-    description: 'No breadcrumb was detected.',
-    recommendation: 'Add the existing breadcrumb component.',
-    human_summary: '',
-    developer_prompt: '',
-    evidence: {
-      affected_urls: ['https://product.test/attendance'],
-      screenshot_paths: ['/tmp/attendance.png'],
-      inventory_samples: [{ kind: 'menu', label: 'Attendance', selector: '#nav-attendance' }],
-    },
-  }, context);
+const uxIssue = (affectedUrls: string[]) => ({
+  category: 'navigation',
+  severity: 'low' as const,
+  title: 'Breadcrumb missing',
+  description: 'No breadcrumb was detected.',
+  recommendation: 'Add the existing breadcrumb component.',
+  human_summary: '',
+  developer_prompt: '',
+  evidence: {
+    affected_urls: affectedUrls,
+    screenshot_paths: ['/tmp/attendance.png'],
+    inventory_samples: [{ kind: 'menu', label: 'Attendance', selector: '#nav-attendance' }],
+  },
+});
 
-  for (const section of ['Context', 'Screen(s)', 'Problem', 'Evidence', 'Task', 'Done when', 'Constraints']) {
+test('UX prompt contains every required section and never guesses an unmapped repo', () => {
+  const prompt = buildUxCursorPrompt(uxIssue(['https://product.test/attendance']), context);
+
+  for (const section of ['Context', 'Screen(s)', 'Problem', 'Evidence', 'Owner repository', 'Task', 'Done when', 'Constraints']) {
     assert.match(prompt, new RegExp(`## ${section.replace(/[()]/g, '\\$&')}`));
   }
-  assert.match(prompt, /HRMS product repository/);
+  assert.doesNotMatch(prompt, /HRMS product repository/);
+  assert.doesNotMatch(prompt, /- Repository:/);
+  assert.match(prompt, /Ownership could not be determined for the following URL\(s\)/);
+  assert.match(prompt, /confirm which repository owns the surface before writing code/i);
   assert.match(prompt, /#nav-attendance/);
   assert.match(prompt, /do not modify the smoke-testing application/i);
+});
+
+test('UX prompt on a mapped host names the owning repository', () => {
+  const prompt = buildUxCursorPrompt(uxIssue(['https://hrms.aicountly.com/dashboard']), context);
+
+  assert.match(prompt, /## Owner repository\n- Repository: hrms-react-app\n {2}- https:\/\/hrms\.aicountly\.com\/dashboard/);
+  assert.match(prompt, /In the hrms-react-app repository, Add the existing breadcrumb component\./);
+  assert.doesNotMatch(prompt, /one pull request per repository/);
+});
+
+test('UX prompt spanning two hosts names both repos and demands one PR per repository', () => {
+  const prompt = buildUxCursorPrompt(
+    uxIssue(['https://my.aicountly.com/', 'https://hrms.aicountly.com/dashboard']),
+    context,
+  );
+
+  assert.match(prompt, /- Repository: hrms-react-app/);
+  assert.match(prompt, /- Repository: my-aicountly-com/);
+  assert.match(prompt, /Address the repositories listed in the Owner repository section/);
+  assert.match(prompt, /open one pull request per repository/);
+  assert.match(prompt, /each repository has its own framework and design system/);
+});
+
+test('UX prompt attributes the /api/manage proxy path to its upstream repo', () => {
+  const prompt = buildUxCursorPrompt(uxIssue(['https://hrms.aicountly.com/api/manage/user/logo']), context);
+
+  assert.match(prompt, /- Repository: manage-aicountly/);
+  assert.match(prompt, /In the manage-aicountly repository,/);
 });
 
 test('validate-first gap is explicitly not a build order', () => {

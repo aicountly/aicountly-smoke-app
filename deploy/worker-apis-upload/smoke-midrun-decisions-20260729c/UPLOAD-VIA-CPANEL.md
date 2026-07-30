@@ -98,6 +98,7 @@ Preserve `portals/smoke/` paths. This package includes **reporter + reviewer dep
 | `portals/smoke/utils/dismissOverlays.ts` | `portals/smoke/utils/dismissOverlays.ts` |
 | `portals/smoke/reporter/sessionReportBuilder.ts` | `portals/smoke/reporter/sessionReportBuilder.ts` |
 | `portals/smoke/reporter/cursorPromptBuilder.ts` | `portals/smoke/reporter/cursorPromptBuilder.ts` |
+| `portals/smoke/reporter/repoAttribution.ts` | `portals/smoke/reporter/repoAttribution.ts` **(new — imported by `cursorPromptBuilder.ts`; worker fails to boot without it)** |
 | `portals/smoke/reporter/finalReportBuilder.ts` | `portals/smoke/reporter/finalReportBuilder.ts` |
 | `portals/smoke/reviewer/uxReviewEngine.ts` | `portals/smoke/reviewer/uxReviewEngine.ts` |
 | `portals/smoke/reviewer/featureGapEngine.ts` | `portals/smoke/reviewer/featureGapEngine.ts` |
