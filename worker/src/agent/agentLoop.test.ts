@@ -18,6 +18,7 @@ function sig(overrides: Partial<PageSignature> = {}): PageSignature {
     title: 'Home',
     markCount: 2,
     domHash: 'a',
+    formHash: 'f',
     dialogCount: 0,
     scrollY: 0,
     ...overrides,
@@ -72,13 +73,16 @@ test('parses Set-of-Marks actions without selectors', () => {
   assert.throws(() => parseAgentAction({ type: 'click', selector: '#save' }), /Invalid Set-of-Marks/);
 });
 
-test('page signature key changes on dialogs, DOM changes and scrolling', () => {
+test('page signature key changes on dialogs and DOM/form changes, but not on scroll alone', () => {
   const base = sig();
   assert.notEqual(signatureKey(base), signatureKey(sig({ dialogCount: 1 })));
   assert.notEqual(signatureKey(base), signatureKey(sig({ domHash: 'b' })));
-  // Once offscreen controls are marked, scroll position is the only thing that
-  // moves when the agent scrolls; without it a scroll looks like a no-op.
-  assert.notEqual(signatureKey(base), signatureKey(sig({ scrollY: 800 })));
+  // formHash is what makes typing into a field count as progress.
+  assert.notEqual(signatureKey(base), signatureKey(sig({ formHash: 'g' })));
+  // Scrolling is not progress: a scroll must not look like a changed screen, or
+  // loop detection never penalises scroll thrash and a legitimate scroll never
+  // gets credit for "unchanged" either way.
+  assert.equal(signatureKey(base), signatureKey(sig({ scrollY: 800 })));
   assert.equal(signatureKey(base), signatureKey(sig()));
 });
 
@@ -156,6 +160,86 @@ test('five identical stalled actions warn; fewer do not', () => {
   assert.equal(warnedAt, 5);
 });
 
+test('type/select on an unchanging screen does not increment the unchanged counter', () => {
+  const stuck = sig({ title: 'Form', domHash: 'same', formHash: 'same' });
+  let unchangedCount = 0;
+  let prior = stuck;
+
+  for (let i = 1; i <= 8; i += 1) {
+    const next = evaluateLoopDetection({
+      action: { type: 'type', mark: 4, text: 'SMOKE-value' },
+      before: stuck,
+      after: stuck,
+      recentTriples: [],
+      unchangedCount,
+      priorSignature: prior,
+    });
+    assert.equal(next.warned, false, `type should never trip the unchanged counter (iteration ${i})`);
+    unchangedCount = next.unchangedCount;
+    prior = next.priorSignature;
+  }
+  assert.equal(unchangedCount, 0);
+
+  // A select action on the same unchanging screen is exempt the same way.
+  const afterSelect = evaluateLoopDetection({
+    action: { type: 'select', mark: 5, option: 'Engineering' },
+    before: stuck,
+    after: stuck,
+    recentTriples: [],
+    unchangedCount: 0,
+    priorSignature: prior,
+  });
+  assert.equal(afterSelect.unchangedCount, 0);
+  assert.equal(afterSelect.warned, false);
+});
+
+test('an ordinary click on an unchanging screen still counts toward the unchanged counter', () => {
+  const stuck = sig({ title: 'Form', domHash: 'same', formHash: 'same' });
+  let unchangedCount = 0;
+  let prior = stuck;
+  let warnedAt = 0;
+  for (let i = 1; i <= 6; i += 1) {
+    const next = evaluateLoopDetection({
+      action: { type: 'click', mark: 4 },
+      before: stuck,
+      after: stuck,
+      recentTriples: [],
+      unchangedCount,
+      priorSignature: prior,
+    });
+    unchangedCount = next.unchangedCount;
+    prior = next.priorSignature;
+    if (next.warned) warnedAt = i;
+  }
+  assert.equal(warnedAt, 6);
+});
+
+test('a run of four or more scrolls warns even though the screen keeps "changing" scroll position', () => {
+  const stuck = sig({ title: 'Long page', domHash: 'same', formHash: 'same' });
+  let recentTriples: string[] = [];
+  let unchangedCount = 0;
+  let prior = stuck;
+  let warnedAt = 0;
+
+  for (let i = 1; i <= 4; i += 1) {
+    const next = evaluateLoopDetection({
+      action: { type: 'scroll', direction: 'down', amount: 700 },
+      before: stuck,
+      after: stuck,
+      recentTriples,
+      unchangedCount,
+      priorSignature: prior,
+      consecutiveScrolls: i,
+    });
+    recentTriples = next.recentTriples;
+    unchangedCount = next.unchangedCount;
+    prior = next.priorSignature;
+    if (next.warned) warnedAt = i;
+    if (i < 4) assert.equal(next.warned, false, `should not warn on scroll ${i}`);
+  }
+  assert.equal(warnedAt, 4);
+});
+
 test('only successful clicks on save-style controls count as submitted', () => {
   const found = submittedControls([
     step({ ordinal: 19 }),
@@ -173,11 +257,35 @@ test('blocked is refused once when the session already submitted that control', 
   const submitted = submittedControls(steps);
   const scroll = { y: 0, maxY: 0, deepestSeen: 0 };
 
-  const first = evaluateBlockedDecision({ steps, submitted, scroll, refusalsUsed: 0 });
+  const first = evaluateBlockedDecision({ steps, submitted, scroll, refusalsUsed: 0, reason: 'I cannot find any create control.' });
   assert.match(String(first), /Create employee master/);
   assert.match(String(first), /offscreen/);
   // Second time the agent insists, the run has to let it go or it never ends.
-  assert.equal(evaluateBlockedDecision({ steps, submitted, scroll, refusalsUsed: 1 }), null);
+  assert.equal(
+    evaluateBlockedDecision({ steps, submitted, scroll, refusalsUsed: 1, reason: 'I cannot find any create control.' }),
+    null,
+  );
+});
+
+test('blocked is accepted even after a submit when the model already admits the control was used', () => {
+  const steps = [step({ ordinal: 19 })];
+  const submitted = submittedControls(steps);
+  const scroll = { y: 900, maxY: 900, deepestSeen: 900 };
+
+  // "The record I just saved does not appear in the list" is a plausible product
+  // bug (list not refetching after save), not a false "no such control" claim —
+  // it must not be refuted just because a submit control was clicked this session.
+  for (const reason of [
+    'The new leave type does not appear in the list after saving.',
+    'Saved record is missing from the list.',
+    'The employee is not shown in the list view.',
+  ]) {
+    assert.equal(
+      evaluateBlockedDecision({ steps, submitted, scroll, refusalsUsed: 0, reason }),
+      null,
+      reason,
+    );
+  }
 });
 
 test('blocked is refused when part of the page was never scrolled into view', () => {
@@ -186,6 +294,7 @@ test('blocked is refused when part of the page was never scrolled into view', ()
     submitted: [],
     scroll: { y: 0, maxY: 1400, deepestSeen: 0 },
     refusalsUsed: 0,
+    reason: 'I cannot find a create control anywhere on this screen.',
   });
   assert.match(String(refutation), /1400px/);
 });
@@ -197,6 +306,7 @@ test('blocked is accepted when nothing was submitted and the page was fully seen
       submitted: [],
       scroll: { y: 900, maxY: 900, deepestSeen: 900 },
       refusalsUsed: 0,
+      reason: 'No create control exists on this screen.',
     }),
     null,
   );

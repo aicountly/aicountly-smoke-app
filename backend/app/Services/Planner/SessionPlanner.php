@@ -94,10 +94,16 @@ valid JSON object that conforms exactly to this schema:
       "scope": { "menus": [string], "screens": [string] },
       "allowed_actions": [string],
       "destructive_allowed": false,
-      "expected_screens": integer
+      "expected_screens": integer,
+      "max_steps": integer
     }
   ]
 }
+
+max_steps is optional and nullable: an override for this session's action-step
+budget; omit or set null to use the worker's global default. Heavy modules
+like Payroll or Statutory Compliance may need up to 300 steps; simple modules
+like Login or Dashboard need far fewer (roughly 40).
 
 allowed_actions MUST be drawn from this vocabulary:
   click_menu, click_submenu, click_tab, open_filter, change_filter,
@@ -114,6 +120,17 @@ module. Never plan delete/approve/pay/void/efile actions.
 Include one "File I/O & exports" session. In write-enabled environments it may
 use upload_file, import_file, download_file, export_file, compare_file. Otherwise
 use download_file and export_file for presence/export observation only.
+
+When sessions have a data dependency (e.g. a Payroll session must run and
+create a payroll record before a Statutory Compliance session can show
+non-empty PF/ESI/TDS reports), assign the producing session a lower ordinal
+than the consuming session, so the producer executes first within the plan.
+
+Only plan a session for a module if you have evidence it exists in this
+product's navigation (from the master prompt, prior scans, or the modules
+list); do not invent sessions for modules that may not exist -- prefer
+merging uncertain scope into a broader "Primary Navigation Sweep" session
+instead.
 
 Output ONLY the JSON object -- no prose, no markdown fences.
 PROMPT;
@@ -170,6 +187,7 @@ EOT;
                 'allowed_actions'     => $this->sanitizeActions($s['allowed_actions'] ?? null, $mayEnableDestructive),
                 'destructive_allowed' => $mayEnableDestructive && (($s['destructive_allowed'] ?? true) !== false),
                 'expected_screens'    => (int) ($s['expected_screens'] ?? 5),
+                'max_steps'           => isset($s['max_steps']) && is_numeric($s['max_steps']) ? (int) $s['max_steps'] : null,
             ];
             $sessions[] = $session;
             $i++;

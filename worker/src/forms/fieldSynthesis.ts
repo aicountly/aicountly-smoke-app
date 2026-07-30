@@ -54,11 +54,34 @@ export function isoDate(date: Date): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
+/**
+ * Search/filter boxes and credential-style fields used to share one regex and one
+ * refusal reason, so a search box was refused with the same "credential, OTP, or
+ * statutory identifier" message as a password field — a false and unconvincing
+ * reason the model kept re-testing. They are split so each gets an honest reason,
+ * and so search input can be allowed independently of credentials.
+ */
+export const SEARCH_OR_FILTER = /search|filter/i;
 // "PIN" is deliberately absent: in this product a PIN code is a postal code.
-const NEVER_FILL = /search|filter|\botp\b|captcha|password|passcode|token|secret|api.?key|\bcvv\b|signature/i;
+export const NEVER_FILL_CREDENTIAL = /\botp\b|captcha|password|passcode|token|secret|api.?key|\bcvv\b|signature/i;
 
 /** Identifiers with checksums or registry lookups we must not invent. */
 const UNSAFE_IDENTIFIER = /gstin|\bgst\b|\bcin\b|\bllpin\b|\bdin\b|\btin\b|aadhaar|aadhar|passport|account.?(no|number)|\bifsc\b|\bupi\b|\bmicr\b|\bswift\b|\biban\b|card.?(no|number)/i;
+
+/**
+ * Short-code family already relied on by `synthesizeFieldValue`. Exported so
+ * `actions.ts` can detect the same "this field wants an `[A-Z0-9]`-only code"
+ * shape without duplicating (and drifting from) the pattern.
+ */
+export const CODE_FIELD_PATTERN = /short|abbrev|alias|initials|\bcode\b/i;
+
+/**
+ * Navigating by search or filtering a list writes nothing, so refusing it as
+ * unsafe made a whole class of screens untestable by design. Default on; set
+ * SMOKE_ALLOW_SEARCH_INPUT=0 (or "false") to restore the hard refusal.
+ */
+const allowSearchInputEnv = String(process.env.SMOKE_ALLOW_SEARCH_INPUT ?? '').trim().toLowerCase();
+export const ALLOW_SEARCH_INPUT = allowSearchInputEnv !== '0' && allowSearchInputEnv !== 'false';
 
 /** Normalises separators so word-boundary rules work on snake_case names. */
 function readable(field: FormFieldDescriptor): string {
@@ -79,12 +102,16 @@ export function synthesizeFieldValue(
   const blob = readable(field);
   const isDateField = field.type === 'date' || field.type === 'month' || /\bdate\b|\bdob\b/.test(blob);
 
-  if (NEVER_FILL.test(blob)) return null;
+  // The heuristic synthesizer never invents search/filter text — even once
+  // ALLOW_SEARCH_INPUT permits typing into the box, deciding *what* to search for
+  // is a brain/model job, not a canned-value job.
+  if (SEARCH_OR_FILTER.test(blob)) return null;
+  if (NEVER_FILL_CREDENTIAL.test(blob)) return null;
   if (UNSAFE_IDENTIFIER.test(blob)) return null;
 
   // Postal codes before short codes: "PIN code" matches both.
   if (/pincode|\bpin\b|\bzip\b|postal/.test(blob)) return '560001';
-  if (/short|abbrev|alias|initials|\bcode\b/.test(blob)) return shortCodeFor(entity);
+  if (CODE_FIELD_PATTERN.test(blob)) return shortCodeFor(entity);
   if (/print/.test(blob)) return entity;
   if (/comp|firm|entity|organi[sz]ation|business|trade|legal/.test(blob)) return entity;
 
@@ -154,10 +181,28 @@ export function isPlaceholderOption(value: string, text: string): boolean {
 }
 
 /**
+ * Distinguishes *why* a field would be refused, so the guard can give an honest
+ * reason instead of calling a search box a "credential" because both used to
+ * share one regex. Returned independently of ALLOW_SEARCH_INPUT — that flag is
+ * applied by `isUnsafeToFill` when turning a classification into a permission
+ * decision.
+ */
+export function classifyUnsafeField(field: FormFieldDescriptor): 'credential' | 'search' | 'safe' {
+  const blob = readable(field);
+  if (NEVER_FILL_CREDENTIAL.test(blob) || UNSAFE_IDENTIFIER.test(blob)) return 'credential';
+  if (SEARCH_OR_FILTER.test(blob)) return 'search';
+  return 'safe';
+}
+
+/**
  * Values the model must never be allowed to supply, whatever it returns.
  * Applied to every brain-proposed value before it reaches the page.
+ * Credential/statutory-identifier fields are always unsafe; a search/filter box
+ * is only unsafe when ALLOW_SEARCH_INPUT has been switched off.
  */
 export function isUnsafeToFill(field: FormFieldDescriptor): boolean {
-  const blob = readable(field);
-  return NEVER_FILL.test(blob) || UNSAFE_IDENTIFIER.test(blob);
+  const category = classifyUnsafeField(field);
+  if (category === 'credential') return true;
+  if (category === 'search') return !ALLOW_SEARCH_INPUT;
+  return false;
 }

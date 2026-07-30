@@ -20,6 +20,7 @@ class SessionsController extends BaseController
         if (array_key_exists('allowed_actions', $body))     { $patch['allowed_actions_json'] = json_encode($body['allowed_actions']); }
         if (array_key_exists('destructive_allowed', $body)) { $patch['destructive_allowed']  = (bool) $body['destructive_allowed']; }
         if (array_key_exists('expected_screens', $body))    { $patch['expected_screens']     = (int) $body['expected_screens']; }
+        if (array_key_exists('max_steps', $body)) { $patch['max_steps'] = $body['max_steps'] === null ? null : (int) $body['max_steps']; }
         if ($patch === []) {
             return $this->jsonError('invalid_request', 'Nothing to update.', 400);
         }

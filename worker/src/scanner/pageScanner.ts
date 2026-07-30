@@ -4,6 +4,14 @@ export type PageMetadata = {
   url: string;
   title: string;
   module_name: string | null;
+  /**
+   * True when this screen looks like the signed-in app shell rather than the
+   * login/landing gate. Heuristic: a nav/aside/banner region exposing several
+   * links (a real navigation menu) and no password input on screen. Cheap and
+   * reliable enough to gate navigation-only heuristics without a real auth
+   * signal, which the scanner has no access to.
+   */
+  is_authenticated_shell: boolean;
   has_breadcrumb: boolean;
   has_search: boolean;
   has_help_text: boolean;
@@ -60,12 +68,28 @@ const SCAN_PAGE_JS = `
   }
 
   const moduleEl = document.querySelector('h1, [data-module-name]');
+
+  // See PageMetadata.is_authenticated_shell for the rationale: a real app nav
+  // with several links and no visible password field reads as "signed in";
+  // a bare centered login form (few/no nav links, a password input) does not.
+  const shellNavLinkCount = $('nav a, aside a, [role="navigation"] a').filter(visible).length;
+  const hasPasswordInput = document.querySelector('input[type="password"]') !== null;
+  const isAuthenticatedShell = shellNavLinkCount >= 3 && !hasPasswordInput;
+
+  // Scope the search-box check to a plausible app-shell container when one is
+  // easily identifiable, so a login page's unrelated search-like input cannot
+  // satisfy (or a stray one falsely fail) the global command-palette check.
+  const shellContainer = document.querySelector('header, nav, aside, [role="banner"]');
+  const searchScope = shellContainer || document;
+  const hasSearch = Array.from(searchScope.querySelectorAll('input[type="search"], [role="searchbox"], [aria-label*="search" i]')).filter(visible).length > 0;
+
   return {
     url: location.href,
     title: document.title,
     module_name: (moduleEl && (moduleEl.textContent || '').trim().slice(0, 200)) || null,
+    is_authenticated_shell: isAuthenticatedShell,
     has_breadcrumb: $('[aria-label*="breadcrumb" i], .breadcrumb, .breadcrumbs').filter(visible).length > 0,
-    has_search: $('input[type="search"], [role="searchbox"], [aria-label*="search" i]').filter(visible).length > 0,
+    has_search: hasSearch,
     has_help_text: /help|tooltip|info/i.test(document.body.innerHTML.slice(0, 50000)),
     has_keyboard_shortcuts: /\\bctrl\\b|\\bcmd\\b|\\u2318|\\u21E7/.test(document.body.innerHTML.slice(0, 50000)),
     has_export: /\\bexport\\b/i.test(allText),

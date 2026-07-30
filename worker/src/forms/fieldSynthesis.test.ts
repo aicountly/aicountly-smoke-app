@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  ALLOW_SEARCH_INPUT,
+  classifyUnsafeField,
   financialYearWindow,
   isPlaceholderOption,
   isUnsafeToFill,
@@ -123,8 +125,14 @@ describe('fields the run refuses to touch', () => {
     }
   });
 
-  it('never types into a search or credential field', () => {
+  it('never invents search text, even though search input itself is now allowed by default', () => {
+    // synthesizeFieldValue is the canned-value heuristic; deciding *what* to
+    // search for is a brain/model job, not a canned-value job, so it still
+    // declines regardless of ALLOW_SEARCH_INPUT.
     assert.equal(value({ placeholder: 'Search companies, branches, FY' }), null);
+  });
+
+  it('never types into a credential, OTP, or captcha field', () => {
     assert.equal(value({ name: 'password', type: 'password', required: true }), null);
     assert.equal(value({ name: 'otp', required: true }), null);
     assert.equal(isUnsafeToFill(field({ name: 'api_key' })), true);
@@ -132,6 +140,34 @@ describe('fields the run refuses to touch', () => {
 
   it('allows an ordinary field', () => {
     assert.equal(isUnsafeToFill(field({ name: 'comp_name' })), false);
+  });
+});
+
+describe('classifyUnsafeField and the search-vs-credential refusal split', () => {
+  it('classifies credential and statutory-identifier fields as "credential"', () => {
+    assert.equal(classifyUnsafeField(field({ name: 'password', type: 'password' })), 'credential');
+    assert.equal(classifyUnsafeField(field({ name: 'otp' })), 'credential');
+    assert.equal(classifyUnsafeField(field({ name: 'api_key' })), 'credential');
+    assert.equal(classifyUnsafeField(field({ name: 'gstin' })), 'credential');
+  });
+
+  it('classifies search/filter boxes as "search", distinct from credentials', () => {
+    assert.equal(classifyUnsafeField(field({ placeholder: 'Search companies, branches, FY' })), 'search');
+    assert.equal(classifyUnsafeField(field({ name: 'filter_status' })), 'search');
+  });
+
+  it('classifies an ordinary field as "safe"', () => {
+    assert.equal(classifyUnsafeField(field({ name: 'comp_name' })), 'safe');
+  });
+
+  it('ALLOW_SEARCH_INPUT defaults on, so a search/filter box is not unsafe to fill', () => {
+    assert.equal(ALLOW_SEARCH_INPUT, true);
+    assert.equal(isUnsafeToFill(field({ placeholder: 'Search companies, branches, FY' })), false);
+  });
+
+  it('credential fields stay unsafe to fill regardless of the search flag', () => {
+    assert.equal(isUnsafeToFill(field({ name: 'password', type: 'password' })), true);
+    assert.equal(isUnsafeToFill(field({ name: 'otp' })), true);
   });
 });
 

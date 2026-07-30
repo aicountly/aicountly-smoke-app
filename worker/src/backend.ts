@@ -31,6 +31,8 @@ export type SessionRow = {
   allowed_actions_json: string;
   destructive_allowed: boolean;
   expected_screens: number;
+  /** Per-session override of the step budget; null means fall back to config.maxScreensPerSession. */
+  max_steps: number | null;
 };
 export type RunRow = {
   id: number;

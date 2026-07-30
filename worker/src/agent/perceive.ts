@@ -8,6 +8,16 @@ export type PageSignature = {
   /** Badged controls, i.e. those on screen. Offscreen marks are excluded on purpose. */
   markCount: number;
   domHash: string;
+  /**
+   * Hash of every input/select/textarea's current value/checked state, in DOM
+   * order. `domHash` is innerText + element count, which does not move when a
+   * field is typed into but its rendered text does not change — so a `type`
+   * action looked identical to a no-op. This hash exists to make typing count as
+   * progress without over-counting scroll-triggered re-renders. Optional so
+   * fixtures written before this field existed keep compiling; `signatureKey`
+   * treats a missing value as an empty string.
+   */
+  formHash?: string;
   dialogCount: number;
   scrollY: number;
 };
@@ -37,18 +47,30 @@ export async function signature(page: Page): Promise<PageSignature> {
   const state = await page.evaluate<{
     markCount: number;
     domHash: string;
+    formHash: string;
     dialogCount: number;
     scrollY: number;
   }>(`(() => {
+    const fnv = (source) => {
+      let hash = 2166136261;
+      for (let i = 0; i < source.length; i += 1) {
+        hash ^= source.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16);
+    };
     const source = (document.body && document.body.innerText || '') + '|' + document.querySelectorAll('*').length;
-    let hash = 2166136261;
-    for (let i = 0; i < source.length; i += 1) {
-      hash ^= source.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
+    const formControls = Array.from(document.querySelectorAll('input,select,textarea'));
+    const formSource = formControls
+      .map((el) => {
+        const checked = typeof el.checked === 'boolean' ? (el.checked ? '1' : '0') : '';
+        return (el.value || '') + ':' + checked;
+      })
+      .join('|');
     return {
       markCount: document.querySelectorAll('[data-smoke-mark-badge]').length,
-      domHash: (hash >>> 0).toString(16),
+      domHash: fnv(source),
+      formHash: fnv(formSource),
       dialogCount: document.querySelectorAll('dialog,[role="dialog"],[aria-modal="true"]').length,
       scrollY: Math.round(window.scrollY || document.documentElement.scrollTop || 0)
     };
@@ -78,8 +100,14 @@ export async function scrollExtent(page: Page): Promise<{ y: number; maxY: numbe
   })()`).catch(() => ({ y: 0, maxY: 0, height: 0 }));
 }
 
+/**
+ * `scrollY` is deliberately excluded: scrolling is not progress, and including it
+ * made a pure scroll look like a changed screen while a filled-in field (before
+ * `formHash` existed) looked unchanged — the exact inversion loop detection
+ * depends on getting right.
+ */
 export function signatureKey(value: PageSignature): string {
-  return `${value.url}|${value.title}|${value.markCount}|${value.domHash}|${value.dialogCount}|${value.scrollY}`;
+  return `${value.url}|${value.title}|${value.markCount}|${value.domHash}|${value.formHash ?? ''}|${value.dialogCount}`;
 }
 
 /**

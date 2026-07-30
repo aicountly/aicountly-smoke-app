@@ -1,16 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { CopyButton } from '@/components/CopyButton';
+import { FindingFilterChips } from '@/components/FindingFilterChips';
+import { ReportFindings } from '@/components/ReportFindings';
 import { ReportPrompts } from '@/components/ReportPrompts';
 import {
   asReportJson,
-  deriveSummary,
   extractPromptPack,
   openReportTab,
   reportViewPath,
 } from '@/lib/reports';
+import { collectFindings, facetCounts, severitySummaryTotal } from '@/lib/reportFindings';
+import { useFindingsView } from '@/lib/useFindingsView';
 
 type Report = {
   id: number;
@@ -55,7 +58,10 @@ export function ReportsPage() {
     return id ? Number(id) : null;
   });
   const [actionMsg, setActionMsg] = useState<string | null>(null);
-  const [paneTab, setPaneTab] = useState<'preview' | 'prompts'>('preview');
+  const [paneTab, setPaneTab] = useState<'findings' | 'preview' | 'prompts'>('findings');
+  const { filter, view, hasActiveFilter, setView, toggleSeverity, toggleMode, clearFilter } = useFindingsView({
+    syncUrl: false,
+  });
 
   const { data, isLoading, isError, error } = useQuery<{ data: Report[] }>({
     queryKey: ['reports', filters],
@@ -92,10 +98,12 @@ export function ReportsPage() {
   const { data: html, isLoading: htmlLoading, isError: htmlError } = useQuery({
     queryKey: ['report-html', active],
     queryFn: async () => (await api.get(`/reports/${active}/html`, { responseType: 'text' })).data as string,
-    enabled: active != null,
+    enabled: active != null && paneTab === 'preview',
   });
 
-  const summary = deriveSummary(reportJson ?? null);
+  const findingRows = useMemo(() => collectFindings(reportJson ?? null), [reportJson]);
+  const findingCounts = useMemo(() => facetCounts(findingRows), [findingRows]);
+  const sevTotal = useMemo(() => severitySummaryTotal(reportJson ?? null), [reportJson]);
   const promptPack = extractPromptPack(reportJson ?? null);
   const hasPromptPack = promptPack.length > 0;
   const hasJson = reportJson != null;
@@ -278,18 +286,21 @@ export function ReportsPage() {
                 {actionMsg && <p className="text-xs text-amber-800">{actionMsg}</p>}
 
                 {!jsonLoading && !jsonError && (
-                  <div className="flex flex-wrap gap-2 text-[11px]">
-                    <span className="badge-danger">Critical {summary.critical}</span>
-                    <span className="badge-warning">High {summary.high}</span>
-                    <span className="badge-neutral">Validate first {summary.validateFirst}</span>
-                    <span className="badge-brand">Implement {summary.implement}</span>
-                  </div>
+                  <FindingFilterChips
+                    counts={findingCounts}
+                    filter={filter}
+                    onToggleSeverity={toggleSeverity}
+                    onToggleMode={toggleMode}
+                    onClear={clearFilter}
+                    onChipActivated={() => setPaneTab('findings')}
+                  />
                 )}
               </div>
 
               <div className="flex-1 min-h-0 flex flex-col">
                 <div className="flex gap-1 px-3 pt-1.5 border-b border-ink-100 shrink-0">
                   {([
+                    ['findings', 'Findings'],
                     ['preview', 'HTML preview'],
                     ['prompts', 'Cursor prompts'],
                   ] as const).map(([key, label]) => (
@@ -308,9 +319,26 @@ export function ReportsPage() {
                     </button>
                   ))}
                 </div>
+                {paneTab === 'findings' && (
+                  <div className="flex-1 min-h-0 flex flex-col">
+                    <ReportFindings
+                      rows={findingRows}
+                      loading={jsonLoading}
+                      filter={filter}
+                      view={view}
+                      onViewChange={setView}
+                      onClearFilter={clearFilter}
+                      severitySummaryTotal={sevTotal}
+                    />
+                  </div>
+                )}
                 {paneTab === 'prompts' && (
                   <div className="flex-1 min-h-0 overflow-auto">
-                    <ReportPrompts report={reportJson ?? null} loading={jsonLoading} />
+                    <ReportPrompts
+                      report={reportJson ?? null}
+                      loading={jsonLoading}
+                      filter={hasActiveFilter ? filter : undefined}
+                    />
                   </div>
                 )}
                 {paneTab === 'preview' && htmlLoading && (

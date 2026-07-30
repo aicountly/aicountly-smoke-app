@@ -41,4 +41,13 @@
   .badge-warning  { @apply badge bg-amber-50 text-amber-800; }
   .badge-danger   { @apply badge bg-red-50 text-red-800; }
   .badge-neutral  { @apply badge bg-ink-100 text-ink-700; }
+  .segmented {
+    @apply inline-flex items-center rounded-md border border-ink-200 bg-ink-50 p-0.5 text-xs;
+  }
+  .segmented-option {
+    @apply px-2.5 py-1 rounded text-ink-500 font-medium hover:text-ink-800 transition;
+  }
+  .segmented-option-active {
+    @apply bg-white text-brand-700 shadow-soft;
+  }
 }

@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import type { Job } from '../backend.js';
-import { applyMarker } from '../data/syntheticMarker.js';
-import { isUnsafeToFill } from '../forms/fieldSynthesis.js';
+import { applyMarker, type MarkerFieldHint } from '../data/syntheticMarker.js';
+import { classifyUnsafeField, CODE_FIELD_PATTERN, isUnsafeToFill } from '../forms/fieldSynthesis.js';
 import { evaluateHostGuard } from '../utils/hostGuard.js';
 import {
   evaluateClick,
@@ -110,7 +110,12 @@ export async function executeAction(input: {
       try {
         const performed = await perform(page, action, descriptor);
         typedValue = performed.typedValue;
-        observation = `Executed ${describeAction(action, targetLabel)}${typedValue ? ` with "${typedValue}"` : ''}.`;
+        // Surface a marker-rewritten value explicitly: the model cannot control
+        // what the synthetic-data marker does to what it typed, and without this
+        // note it kept re-fighting a value it had already "lost" the argument on.
+        observation = performed.adjustedFrom
+          ? `Typed "${typedValue}" (adjusted from "${performed.adjustedFrom}" by the synthetic-data marker) into "${targetLabel || 'the field'}".`
+          : `Executed ${describeAction(action, targetLabel)}${typedValue ? ` with "${typedValue}"` : ''}.`;
       } catch (error) {
         status = 'failed';
         observation = `Action failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -169,15 +174,24 @@ async function probeDateField(input: {
   }
 }
 
+function guardLabelFor(descriptor: MarkDescriptor | undefined): string {
+  return descriptor?.guard_label ?? descriptor?.name ?? '';
+}
+
 function semanticActionName(action: AgentAction, descriptor: MarkDescriptor | undefined): string {
   if (action.type === 'type' || action.type === 'select') return 'fill_form';
-  if (action.type === 'click' && isConstructiveLabel(descriptor?.name ?? '').matched) {
+  if (action.type === 'click' && isConstructiveLabel(guardLabelFor(descriptor)).matched) {
     return 'submit_form';
   }
   return 'click_menu';
 }
 
 function guardAction(action: AgentAction, descriptor: MarkDescriptor | undefined, job: Job): GuardDecision {
+  // A disabled control fails Playwright's actionability check anyway; refusing it
+  // here up front spends a guard decision instead of a wasted step.
+  if ((action.type === 'click' || action.type === 'type' || action.type === 'select') && descriptor?.disabled) {
+    return { allowed: false, reason: 'control is disabled and cannot be activated' };
+  }
   if (action.type === 'navigate') {
     const host = evaluateHostGuard({
       currentUrl: action.url,
@@ -188,6 +202,12 @@ function guardAction(action: AgentAction, descriptor: MarkDescriptor | undefined
   }
   if (action.type === 'type' || action.type === 'select') {
     if (!descriptor) return { allowed: false, reason: `mark ${action.mark} is not present` };
+    if (action.type === 'select' && descriptor.tag !== 'select') {
+      return {
+        allowed: false,
+        reason: `mark ${action.mark} is a ${descriptor.tag}, not a dropdown — use click instead`,
+      };
+    }
     const allowedActions = parseAllowedActions(job.session.allowed_actions_json);
     if (allowedActions.length && !allowedActions.includes('fill_form')
       && !allowedActions.includes('create_record')
@@ -195,8 +215,11 @@ function guardAction(action: AgentAction, descriptor: MarkDescriptor | undefined
       return { allowed: false, reason: 'allowed_actions does not include fill_form' };
     }
     // Typing never commits — gate on credential/statutory patterns, not the click vocabulary.
-    if (isUnsafeToFill({
-      tag: (descriptor.tag === 'select' || descriptor.tag === 'textarea' ? descriptor.tag : 'input'),
+    const fieldDescriptor = {
+      tag: (descriptor.tag === 'select' || descriptor.tag === 'textarea' ? descriptor.tag : 'input') as
+        | 'input'
+        | 'select'
+        | 'textarea',
       type: descriptor.type,
       name: descriptor.name,
       id: '',
@@ -204,10 +227,17 @@ function guardAction(action: AgentAction, descriptor: MarkDescriptor | undefined
       ariaLabel: descriptor.name,
       label: descriptor.name,
       required: false,
-    })) {
+    };
+    if (isUnsafeToFill(fieldDescriptor)) {
+      // Search/filter and credential fields used to share one refusal reason,
+      // which made a search box's refusal read as a false accusation of being a
+      // credential field and invited the model to keep retrying it.
+      const category = classifyUnsafeField(fieldDescriptor);
       return {
         allowed: false,
-        reason: 'field is credential, OTP, or a statutory identifier and must not be filled',
+        reason: category === 'search'
+          ? 'field is a search or filter box and typing into it would not create data'
+          : 'field is credential, OTP, or a statutory identifier and must not be filled',
         matchedToken: descriptor.name,
       };
     }
@@ -216,7 +246,7 @@ function guardAction(action: AgentAction, descriptor: MarkDescriptor | undefined
   if (action.type === 'click'
     || (action.type === 'press' && action.key.toLowerCase() === 'enter')) {
     if ('mark' in action && !descriptor) return { allowed: false, reason: `mark ${action.mark} is not present` };
-    return evaluateClick(descriptor?.name ?? action.type, {
+    return evaluateClick(guardLabelFor(descriptor) || action.type, {
       destructiveAllowed: Boolean(job.session.destructive_allowed),
       environment: job.profile.environment,
       allowSafeDemo: Boolean(job.profile.allow_safe_demo),
@@ -226,20 +256,36 @@ function guardAction(action: AgentAction, descriptor: MarkDescriptor | undefined
   return { allowed: true };
 }
 
+/** Alphanumeric-only comparison so a marker's own punctuation (hyphens, case)
+ *  does not itself register as a "material" rewrite of what the model asked for. */
+function normalizeForComparison(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
 async function perform(
   page: Page,
   action: AgentAction,
   descriptor?: MarkDescriptor,
-): Promise<{ typedValue?: string }> {
+): Promise<{ typedValue?: string; adjustedFrom?: string }> {
   let typedValue: string | undefined;
+  let adjustedFrom: string | undefined;
   switch (action.type) {
     case 'click':
       await page.locator(`[data-smoke-mark="${action.mark}"]`).click({ timeout: 10_000 });
       break;
     case 'type': {
       const target = page.locator(`[data-smoke-mark="${action.mark}"]`);
-      const hint = { type: descriptor?.type, name: descriptor?.name, tag: descriptor?.tag };
+      const looksLikeCode = CODE_FIELD_PATTERN.test(descriptor?.name ?? '');
+      const hint: MarkerFieldHint = {
+        type: descriptor?.type,
+        name: descriptor?.name,
+        tag: descriptor?.tag,
+        looksLikeCode,
+      };
       typedValue = applyMarker(coerceForField(action.text, hint), hint);
+      if (normalizeForComparison(action.text) !== normalizeForComparison(typedValue)) {
+        adjustedFrom = action.text;
+      }
       await target.fill(typedValue, { timeout: 10_000 });
       if (action.submit) await target.press('Enter');
       break;
@@ -269,7 +315,7 @@ async function perform(
   if (action.type !== 'wait' && action.type !== 'done' && action.type !== 'blocked' && action.type !== 'ask_operator') {
     await waitForSettle(page);
   }
-  return { typedValue };
+  return { typedValue, adjustedFrom };
 }
 
 function describeAction(action: AgentAction, label: string): string {

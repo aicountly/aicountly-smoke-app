@@ -101,7 +101,9 @@ export function buildFeatureGapCursorPrompt(gap: FeatureGap, context: CursorProm
   const ownership = ownershipFor(context, evidence.screens_checked);
   const task = validateFirst
     ? [
-        ...taskLines(ownership, context, `confirm with the product owner whether "${gap.expected_feature}" already exists, is intentionally out of scope, or belongs on the backlog.`),
+        // suppressPrPlan=true: the "open one pull request per repository" line
+        // two lines below "This is not a build order" would contradict it.
+        ...taskLines(ownership, context, `confirm with the product owner whether "${gap.expected_feature}" already exists, is intentionally out of scope, or belongs on the backlog.`, true),
         'If it is genuinely missing and approved, open a scoped implementation ticket with fresh product evidence. This is not a build order.',
       ]
     : [
@@ -122,7 +124,7 @@ export function buildFeatureGapCursorPrompt(gap: FeatureGap, context: CursorProm
     ]),
     section('Problem', [
       `- Expected capability: ${gap.expected_feature}`,
-      `- Detection: ${gap.partial ? 'partially observed' : 'not observed'}`,
+      `- Detection: ${gap.observed ? 'observed' : gap.partial ? 'partially observed' : 'not observed'}`,
     ]),
     section('Evidence', [
       ...evidence.sample_labels.map((label) => `- Nearby observed UI: ${label}`),
@@ -233,7 +235,12 @@ function ownerRepositoryLines(ownership: RepoOwnership): string[] {
   return lines;
 }
 
-function taskLines(ownership: RepoOwnership, context: CursorPromptContext, instruction: string): string[] {
+function taskLines(
+  ownership: RepoOwnership,
+  context: CursorPromptContext,
+  instruction: string,
+  suppressPrPlan = false,
+): string[] {
   const repos = ownership.groups.map((group) => group.repo);
   if (repos.length === 1) {
     return [`In the ${repos[0]} repository, ${instruction}`];
@@ -241,7 +248,7 @@ function taskLines(ownership: RepoOwnership, context: CursorPromptContext, instr
   if (repos.length > 1) {
     return [
       `Address the repositories listed in the Owner repository section (${repos.join(', ')}): ${instruction}`,
-      'Each surface must be fixed in the repository that owns it: open one pull request per repository.',
+      ...(suppressPrPlan ? [] : ['Each surface must be fixed in the repository that owns it: open one pull request per repository.']),
     ];
   }
   return [
@@ -259,9 +266,14 @@ function inventoryLines(value: unknown): string[] {
   });
 }
 
+const ANALYTICS_NOISE_REGEX = /google-analytics\.com|\/g\/collect|gtm\.js|gtm=/i;
+
 function sampleLines(prefix: string, value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.slice(0, 5).map((item) => `- ${prefix}: ${typeof item === 'string' ? item : JSON.stringify(item)}`);
+  return value
+    .filter((item) => !ANALYTICS_NOISE_REGEX.test(typeof item === 'string' ? item : JSON.stringify(item)))
+    .slice(0, 5)
+    .map((item) => `- ${prefix}: ${typeof item === 'string' ? item : JSON.stringify(item)}`);
 }
 
 function stringList(value: unknown): string[] {

@@ -45,6 +45,8 @@ export type SessionReportInput = {
   completedAt: string;
   coverage?: SessionCoverage;
   agentSteps?: AgentStepRecord[];
+  createsVerified?: number;
+  loopStatus?: string;
 };
 
 export type ScreenshotCard = {
@@ -97,7 +99,11 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
     environment: run.environment,
     started_at: input.startedAt,
     completed_at: input.completedAt,
-    status: input.coverage?.status === 'blocked' ? 'blocked' : 'done',
+    status: input.coverage?.status === 'blocked'
+      ? 'blocked'
+      : input.coverage?.status === 'partial'
+        ? 'partial'
+        : 'done',
     coverage_reason: input.coverage?.reason ?? '',
     screens_observed: input.screensObserved,
     estimated_screens: session.expected_screens,
@@ -107,6 +113,8 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
     file_io_tests: input.fileIoTests ?? [],
     decisions: decisionCards,
     agent_steps: input.agentSteps ?? [],
+    creates_verified: input.createsVerified ?? 0,
+    loop_status: input.loopStatus ?? '',
     severity_summary: sevSummary,
     screenshots: input.screenshots,
     screenshot_data_uris: shotDataUris,
@@ -199,6 +207,8 @@ export function renderSessionHtml(p: {
   file_io_tests: FileIoTestResult[];
   decisions?: ReturnType<typeof formatDecisionCard>[];
   agent_steps?: AgentStepRecord[];
+  creates_verified?: number;
+  loop_status?: string;
   screenshot_data_uris: string[];
   screenshot_cards?: ScreenshotCard[];
   cursor_prompts: string;
@@ -272,12 +282,18 @@ ${p.status === 'blocked'
   ? `<p class="blocked"><strong>No coverage:</strong> this session never tested its scope${
       p.coverage_reason ? ` — ${esc(p.coverage_reason)}` : ''
     }. Treat the findings below as incomplete.</p>`
-  : ''}
+  : p.status === 'partial'
+    ? `<p class="blocked"><strong>Partial coverage:</strong> this session saw in-scope screens but did not finish cleanly${
+        p.coverage_reason ? ` — ${esc(p.coverage_reason)}` : ''
+      }.</p>`
+    : ''}
 <div class="grid">
   <div class="card"><div>Screens</div><div class="v">Observed ${p.screens_observed} (est. ${p.estimated_screens})</div></div>
   <div class="card"><div>UI items catalogued</div><div class="v">${p.inventory_count}</div></div>
   <div class="card"><div>Critical UX</div><div class="v">${p.severity_summary.critical}</div></div>
   <div class="card"><div>High UX</div><div class="v">${p.severity_summary.high}</div></div>
+  <div class="card"><div>Creates verified</div><div class="v">${p.creates_verified ?? 0}</div></div>
+  <div class="card"><div>Loop status</div><div class="v">${esc(p.loop_status || '—')}</div></div>
 </div>
 <h2>Decisions taken</h2><p class="muted">Choices made while the worker was blocked, including remembered answers applied automatically.</p>
 <div class="findings">${decisionCards}</div>

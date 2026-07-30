@@ -41,8 +41,10 @@ export const config = {
   workerId: process.env.WORKER_ID || hostname(),
   pollIntervalMs: int('WORKER_POLL_INTERVAL_MS', 2500),
   leaseSeconds: int('WORKER_LEASE_SECONDS', 600),
-  maxScreensPerSession: Math.max(1, int('SMOKE_MAX_SCREENS_PER_SESSION', 60)),
-  stepScreenshotRetention: Math.max(1, int('SMOKE_STEP_SCREENSHOT_RETENTION', 120)),
+  maxScreensPerSession: Math.max(1, int('SMOKE_MAX_SCREENS_PER_SESSION', 150)),
+  /** Hard upper bound a session's own `max_steps` override may not exceed, regardless of who set it. */
+  maxStepsCeiling: Math.max(1, int('SMOKE_MAX_STEPS_CEILING', 300)),
+  stepScreenshotRetention: Math.max(1, int('SMOKE_STEP_SCREENSHOT_RETENTION', 300)),
   /**
    * Decide mid-run situations from the brain's recommendation instead of parking
    * the job and waiting for an operator. Set SMOKE_AUTONOMOUS=false to go back to

@@ -64,33 +64,38 @@ export function reviewPage(args: {
   const labelCounts: Record<string, number> = {};
   for (const l of labels) labelCounts[l] = (labelCounts[l] ?? 0) + 1;
 
-  if (!meta.has_breadcrumb) {
-    issues.push(mk('navigation', 'low', 'Breadcrumb missing',
-      'No breadcrumb navigation detected on this screen.',
-      'Add a consistent breadcrumb component to all interior screens.',
-      'Add breadcrumb navigation that reflects the current route hierarchy on this page.',
-      { url: meta.url }));
-  }
-  if (!meta.has_search) {
-    issues.push(mk('navigation', 'low', 'Command/search box missing',
-      'No global search box found.',
-      'Add a global cmd+k command palette or persistent search box to improve keyboard-first navigation.',
-      'Implement a global keyboard-shortcut command palette (Ctrl+K) on this screen.',
-      { url: meta.url }));
-  }
-  if (!meta.has_keyboard_shortcuts) {
-    issues.push(mk('keyboard', 'suggestion', 'No keyboard shortcuts visible',
-      'Page does not document any keyboard shortcuts.',
-      'Document discoverable keyboard shortcuts in a help popover.',
-      'Surface common keyboard shortcuts via a "?" help overlay.',
-      { url: meta.url }));
-  }
-  if (!meta.has_help_text) {
-    issues.push(mk('help', 'low', 'No help / tooltip cues detected',
-      'No tooltip or contextual help indicators were found on this page.',
-      'Add tooltips to non-obvious icon buttons and a contextual help drawer.',
-      'Add aria-describedby tooltips and a contextual help button to this screen.',
-      { url: meta.url }));
+  // A pre-login screen has no app shell to carry a breadcrumb, command
+  // palette, keyboard shortcuts, or contextual help — flagging their absence
+  // there is a false positive attributed to the wrong screen/repo.
+  if (meta.is_authenticated_shell) {
+    if (!meta.has_breadcrumb) {
+      issues.push(mk('navigation', 'low', 'Breadcrumb missing',
+        'No breadcrumb navigation detected on this screen.',
+        'Add a consistent breadcrumb component to all interior screens.',
+        'Add breadcrumb navigation that reflects the current route hierarchy on this page.',
+        { url: meta.url }));
+    }
+    if (!meta.has_search) {
+      issues.push(mk('navigation', 'low', 'Command/search box missing',
+        'No global search box found.',
+        'Add a global cmd+k command palette or persistent search box to improve keyboard-first navigation.',
+        'Implement a global keyboard-shortcut command palette (Ctrl+K) on this screen.',
+        { url: meta.url }));
+    }
+    if (!meta.has_keyboard_shortcuts) {
+      issues.push(mk('keyboard', 'suggestion', 'No keyboard shortcuts visible',
+        'Page does not document any keyboard shortcuts.',
+        'Document discoverable keyboard shortcuts in a help popover.',
+        'Surface common keyboard shortcuts via a "?" help overlay.',
+        { url: meta.url }));
+    }
+    if (!meta.has_help_text) {
+      issues.push(mk('help', 'low', 'No help / tooltip cues detected',
+        'No tooltip or contextual help indicators were found on this page.',
+        'Add tooltips to non-obvious icon buttons and a contextual help drawer.',
+        'Add aria-describedby tooltips and a contextual help button to this screen.',
+        { url: meta.url }));
+    }
   }
   if (meta.tables > 0 && !meta.has_export) {
     issues.push(mk('reports', 'medium', 'Export option missing on a screen with a table',

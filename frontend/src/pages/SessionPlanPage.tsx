@@ -11,6 +11,7 @@ type Session = {
   menu_path: string;
   description: string;
   expected_screens: number;
+  max_steps: number | null;
   destructive_allowed: boolean;
   allowed_actions_json: string | string[];
   status: string;
@@ -35,9 +36,10 @@ export function SessionPlanPage() {
 
   const [order, setOrder] = useState<number[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', menu_path: '', description: '', expected_screens: 1, destructive_allowed: false });
+  // max_steps is kept as a raw string in form state: '' means "use the worker default".
+  const [editForm, setEditForm] = useState({ name: '', menu_path: '', description: '', expected_screens: 1, max_steps: '', destructive_allowed: false });
   const [adding, setAdding] = useState(false);
-  const [addForm, setAddForm] = useState({ name: '', menu_path: '', description: '', expected_screens: 4 });
+  const [addForm, setAddForm] = useState({ name: '', menu_path: '', description: '', expected_screens: 4, max_steps: '' });
   const [rejectReason, setRejectReason] = useState('');
 
   useEffect(() => {
@@ -64,7 +66,7 @@ export function SessionPlanPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['plan', id] }),
   });
   const updateSessionMut = useMutation({
-    mutationFn: async ({ sid, body }: { sid: number; body: typeof editForm }) =>
+    mutationFn: async ({ sid, body }: { sid: number; body: Omit<typeof editForm, 'max_steps'> & { max_steps: number | null } }) =>
       (await api.put(`/sessions/${sid}`, body)).data,
     onSuccess: () => {
       setEditingId(null);
@@ -72,11 +74,11 @@ export function SessionPlanPage() {
     },
   });
   const addSessionMut = useMutation({
-    mutationFn: async (body: typeof addForm) =>
+    mutationFn: async (body: Omit<typeof addForm, 'max_steps'> & { max_steps: number | null }) =>
       (await api.post(`/session-plans/${id}/sessions`, body)).data,
     onSuccess: () => {
       setAdding(false);
-      setAddForm({ name: '', menu_path: '', description: '', expected_screens: 4 });
+      setAddForm({ name: '', menu_path: '', description: '', expected_screens: 4, max_steps: '' });
       qc.invalidateQueries({ queryKey: ['plan', id] });
     },
   });
@@ -117,6 +119,7 @@ export function SessionPlanPage() {
       menu_path: s.menu_path ?? '',
       description: s.description ?? '',
       expected_screens: s.expected_screens || 1,
+      max_steps: s.max_steps == null ? '' : String(s.max_steps),
       destructive_allowed: s.destructive_allowed,
     });
   }
@@ -188,10 +191,27 @@ export function SessionPlanPage() {
             />
           </label>
           <div className="text-xs text-ink-500">Planning estimate only — the worker visits discovered menus up to a safety max.</div>
+          <label className="block text-sm">
+            <span className="font-medium">Max steps</span>
+            <input
+              className="input w-32 mt-1"
+              type="number"
+              min={1}
+              placeholder="default"
+              value={addForm.max_steps}
+              onChange={(e) => setAddForm({ ...addForm, max_steps: e.target.value })}
+            />
+          </label>
+          <div className="text-xs text-ink-500">Per-session step budget override. Leave blank to use the worker's default.</div>
           <button
             className="btn-primary"
             disabled={!addForm.name.trim() || addSessionMut.isPending}
-            onClick={() => addSessionMut.mutate(addForm)}
+            onClick={() =>
+              addSessionMut.mutate({
+                ...addForm,
+                max_steps: addForm.max_steps === '' ? null : parseInt(addForm.max_steps, 10),
+              })
+            }
           >
             Save session
           </button>
@@ -222,6 +242,18 @@ export function SessionPlanPage() {
                     />
                   </label>
                   <div className="text-xs text-ink-500">Planning estimate only — the worker visits discovered menus up to a safety max.</div>
+                  <label className="block text-sm">
+                    <span className="font-medium">Max steps</span>
+                    <input
+                      className="input w-32 mt-1"
+                      type="number"
+                      min={1}
+                      placeholder="default"
+                      value={editForm.max_steps}
+                      onChange={(e) => setEditForm({ ...editForm, max_steps: e.target.value })}
+                    />
+                  </label>
+                  <div className="text-xs text-ink-500">Per-session step budget override. Leave blank to use the worker's default.</div>
                   <label className="flex items-center gap-2 text-sm">
                     <input
                       type="checkbox"
@@ -234,7 +266,18 @@ export function SessionPlanPage() {
                     <div className="text-xs text-amber-700">Only sandbox, GH / staging or production full-access profiles with safe demo enabled can run uploads or imports.</div>
                   )}
                   <div className="flex gap-2">
-                    <button className="btn-primary" onClick={() => updateSessionMut.mutate({ sid: s.id, body: editForm })} disabled={updateSessionMut.isPending}>Save</button>
+                    <button
+                      className="btn-primary"
+                      onClick={() =>
+                        updateSessionMut.mutate({
+                          sid: s.id,
+                          body: { ...editForm, max_steps: editForm.max_steps === '' ? null : parseInt(editForm.max_steps, 10) },
+                        })
+                      }
+                      disabled={updateSessionMut.isPending}
+                    >
+                      Save
+                    </button>
                     <button className="btn-secondary" onClick={() => setEditingId(null)}>Cancel</button>
                   </div>
                 </div>
@@ -248,6 +291,7 @@ export function SessionPlanPage() {
                         <span className="badge-warning">File I/O requires safe demo</span>
                       )}
                       <span className="badge-neutral">Est. screens: {s.expected_screens}</span>
+                      <span className="badge-neutral">Max steps: {s.max_steps ?? 'default'}</span>
                     </div>
                   </div>
                   {s.menu_path && <div className="text-xs text-ink-500 font-mono">{s.menu_path}</div>}

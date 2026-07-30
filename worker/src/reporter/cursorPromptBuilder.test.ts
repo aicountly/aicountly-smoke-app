@@ -72,6 +72,28 @@ test('UX prompt attributes the /api/manage proxy path to its upstream repo', () 
   assert.match(prompt, /In the manage-aicountly repository,/);
 });
 
+test('UX prompt strips analytics-beacon noise out of network evidence', () => {
+  const issue = {
+    category: 'errors',
+    severity: 'high' as const,
+    title: 'Network/API failures detected',
+    description: '2 network failures observed.',
+    recommendation: 'Investigate failing endpoints.',
+    human_summary: '',
+    developer_prompt: '',
+    evidence: {
+      affected_urls: ['https://product.test/attendance'],
+      network_events: [
+        'https://www.google-analytics.com/g/collect?v=2',
+        'https://product.test/api/attendance/save failed with 500',
+      ],
+    },
+  };
+  const prompt = buildUxCursorPrompt(issue, context);
+  assert.doesNotMatch(prompt, /google-analytics\.com/);
+  assert.match(prompt, /attendance\/save failed with 500/);
+});
+
 test('validate-first gap is explicitly not a build order', () => {
   const prompt = buildFeatureGapCursorPrompt({
     product_name: 'HRMS',
@@ -93,6 +115,53 @@ test('validate-first gap is explicitly not a build order', () => {
   assert.match(prompt, /This is not a build order/);
   assert.match(prompt, /Research hint only: Competitor X/);
   assert.match(prompt, /Mode: validate_first/);
+});
+
+test('feature-gap prompt suppresses the PR-per-repo sentence for validate_first but keeps it for implement', () => {
+  const evidence = { sample_labels: ['Attendance'], screens_checked: ['https://my.aicountly.com/', 'https://hrms.aicountly.com/dashboard'] };
+  const base = {
+    product_name: 'HRMS',
+    observed: false,
+    partial: false,
+    competitor_ref: 'Competitor X',
+    severity: 'suggestion' as const,
+    confidence: 'low' as const,
+    recommendation: 'Confirm scope.',
+    human_summary: '',
+    developer_prompt: '',
+    notes: '',
+    sources: [],
+    evidence,
+  };
+
+  const validateFirstPrompt = buildFeatureGapCursorPrompt({ ...base, expected_feature: 'Form 16', mode: 'validate_first' }, context);
+  assert.doesNotMatch(validateFirstPrompt, /open one pull request per repository/);
+  assert.match(validateFirstPrompt, /This is not a build order/);
+
+  const implementPrompt = buildFeatureGapCursorPrompt({ ...base, expected_feature: 'Overtime rules', mode: 'implement' }, context);
+  assert.match(implementPrompt, /open one pull request per repository/);
+});
+
+test('gap prompt reads detection state from gap.observed first, not just partial', () => {
+  const evidence = { sample_labels: [], screens_checked: [] };
+  const observedGap = {
+    product_name: 'HRMS',
+    expected_feature: 'Attendance',
+    observed: true,
+    partial: false,
+    competitor_ref: '',
+    severity: 'suggestion' as const,
+    confidence: 'high' as const,
+    mode: 'validate_first' as const,
+    recommendation: 'Detected.',
+    human_summary: '',
+    developer_prompt: '',
+    notes: '',
+    sources: [],
+    evidence,
+  };
+  const prompt = buildFeatureGapCursorPrompt(observedGap, context);
+  assert.match(prompt, /- Detection: observed/);
 });
 
 test('human summaries are plain-language checklists distinct from developer prompts', () => {

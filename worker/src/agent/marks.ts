@@ -5,6 +5,14 @@ export type MarkDescriptor = {
   tag: string;
   role: string;
   name: string;
+  /**
+   * Short, single-line accessible name (first line, collapsed whitespace, capped
+   * ~60 chars). Used for safety-guard token matching so a long card blurb ("Daily
+   * salary RECORDS Legacy: ... Approved rows ... added to Process p") does not
+   * spuriously match a restricted token buried in its description. Optional so
+   * older test fixtures that predate this field keep compiling.
+   */
+  guard_label?: string;
   type: string;
   value: string;
   checked: boolean | null;
@@ -22,7 +30,68 @@ export type MarkDescriptor = {
  * absence as proof the button does not exist. Playwright scrolls an element into
  * view before clicking, so an offscreen mark is still actionable.
  */
-const OFFSCREEN_LIMIT = 40;
+const OFFSCREEN_LIMIT = 80;
+
+/**
+ * Per-element identity key: tag + accessible name + a positional index among
+ * elements sharing that tag/name. `existingKey` (the element's own
+ * `data-smoke-key` attribute, or null/undefined the first time it is seen) wins
+ * unconditionally, which is what makes the key — and therefore the mark number
+ * derived from it — stable for the life of the page even though candidates are
+ * re-picked from scratch on every call.
+ *
+ * Pure and DOM-independent on purpose: this is unit tested directly in
+ * marks.test.ts, and its source is interpolated into the in-page script below
+ * via `.toString()` so the browser runs the exact function under test rather
+ * than a hand-copied "equivalent" of it.
+ */
+export function markKeyFor(
+  existingKey: string | null | undefined,
+  tag: string,
+  name: string,
+  seq: Map<string, number>,
+): string {
+  if (existingKey) return existingKey;
+  const base = `${tag}|${name}`;
+  const ordinal = seq.get(base) || 0;
+  seq.set(base, ordinal + 1);
+  return `${base}|${ordinal}`;
+}
+
+/**
+ * Stable integer mark for a key, minted once per key and reused for the
+ * registry's lifetime (the page-side `window.__smokeMarkRegistry`, since
+ * `page.evaluate` reinjects this script fresh on every call — a Node-side Map
+ * cannot see into the page between calls).
+ */
+export function markOrdinalFor(registry: { ordinals: Map<string, number>; next: number }, key: string): number {
+  let mark = registry.ordinals.get(key);
+  if (!mark) {
+    mark = registry.next;
+    registry.next += 1;
+    registry.ordinals.set(key, mark);
+  }
+  return mark;
+}
+
+/**
+ * Seeds the per-base position counter from `data-smoke-key` attributes already
+ * present in the DOM, so a newly rendered sibling continues the sequence rather
+ * than colliding with a key assigned on an earlier call.
+ */
+export function seedKeySequence(existingKeys: string[]): Map<string, number> {
+  const seq = new Map<string, number>();
+  for (const key of existingKeys) {
+    const lastPipe = key.lastIndexOf('|');
+    if (lastPipe < 0) continue;
+    const base = key.slice(0, lastPipe);
+    const ordinal = Number(key.slice(lastPipe + 1));
+    if (Number.isFinite(ordinal)) {
+      seq.set(base, Math.max(seq.get(base) || 0, ordinal + 1));
+    }
+  }
+  return seq;
+}
 
 const MARK_SCRIPT = `(() => {
   document.querySelectorAll('[data-smoke-mark]').forEach((el) => el.removeAttribute('data-smoke-mark'));
@@ -32,6 +101,7 @@ const MARK_SCRIPT = `(() => {
   const elements = Array.from(document.querySelectorAll(selector));
   const offscreenLimit = ${OFFSCREEN_LIMIT};
   const text = (value) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 160);
+  const guardText = (value) => String(value || '').split('\\n')[0].replace(/\\s+/g, ' ').trim().slice(0, 60);
   const nameFor = (el) => {
     const labelled = el.id ? document.querySelector('label[for="' + CSS.escape(el.id) + '"]') : null;
     const wrapping = el.closest('label');
@@ -44,6 +114,20 @@ const MARK_SCRIPT = `(() => {
       || text(el.getAttribute('alt'))
       || text(el.value);
   };
+
+  const markKeyFor = ${markKeyFor.toString()};
+  const markOrdinalFor = ${markOrdinalFor.toString()};
+  const seedKeySequence = ${seedKeySequence.toString()};
+
+  // Mark numbers must mean the same control for the whole session, even though
+  // this script is reinjected fresh on every page.evaluate call (candidates are
+  // re-picked from current scroll position each time). A Node-side Map cannot see
+  // into the page, so the ordinal registry lives on a page-side global instead.
+  const registry = window.__smokeMarkRegistry
+    || (window.__smokeMarkRegistry = { ordinals: new Map(), next: 1 });
+  const existingKeys = Array.from(document.querySelectorAll('[data-smoke-key]'))
+    .map((el) => el.getAttribute('data-smoke-key') || '');
+  const keySeq = seedKeySequence(existingKeys);
 
   const candidates = [];
   for (let index = 0; index < elements.length; index += 1) {
@@ -80,7 +164,13 @@ const MARK_SCRIPT = `(() => {
   for (const item of selected) {
     const el = item.el;
     const rect = item.rect;
-    const mark = descriptors.length + 1;
+    const name = nameFor(el);
+    // Set once, never overwritten: an element that already carries a
+    // data-smoke-key keeps it for the life of the page regardless of how the
+    // candidate set reshuffles around it.
+    const key = markKeyFor(el.getAttribute('data-smoke-key'), el.tagName.toLowerCase(), name, keySeq);
+    if (!el.hasAttribute('data-smoke-key')) el.setAttribute('data-smoke-key', key);
+    const mark = markOrdinalFor(registry, key);
     el.setAttribute('data-smoke-mark', String(mark));
     if (!item.offscreen) {
       const badge = document.createElement('div');
@@ -96,7 +186,7 @@ const MARK_SCRIPT = `(() => {
     }
     descriptors.push({
       mark, tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || '',
-      name: nameFor(el), type: el.getAttribute('type') || '', value: text(el.value),
+      name, guard_label: guardText(name), type: el.getAttribute('type') || '', value: text(el.value),
       checked: typeof el.checked === 'boolean' ? el.checked : null,
       disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'),
       offscreen: item.offscreen, viewport_offset: item.offset,

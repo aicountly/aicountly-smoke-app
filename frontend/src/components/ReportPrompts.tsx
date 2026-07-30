@@ -1,24 +1,36 @@
 import { CopyButton } from '@/components/CopyButton';
-import { extractPromptPack, promptRows, type ReportJson } from '@/lib/reports';
+import { extractPromptPack, promptRows, type PromptRow, type ReportJson } from '@/lib/reports';
+import type { FindingsFilter } from '@/lib/reportFindings';
 
 type ReportPromptsProps = {
   report: ReportJson | null;
   loading?: boolean;
+  /** Active severity/mode filter from the findings view, so this tab shows the matching prompts only. */
+  filter?: FindingsFilter;
 };
+
+function matchesFilter(row: PromptRow, filter: FindingsFilter | undefined): boolean {
+  if (!filter) return true;
+  const severityOk = filter.severities.size === 0 || filter.severities.has(row.severity);
+  const modeOk = filter.modes.size === 0 || (row.mode != null && filter.modes.has(row.mode));
+  return severityOk && modeOk;
+}
 
 /**
  * The report's Cursor prompts, one copy button each. The HTML preview shows the
  * same prompts, but it is a sandboxed document with no scripting, so nothing in
  * there can copy anything.
  */
-export function ReportPrompts({ report, loading }: ReportPromptsProps) {
-  const rows = promptRows(report);
-  const pack = extractPromptPack(report);
+export function ReportPrompts({ report, loading, filter }: ReportPromptsProps) {
+  const allRows = promptRows(report);
+  const hasFilter = Boolean(filter && (filter.severities.size > 0 || filter.modes.size > 0));
+  const rows = hasFilter ? allRows.filter((row) => matchesFilter(row, filter)) : allRows;
+  const pack = hasFilter ? rows.map((row) => row.prompt).join('\n\n---\n\n') : extractPromptPack(report);
 
   if (loading) {
     return <p className="text-sm text-ink-500 p-4">Loading prompts…</p>;
   }
-  if (rows.length === 0 && pack === '') {
+  if (allRows.length === 0 && extractPromptPack(report) === '') {
     return (
       <p className="text-sm text-ink-500 p-4">
         This report has no Cursor prompts. They are generated for UX issues and feature gaps, so a
@@ -26,20 +38,25 @@ export function ReportPrompts({ report, loading }: ReportPromptsProps) {
       </p>
     );
   }
+  if (hasFilter && rows.length === 0) {
+    return <p className="text-sm text-ink-500 p-4">No prompts match the active filter.</p>;
+  }
 
   return (
     <div className="p-4 space-y-4">
       {pack !== '' && (
         <div className="flex flex-wrap items-center gap-2 pb-3 border-b border-ink-100">
           <span className="text-xs text-ink-500">
-            {rows.length > 0 ? `${rows.length} prompt(s) in this report` : 'Full prompt pack'}
+            {rows.length > 0
+              ? `${rows.length} prompt(s)${hasFilter ? ' matching the active filter' : ' in this report'}`
+              : 'Full prompt pack'}
           </span>
           <CopyButton
             text={pack}
             label="Copy all for Cursor"
             copiedLabel="Copied all"
             className="btn-secondary text-xs py-1 px-2"
-            title="Copy every prompt in this report as one pack"
+            title={hasFilter ? 'Copy every prompt matching the active filter' : 'Copy every prompt in this report as one pack'}
           />
         </div>
       )}

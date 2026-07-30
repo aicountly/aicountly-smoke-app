@@ -11,7 +11,12 @@ export type ReportJson = {
   missing_features?: Array<{ mode?: string | null }> | null;
   cursor_prompts?: string | null;
   cursor_prompts_path?: string | null;
-  cursor_quick_wins?: Array<{ title?: string | null; developer_prompt?: string | null }> | null;
+  cursor_quick_wins?: Array<{
+    title?: string | null;
+    developer_prompt?: string | null;
+    severity?: string | null;
+    mode?: string | null;
+  }> | null;
   status?: string | null;
   coverage_reason?: string | null;
   [key: string]: unknown;
@@ -31,6 +36,10 @@ export type PromptRow = {
   group: 'UX issue' | 'Feature gap' | 'Quick win';
   meta: string;
   prompt: string;
+  /** Lowercase severity, when the source finding carries one -- lets the prompts tab honour the findings filter. */
+  severity: string;
+  /** Only feature gaps carry a mode; other groups are null. */
+  mode: 'validate_first' | 'implement' | null;
 };
 
 /**
@@ -115,6 +124,8 @@ export function promptRows(payload: ReportJson | null): PromptRow[] {
       group: 'UX issue',
       meta: String(issue?.severity ?? '').trim(),
       prompt,
+      severity: String(issue?.severity ?? '').trim().toLowerCase(),
+      mode: null,
     });
   });
 
@@ -122,7 +133,7 @@ export function promptRows(payload: ReportJson | null): PromptRow[] {
   gaps.forEach((gap, i) => {
     const prompt = String(gap?.developer_prompt ?? '').trim();
     if (!prompt) return;
-    const mode = String(gap?.mode ?? '').trim();
+    const mode = String(gap?.mode ?? '').trim().toLowerCase();
     rows.push({
       key: `gap-${i}`,
       title: String(gap?.expected_feature ?? '').trim() || `Feature gap ${i + 1}`,
@@ -132,6 +143,8 @@ export function promptRows(payload: ReportJson | null): PromptRow[] {
         .filter(Boolean)
         .join(' · '),
       prompt,
+      severity: String(gap?.severity ?? '').trim().toLowerCase(),
+      mode: mode === 'validate_first' || mode === 'implement' ? mode : null,
     });
   });
 
@@ -139,12 +152,15 @@ export function promptRows(payload: ReportJson | null): PromptRow[] {
   wins.forEach((win, i) => {
     const prompt = String(win?.developer_prompt ?? '').trim();
     if (!prompt) return;
+    const mode = String(win?.mode ?? '').trim().toLowerCase();
     rows.push({
       key: `win-${i}`,
       title: String(win?.title ?? '').trim() || `Quick win ${i + 1}`,
       group: 'Quick win',
       meta: '',
       prompt,
+      severity: String(win?.severity ?? '').trim().toLowerCase(),
+      mode: mode === 'validate_first' || mode === 'implement' ? mode : null,
     });
   });
 

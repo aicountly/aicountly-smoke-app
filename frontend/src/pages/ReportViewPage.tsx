@@ -1,10 +1,14 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { CopyButton } from '@/components/CopyButton';
+import { FindingFilterChips } from '@/components/FindingFilterChips';
+import { ReportFindings } from '@/components/ReportFindings';
 import { ReportPrompts } from '@/components/ReportPrompts';
-import { asReportJson, deriveSummary, extractPromptPack } from '@/lib/reports';
+import { asReportJson, extractPromptPack } from '@/lib/reports';
+import { collectFindings, facetCounts, severitySummaryTotal } from '@/lib/reportFindings';
+import { useFindingsView } from '@/lib/useFindingsView';
 
 type ReportMeta = {
   id: number;
@@ -16,6 +20,8 @@ type ReportMeta = {
   maturity_score?: number | null;
   ux_score?: number | null;
 };
+
+type Tab = 'findings' | 'prompts' | 'html';
 
 function errorText(err: unknown): string {
   const status = (err as { response?: { status?: number } })?.response?.status;
@@ -35,7 +41,8 @@ function errorText(err: unknown): string {
 export function ReportViewPage() {
   const { id } = useParams();
   const reportId = Number(id);
-  const [tab, setTab] = useState<'report' | 'prompts'>('report');
+  const [tab, setTab] = useState<Tab>('findings');
+  const { filter, view, hasActiveFilter, setView, toggleSeverity, toggleMode, clearFilter } = useFindingsView();
 
   const metaQ = useQuery<ReportMeta | null>({
     queryKey: ['report-meta', reportId],
@@ -52,21 +59,31 @@ export function ReportViewPage() {
     enabled: reportId > 0,
   });
 
+  // The HTML document embeds the same base64 screenshots the JSON already
+  // carries, so it is only fetched once the reviewer actually opens that tab.
   const htmlQ = useQuery({
     queryKey: ['report-html', reportId],
     queryFn: async () =>
       (await api.get(`/reports/${reportId}/html`, { responseType: 'text' })).data as string,
-    enabled: reportId > 0,
+    enabled: reportId > 0 && tab === 'html',
     retry: false,
   });
 
   const report = jsonQ.data ?? null;
-  const summary = deriveSummary(report);
+  const rows = useMemo(() => collectFindings(report), [report]);
+  const counts = useMemo(() => facetCounts(rows), [rows]);
+  const sevTotal = useMemo(() => severitySummaryTotal(report), [report]);
   const pack = extractPromptPack(report);
   const meta = metaQ.data ?? null;
   const runId = Number(meta?.run_id ?? 0);
   const sessionId = Number(meta?.session_id ?? 0);
-  const blocked = String(report?.status ?? '') === 'blocked';
+  const status = String(report?.status ?? '');
+  const blocked = status === 'blocked';
+  const partial = status === 'partial';
+
+  function jumpToFindings() {
+    setTab('findings');
+  }
 
   if (!(reportId > 0)) {
     return (
@@ -86,12 +103,16 @@ export function ReportViewPage() {
           <h1 className="text-xl font-semibold truncate">
             {meta?.title ?? `Report #${reportId}`}
           </h1>
-          <div className="flex flex-wrap gap-2 mt-1 text-[11px]">
-            {meta?.kind ? <span className="badge-neutral">{meta.kind}</span> : null}
-            <span className="badge-danger">Critical {summary.critical}</span>
-            <span className="badge-warning">High {summary.high}</span>
-            <span className="badge-neutral">Validate first {summary.validateFirst}</span>
-            <span className="badge-brand">Implement {summary.implement}</span>
+          <div className="mt-1">
+            <FindingFilterChips
+              kind={meta?.kind ?? null}
+              counts={counts}
+              filter={filter}
+              onToggleSeverity={toggleSeverity}
+              onToggleMode={toggleMode}
+              onClear={clearFilter}
+              onChipActivated={jumpToFindings}
+            />
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -121,12 +142,19 @@ export function ReportViewPage() {
           findings below are incomplete.
         </div>
       )}
+      {partial && (
+        <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          This session saw in-scope screens but did not finish cleanly
+          {report?.coverage_reason ? `: ${report.coverage_reason}` : ''}. Treat the findings below as incomplete.
+        </div>
+      )}
 
       <div className="card overflow-hidden flex flex-col flex-1 min-h-0">
         <div className="flex gap-1 px-3 pt-2 border-b border-ink-200 shrink-0">
           {([
-            ['report', 'Report'],
+            ['findings', 'Findings'],
             ['prompts', 'Cursor prompts'],
+            ['html', 'Full report (HTML)'],
           ] as const).map(([key, label]) => (
             <button
               key={key}
@@ -144,11 +172,27 @@ export function ReportViewPage() {
           ))}
         </div>
 
-        {tab === 'prompts' ? (
-          <div className="flex-1 min-h-0 overflow-auto">
-            <ReportPrompts report={report} loading={jsonQ.isLoading} />
+        {tab === 'findings' && (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <ReportFindings
+              rows={rows}
+              loading={jsonQ.isLoading}
+              filter={filter}
+              view={view}
+              onViewChange={setView}
+              onClearFilter={clearFilter}
+              severitySummaryTotal={sevTotal}
+            />
           </div>
-        ) : (
+        )}
+
+        {tab === 'prompts' && (
+          <div className="flex-1 min-h-0 overflow-auto">
+            <ReportPrompts report={report} loading={jsonQ.isLoading} filter={hasActiveFilter ? filter : undefined} />
+          </div>
+        )}
+
+        {tab === 'html' && (
           <div className="flex-1 min-h-0 flex flex-col">
             {htmlQ.isLoading && (
               <div className="grid place-items-center flex-1 text-sm text-ink-500">Loading report…</div>

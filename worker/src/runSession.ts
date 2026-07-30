@@ -14,7 +14,7 @@ import { captureScreenshot } from './scanner/screenshotCapture.js';
 import { attachConsoleCapture } from './scanner/consoleCapture.js';
 import { attachNetworkCapture } from './scanner/networkCapture.js';
 import { dedupeUxIssues, reviewPage, type UxIssue } from './reviewer/uxReviewEngine.js';
-import { detectGaps, type CompetitorBenchmark, type FeatureGap } from './reviewer/featureGapEngine.js';
+import { countExpectedFeatures, detectGaps, type CompetitorBenchmark, type FeatureGap } from './reviewer/featureGapEngine.js';
 import { enrichGaps } from './reviewer/competitorComparison.js';
 import { fallbackCompetitorCatalogs } from './reviewer/fallbackCompetitorCatalogs.js';
 import { buildSessionReport } from './reporter/sessionReportBuilder.js';
@@ -38,6 +38,7 @@ import { evaluateSessionCoverage } from './utils/sessionCoverage.js';
 import { BrainUnavailableError, brainHealth } from './brain/ensemble.js';
 import { runAgentLoop } from './agent/agentLoop.js';
 import type { AgentStepRecord } from './agent/actions.js';
+import { detectAgentFindings } from './agent/agentFindings.js';
 
 const browserMap = { chromium, firefox, webkit } as const;
 
@@ -114,6 +115,8 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   let fileIoResults: FileIoTestResult[] = [];
   let estimatedScreens = 0;
   let agentSteps: AgentStepRecord[] = [];
+  let loopStatus = 'budget';
+  let createsVerified = 0;
 
   const ctx: ObserveCtx = {
     job,
@@ -222,11 +225,17 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     const goal = `Smoke-test session "${job.session.name}". `
       + `Scope: ${job.session.menu_path || 'whole application'}. `
       + `${job.session.description || ''}`.trim();
+    // Per-session override, clamped to the hard ceiling either way, so a bad
+    // DB value can never exceed the safety cap nor drop below 1.
+    const effectiveBudget = Math.max(
+      1,
+      Math.min(config.maxStepsCeiling, job.session.max_steps ?? config.maxScreensPerSession),
+    );
     const loop = await runAgentLoop({
       page,
       job,
       goal,
-      budget: config.maxScreensPerSession,
+      budget: effectiveBudget,
       screenshotsDir,
       onStep: async (step) => {
         await observeAndPersist(
@@ -236,21 +245,32 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
         );
         const label = step.target_label ? `"${step.target_label}"` : step.action.type;
         const change = step.signature_changed ? 'screen changed' : 'screen unchanged';
-        const restrictedWrite = step.outcome === 'executed'
+        const isRestrictedWrite = step.outcome === 'executed'
           && step.action.type === 'click'
           && Boolean(step.guard.matchedToken);
+        // A restricted-write click is only worth a warn when the session was not
+        // actually set up to create/submit — otherwise it is the session doing its
+        // configured job, not a safety concern.
+        const writeExpected = isRestrictedWrite && (
+          allowedActions.length === 0
+          || allowedActions.includes('create_record')
+          || allowedActions.includes('submit_form')
+        );
+        const restrictedWrite = isRestrictedWrite && !writeExpected;
         const level = step.outcome === 'refused' || step.outcome === 'failed' || restrictedWrite
           ? 'warn'
           : 'info';
-        const writeNote = restrictedWrite
-          ? ` [restricted write: ${step.guard.matchedToken}]`
+        const writeNote = isRestrictedWrite
+          ? (writeExpected
+            ? ` [expected write: ${step.guard.matchedToken}]`
+            : ` [restricted write: ${step.guard.matchedToken}]`)
           : '';
         await appendLog({
           run_id: job.run_id,
           session_id: job.session.id,
           job_id: job.job_id,
           level,
-          message: `Agent step ${step.ordinal}/${config.maxScreensPerSession}: ${step.action.type} ${label} -> ${step.outcome}, ${change}${writeNote} — ${step.observation || step.outcome_observation}`,
+          message: `Agent step ${step.ordinal}/${effectiveBudget}: ${step.action.type} ${label} -> ${step.outcome}, ${change}${writeNote} — ${step.observation || step.outcome_observation}`,
           context: {
             action: step.action,
             target_label: step.target_label,
@@ -283,8 +303,12 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       },
     });
     agentSteps = loop.steps;
-    scopeScreens = loop.steps.filter((step) => step.outcome === 'executed').length;
+    const agentFindings = detectAgentFindings(agentSteps);
+    for (const finding of agentFindings) allUx.push(finding);
+    scopeScreens = countScopeScreens(loop.steps, job.session.menu_path, job.session.name);
     workspaceSkipped = loop.status === 'blocked' || loop.status === 'operator';
+    loopStatus = loop.status;
+    createsVerified = loop.createdRecords.filter((record) => record.verifiedInList).length;
     await appendLog({
       run_id: job.run_id,
       session_id: job.session.id,
@@ -350,6 +374,8 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     scopeScreens,
     menuPath: job.session.menu_path,
     workspaceSkipped,
+    creates_verified: createsVerified,
+    loop_status: loopStatus,
   });
   if (coverage.status === 'blocked') {
     await appendLog({
@@ -428,11 +454,17 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     menuPath: job.session.menu_path,
     screensChecked: screenUrls,
   });
+  // detectGaps now drops fully-observed rows entirely, so heuristicGaps.length
+  // already equals the not-observed count; report both it and the total expected
+  // count so "K gaps" cannot be mistaken for "K observed features".
+  const expectedFeatureCount = countExpectedFeatures(job.run.product_name, benchmarks);
   await appendLog({
     run_id: job.run_id,
     session_id: job.session.id,
     job_id: job.job_id,
-    message: `Feature gap scan: source=${catalogSource}, ${benchmarks.length} competitor catalog(s), ${allInventory.length} inventory item(s), ${heuristicGaps.length} gap(s)`,
+    message: `Feature gap scan: source=${catalogSource}, ${benchmarks.length} competitor catalog(s), `
+      + `${allInventory.length} inventory item(s), ${expectedFeatureCount} expected feature(s) evaluated, `
+      + `${heuristicGaps.length} not observed`,
   }).catch(() => {});
   if (benchmarks.length === 0) {
     await appendLog({
@@ -515,6 +547,8 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     fileIoTests: fileIoResults,
     coverage,
     agentSteps,
+    createsVerified,
+    loopStatus,
   });
 
   await finalizeIfLast(job.run.id);
@@ -531,6 +565,8 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     feature_gaps: enriched.length,
     file_io_tests: fileIoResults.length,
     agent_steps: agentSteps,
+    creates_verified: createsVerified,
+    loop_status: loopStatus,
   };
 }
 
@@ -649,6 +685,35 @@ async function observeAndPersist(ctx: ObserveCtx, label: string, existingScreens
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const SCOPE_STOPWORDS = new Set(['and', 'the', 'for', 'with', 'from', 'into', 'module', 'menu']);
+
+function meaningfulScopeTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length > 2 && !SCOPE_STOPWORDS.has(token));
+}
+
+/**
+ * Counts only executed agent steps whose resulting screen carries a meaningful
+ * token overlap with the session's declared scope (menu_path or session name).
+ * Whole-app sessions (Login + Dashboard: empty/'/' menu_path) have no
+ * meaningful scope to filter by, so every executed step counts, as before.
+ */
+function countScopeScreens(steps: AgentStepRecord[], menuPath: string, sessionName: string): number {
+  const scope = (menuPath ?? '').trim();
+  const executed = steps.filter((step) => step.outcome === 'executed');
+  if (!scope || scope === '/') return executed.length;
+  const scopeTokens = meaningfulScopeTokens(`${scope} ${sessionName ?? ''}`);
+  if (!scopeTokens.length) return executed.length;
+  return executed.filter((step) => {
+    const url = step.signature_after?.url || step.signature_before?.url || '';
+    const urlTokens = meaningfulScopeTokens(url);
+    return scopeTokens.some((token) => urlTokens.includes(token));
+  }).length;
 }
 
 function relevantInventory(issue: UxIssue, inventory: import('./scanner/uiInventory.js').InventoryEntry[]) {

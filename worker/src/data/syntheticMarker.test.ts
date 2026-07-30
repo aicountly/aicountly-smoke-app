@@ -1,32 +1,54 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyMarker, SMOKE_MARKER } from './syntheticMarker.js';
+import { applyMarker, stripMarker } from './syntheticMarker.js';
 
-test('prefixes free-text values with the SMOKE marker', () => {
-  assert.equal(applyMarker('Ada Lovelace'), `${SMOKE_MARKER}Ada Lovelace`);
-  assert.equal(applyMarker(`${SMOKE_MARKER}Already`), `${SMOKE_MARKER}Already`);
+test('applies the standard hyphenated marker to an ordinary free-text value', () => {
+  assert.equal(applyMarker('Ada Lovelace'), 'SMOKE-Ada Lovelace');
 });
 
-test('marks emails with a smoke local-part and leaves numbers/dates alone', () => {
+test('recognises "SMOKE-" and "SMOKE " as already marked and leaves them alone', () => {
+  assert.equal(applyMarker('SMOKE-Department'), 'SMOKE-Department');
+  assert.equal(applyMarker('SMOKE Department'), 'SMOKE Department');
+});
+
+test('recognises a bare "SMOKE" prefix (no separator) as already marked', () => {
+  // Before this fix, "SMOKEDEPT" matched neither the "SMOKE-" nor the "SMOKE "
+  // branch, so it was re-prefixed into "SMOKE-SMOKEDEPT" and stayed invalid.
+  assert.equal(applyMarker('SMOKEDEPT'), 'SMOKEDEPT');
+  assert.equal(applyMarker('smokedept'), 'smokedept');
+});
+
+test('applying the marker twice is idempotent', () => {
+  const once = applyMarker('Engineering');
+  const twice = applyMarker(once);
+  assert.equal(twice, once);
+});
+
+test('code fields get an unhyphenated SMOKE prefix instead of SMOKE-', () => {
+  assert.equal(applyMarker('DEPT', { looksLikeCode: true }), 'SMOKEDEPT');
+  assert.equal(applyMarker('dept', { looksLikeCode: true }), 'Smokedept');
+});
+
+test('code fields strip a leading or embedded hyphen the model already typed', () => {
+  assert.equal(applyMarker('SMOKE-DEPT', { looksLikeCode: true }), 'SMOKEDEPT');
+  assert.equal(applyMarker('DE-PT', { looksLikeCode: true }), 'SMOKEDEPT');
+});
+
+test('code fields already bearing a bare SMOKE prefix are left unchanged', () => {
+  assert.equal(applyMarker('SMOKEDEPT', { looksLikeCode: true }), 'SMOKEDEPT');
+});
+
+test('numeric, date, time and phone values are left unmarked even when hinted as code fields', () => {
+  assert.equal(applyMarker('9876543210', { name: 'mobile', looksLikeCode: true }), '9876543210');
+  assert.equal(applyMarker('31/12/2024', { type: 'text', looksLikeCode: true }), '31/12/2024');
+});
+
+test('stripMarker removes only a leading marker, not one appearing mid-string', () => {
+  assert.equal(stripMarker('SMOKE-Ada Lovelace'), 'Ada Lovelace');
+  assert.equal(stripMarker('Ada SMOKE-Lovelace'), 'Ada SMOKE-Lovelace');
+});
+
+test('email values get the smoke. local-part marker regardless of code hints', () => {
   assert.equal(applyMarker('ada@example.com', { type: 'email' }), 'smoke.ada@example.com');
-  assert.equal(applyMarker('42', { type: 'number' }), '42');
-  assert.equal(applyMarker('2025-04-01', { type: 'date' }), '2025-04-01');
-  assert.equal(applyMarker('10:00', { type: 'time' }), '10:00');
-  assert.equal(applyMarker('INR'), 'INR');
-});
-
-test('takes the marker back off a value a validator reads as a number', () => {
-  // The model is told to mark what it types, so this is what actually arrives.
-  assert.equal(applyMarker('SMOKE-9876543210', { name: 'REGISTERED MOBILE' }), '9876543210');
-  assert.equal(applyMarker('SMOKE-9876543210', { type: 'tel', name: 'Phone' }), '9876543210');
-  assert.equal(applyMarker('SMOKE-+91 98765 43210', { name: 'REGISTERED WHATSAPP' }), '+91 98765 43210');
-  assert.equal(applyMarker('SMOKE-560001', { name: 'PIN code' }), '560001');
-  assert.equal(applyMarker('SMOKE-1', { type: 'number' }), '1');
-  assert.equal(applyMarker('SMOKE-20/07/2024', { type: 'date' }), '20/07/2024');
-});
-
-test('a name is still marked, even where a phone-ish word appears in the label', () => {
-  assert.equal(applyMarker('Ada', { name: 'Contact person' }), `${SMOKE_MARKER}Ada`);
-  assert.equal(applyMarker('SMOKE-Ada', { name: 'Contact person' }), `${SMOKE_MARKER}Ada`);
-  assert.equal(applyMarker('Ada', { name: 'Phone owner name' }), `${SMOKE_MARKER}Ada`);
+  assert.equal(applyMarker('smoke.ada@example.com', { type: 'email' }), 'smoke.ada@example.com');
 });

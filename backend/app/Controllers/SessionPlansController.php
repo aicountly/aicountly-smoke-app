@@ -57,6 +57,7 @@ class SessionPlansController extends BaseController
             'allowed_actions_json'=> json_encode($body['allowed_actions'] ?? []),
             'destructive_allowed' => (bool) ($body['destructive_allowed'] ?? false),
             'expected_screens'    => (int) ($body['expected_screens'] ?? 0),
+            'max_steps'           => isset($body['max_steps']) ? (int) $body['max_steps'] : null,
             'status'              => 'pending',
         ]);
         $sid = (int) $db->insertID();

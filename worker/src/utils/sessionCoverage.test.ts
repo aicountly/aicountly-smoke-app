@@ -8,6 +8,8 @@ describe('evaluateSessionCoverage', () => {
       scopeScreens: 4,
       menuPath: '/employees',
       workspaceSkipped: false,
+      creates_verified: 1,
+      loop_status: 'done',
     });
     assert.equal(verdict.status, 'covered');
     assert.match(verdict.reason, /4 screen/);
@@ -18,6 +20,8 @@ describe('evaluateSessionCoverage', () => {
       scopeScreens: 0,
       menuPath: null,
       workspaceSkipped: false,
+      creates_verified: 0,
+      loop_status: 'blocked',
     });
     assert.equal(verdict.status, 'blocked');
     assert.match(verdict.reason, /login and landing/);
@@ -28,6 +32,8 @@ describe('evaluateSessionCoverage', () => {
       scopeScreens: 0,
       menuPath: '/employees',
       workspaceSkipped: false,
+      creates_verified: 0,
+      loop_status: 'blocked',
     });
     assert.equal(verdict.status, 'blocked');
     assert.match(verdict.reason, /"\/employees" was never reached/);
@@ -38,6 +44,8 @@ describe('evaluateSessionCoverage', () => {
       scopeScreens: 0,
       menuPath: '/employees',
       workspaceSkipped: true,
+      creates_verified: 0,
+      loop_status: 'blocked',
     });
     assert.equal(verdict.status, 'blocked');
     assert.match(verdict.reason, /no company workspace/);
@@ -49,6 +57,8 @@ describe('evaluateSessionCoverage', () => {
       scopeScreens: 0,
       menuPath: '  ',
       workspaceSkipped: true,
+      creates_verified: 0,
+      loop_status: 'blocked',
     });
     assert.equal(verdict.status, 'blocked');
     assert.match(verdict.reason, /no company-scoped screen/);
@@ -59,6 +69,43 @@ describe('evaluateSessionCoverage', () => {
       scopeScreens: 2,
       menuPath: '/employees',
       workspaceSkipped: true,
+      creates_verified: 1,
+      loop_status: 'done',
+    });
+    assert.equal(verdict.status, 'covered');
+  });
+
+  it('reports partial when in-scope screens were seen but the budget ran out with no verified create', () => {
+    const verdict = evaluateSessionCoverage({
+      scopeScreens: 5,
+      menuPath: '/payroll',
+      workspaceSkipped: false,
+      creates_verified: 0,
+      loop_status: 'budget',
+    });
+    assert.equal(verdict.status, 'partial');
+    assert.match(verdict.reason, /5 screen/);
+    assert.match(verdict.reason, /exhausted its step budget/);
+  });
+
+  it('does not report partial when a create was verified before the budget ran out', () => {
+    const verdict = evaluateSessionCoverage({
+      scopeScreens: 5,
+      menuPath: '/payroll',
+      workspaceSkipped: false,
+      creates_verified: 1,
+      loop_status: 'budget',
+    });
+    assert.equal(verdict.status, 'covered');
+  });
+
+  it('does not report partial when the loop finished cleanly even on budget-adjacent counts', () => {
+    const verdict = evaluateSessionCoverage({
+      scopeScreens: 5,
+      menuPath: '/payroll',
+      workspaceSkipped: false,
+      creates_verified: 0,
+      loop_status: 'done',
     });
     assert.equal(verdict.status, 'covered');
   });

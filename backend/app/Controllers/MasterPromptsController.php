@@ -90,6 +90,7 @@ class MasterPromptsController extends BaseController
                 'allowed_actions_json'=> json_encode($s['allowed_actions'] ?? []),
                 'destructive_allowed' => (bool) ($s['destructive_allowed'] ?? false),
                 'expected_screens'    => (int) ($s['expected_screens'] ?? 0),
+                'max_steps'           => isset($s['max_steps']) ? (int) $s['max_steps'] : null,
                 'status'              => 'pending',
             ]);
         }

@@ -10,6 +10,13 @@ export type MarkerFieldHint = {
   type?: string;
   name?: string;
   tag?: string;
+  /**
+   * Set when the field name matches the short-code family (`/short|abbrev|alias|
+   * initials|\bcode\b/`, shared with fieldSynthesis.ts's `CODE_FIELD_PATTERN`).
+   * Code validators are typically `[A-Z0-9]` only, so a hyphen is fatal — this
+   * switches the marker to an unhyphenated `SMOKE` prefix instead of `SMOKE-`.
+   */
+  looksLikeCode?: boolean;
 };
 
 const SKIP_TYPES = new Set([
@@ -18,6 +25,8 @@ const SKIP_TYPES = new Set([
 ]);
 
 const LEADING_MARKER = /^\s*(?:smoke[-_ ]+)+/i;
+/** Bare "SMOKE" with no separator, e.g. the model's own "SMOKEDEPT" workaround. */
+const LEADING_BARE_MARKER = /^\s*smoke/i;
 /** Deliberately narrow: "contact" would also match a person's name. */
 const PHONE_FIELD = /mobile|phone|telephone|whatsapp|\bfax\b/i;
 
@@ -36,8 +45,23 @@ export function applyMarker(value: string, hint: MarkerFieldHint = {}): string {
   if (type === 'email' || looksLikeEmail(raw)) {
     return markEmail(raw);
   }
+  if (hint.looksLikeCode) {
+    // Code fields are typically [A-Z0-9]-only, so strip any hyphen the model
+    // already typed (leading or embedded) before applying an unhyphenated marker.
+    const dehyphenated = raw.replace(/-/g, '');
+    if (LEADING_BARE_MARKER.test(dehyphenated)) return dehyphenated;
+    const upper = dehyphenated === dehyphenated.toUpperCase();
+    const marker = upper ? 'SMOKE' : 'Smoke';
+    return `${marker}${dehyphenated}`;
+  }
+  // Recognise "SMOKE-", "SMOKE " and a bare "SMOKE" prefix (no separator) as
+  // already-marked. The bare form only matched neither branch below before this
+  // fix, so the model's own "SMOKEDEPT" workaround became "SMOKE-SMOKEDEPT" and
+  // stayed invalid. Real-world field values are exceedingly unlikely to start
+  // with "smoke" for any reason other than our own marker.
   if (raw.toUpperCase().startsWith(SMOKE_MARKER.toUpperCase())
-    || raw.toUpperCase().startsWith('SMOKE ')) {
+    || raw.toUpperCase().startsWith('SMOKE ')
+    || LEADING_BARE_MARKER.test(raw)) {
     return raw;
   }
   return `${SMOKE_MARKER}${raw}`;
