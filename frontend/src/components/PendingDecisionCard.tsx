@@ -35,7 +35,8 @@ type AnswerBody = {
 
 const SITUATION_LABELS: Record<string, string> = {
   company_picker_empty: 'No companies found',
-  company_picker_ambiguous: 'Multiple companies found',
+  company_picker_ambiguous: 'Company not identified on picker',
+  company_picker_unreadable: 'Companies listed but not identifiable',
   company_picker_click_blocked: 'Company picker blocked',
 };
 
@@ -146,6 +147,9 @@ export function PendingDecisionCard({
 
   const options = Array.isArray(decision.options) ? decision.options : [];
   const snippet = contextSnippet(decision.context ?? {});
+  // Some options only mean something with a value the worker cannot know, such as the
+  // exact company name to open. Submitting one without a note answers nothing.
+  const noteRequired = options.some((opt) => String(opt.id ?? '') === selected && opt.requires_note === true);
   const errorMsg =
     (answerMut.error as { response?: { data?: { message?: string } } } | null)?.response?.data
       ?.message ?? 'Could not submit decision. Try again.';
@@ -222,14 +226,18 @@ export function PendingDecisionCard({
 
             <div>
               <label className="label" htmlFor={`decision-note-${decision.id}`}>
-                Optional note
+                {noteRequired ? 'Note (required for this option)' : 'Optional note'}
               </label>
               <textarea
                 id={`decision-note-${decision.id}`}
                 className="input min-h-[4rem]"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Extra context for the worker (optional)"
+                placeholder={
+                  noteRequired
+                    ? 'The exact company name to open, as it appears on screen'
+                    : 'Extra context for the worker (optional)'
+                }
               />
             </div>
 
@@ -252,7 +260,12 @@ export function PendingDecisionCard({
               <button
                 type="button"
                 className="btn-primary"
-                disabled={!selected || answerMut.isPending || options.length === 0}
+                disabled={
+                  !selected
+                  || answerMut.isPending
+                  || options.length === 0
+                  || (noteRequired && note.trim() === '')
+                }
                 onClick={() => {
                   const body: AnswerBody = {
                     selected_option: selected,

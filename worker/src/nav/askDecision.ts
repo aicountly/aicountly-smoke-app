@@ -23,6 +23,8 @@ export type DecisionOption = {
   action: NavAction;
   href?: string;
   company_name?: string;
+  /** Only actionable with an operator's note, so the run may never take it alone. */
+  requires_note?: boolean;
 };
 
 export type DecisionChoice = {

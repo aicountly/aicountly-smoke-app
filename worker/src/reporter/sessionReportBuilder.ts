@@ -340,7 +340,8 @@ function situationLabel(key: string): string {
   }
   const labels: Record<string, string> = {
     company_picker_empty: 'No companies found',
-    company_picker_ambiguous: 'Multiple companies found',
+    company_picker_ambiguous: 'Company not identified on picker',
+    company_picker_unreadable: 'Companies listed but not identifiable',
     company_picker_click_blocked: 'Company picker blocked',
   };
   return labels[key] ?? key.replace(/_/g, ' ');

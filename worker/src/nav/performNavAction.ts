@@ -1,11 +1,17 @@
 import type { Locator, Page } from 'playwright';
-import type { Job } from '../backend.js';
+import { appendLog, type Job } from '../backend.js';
 import { captureScreenshot } from '../scanner/screenshotCapture.js';
 import { evaluateClick } from '../utils/safeActionGuard.js';
 import { allowsFullAccess } from '../utils/environments.js';
 import { dismissOverlays } from '../utils/dismissOverlays.js';
 import type { DecisionChoice } from './askDecision.js';
-import { bodyMentionsCompany, hasEmptyCompanyCopy } from './companyPicker.js';
+import { findCompanyCards, pickCompany } from './companyCards.js';
+import {
+  bodyMentionsCompany,
+  hasEmptyCompanyCopy,
+  isDuplicateCompanyError,
+  isEmptyCompanyWorkspace,
+} from './companyPicker.js';
 import { lastResortValue, synthesizeFieldValue } from '../forms/fieldSynthesis.js';
 import {
   collectFormErrors,
@@ -74,11 +80,18 @@ export async function performNavAction(
 
   if (option.action === 'create_company') {
     assertMayCreateCompany(job, choice);
-    await createCompany(
-      page,
-      option.company_name || context.companyName || choice.freeText,
-      context.screenshotsDir,
-    );
+    const requested = option.company_name || context.companyName || choice.freeText;
+    const outcome = await createCompany(page, requested, context.screenshotsDir);
+    if (outcome.status === 'already_exists') {
+      await appendLog({
+        run_id: job.run_id,
+        session_id: job.session.id,
+        job_id: job.job_id,
+        level: 'info',
+        message: `Company "${outcome.name}" already exists (${outcome.evidence}); `
+          + 'treating create as satisfied instead of creating a duplicate.',
+      }).catch(() => {});
+    }
     return { navigated: true, rescan: true, skipped: false };
   }
 
@@ -124,13 +137,6 @@ function assertAllowedDestination(destination: URL, job: Job): void {
 }
 
 async function openCompany(page: Page, preferred?: string): Promise<void> {
-  const cardSelectors = [
-    '[data-company-id]',
-    '[data-testid*="company" i]',
-    '[class*="company-card" i]',
-    '[class*="organisation-card" i]',
-    '[class*="organization-card" i]',
-  ].join(', ');
   if (preferred) {
     const exact = page.getByText(preferred, { exact: false }).filter({ visible: true }).first();
     if (await exact.count() && await exact.isVisible().catch(() => false)) {
@@ -139,16 +145,15 @@ async function openCompany(page: Page, preferred?: string): Promise<void> {
       return;
     }
   }
-  const cards = page.locator(cardSelectors);
-  const count = await cards.count();
-  for (let index = 0; index < count; index++) {
-    const card = cards.nth(index);
-    if (!await card.isVisible().catch(() => false)) continue;
-    await card.click({ timeout: 8_000 });
-    await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => {});
-    return;
+  const cards = await findCompanyCards(page);
+  if (cards.length === 0) {
+    throw new Error(preferred
+      ? `No company matching "${preferred}" could be opened, and no company row could be identified.`
+      : 'No visible company could be opened.');
   }
-  throw new Error('No visible company could be opened.');
+  const card = pickCompany(cards, preferred);
+  await card.locator.click({ timeout: 8_000 });
+  await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => {});
 }
 
 const NAME_FIELD_TEXT = /compan|organi[sz]ation|business|firm|entity|name/i;
@@ -161,8 +166,29 @@ const CREATE_COMPANY_TEXT = /(create|add|new|register|setup|set up)[^a-z]*(compa
  */
 const CREATE_COMPANY_ROUTES = ['#/company/new', '#/company/create', '/company/new'];
 
-async function createCompany(page: Page, requestedName?: string, screenshotsDir?: string): Promise<void> {
+export type CreateCompanyOutcome = {
+  status: 'created' | 'already_exists';
+  name: string;
+  evidence: string;
+};
+
+/**
+ * Creating the smoke company has to be repeatable: a retried session replays the
+ * same remembered choice, and the target rejects a second company with the same
+ * name. "It is already there" is the state this action wants, so both the
+ * pre-flight check and a duplicate-name rejection count as success.
+ */
+async function createCompany(
+  page: Page,
+  requestedName?: string,
+  screenshotsDir?: string,
+): Promise<CreateCompanyOutcome> {
   const name = requestedName?.trim() || process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
+
+  const body = (await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '')).slice(0, 30_000);
+  if (!isEmptyCompanyWorkspace(body) && bodyMentionsCompany(body, name)) {
+    return { status: 'already_exists', name, evidence: 'already listed on the picker' };
+  }
 
   // Empty-state pages sometimes render the form inline, with no control to click.
   // Never treat the picker search box ("Search companies...") as the name field —
@@ -204,7 +230,7 @@ async function createCompany(page: Page, requestedName?: string, screenshotsDir?
   const submitLabel = ((await submit.innerText().catch(() => '')) || '').trim().replace(/\s+/g, ' ');
   await submit.click({ timeout: 8_000 });
   await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
-  await assertCompanyCreateLanded(page, name, screenshotsDir, submitLabel, filled);
+  return assertCompanyCreateLanded(page, name, screenshotsDir, submitLabel, filled);
 }
 
 /**
@@ -339,7 +365,7 @@ async function assertCompanyCreateLanded(
   screenshotsDir?: string,
   submitLabel = '',
   filled: string[] = [],
-): Promise<void> {
+): Promise<CreateCompanyOutcome> {
   const deadline = Date.now() + 20_000;
   let formStillOpen = false;
   let stillEmpty = false;
@@ -349,8 +375,13 @@ async function assertCompanyCreateLanded(
     // Name sitting only in the still-open create form is not proof of create.
     formStillOpen = !!(await findCompanyNameField(page, 250));
     const nameVisible = bodyMentionsCompany(bodyText, name);
-    if (!stillEmpty && !formStillOpen && nameVisible) return;
-    if (!stillEmpty && !formStillOpen && !/create\s+(new\s+)?compan/i.test(bodyText)) return;
+    if (!stillEmpty && !formStillOpen && nameVisible) return { status: 'created', name, evidence: 'listed after submit' };
+    if (!stillEmpty && !formStillOpen && !/create\s+(new\s+)?compan/i.test(bodyText)) {
+      return { status: 'created', name, evidence: 'create form closed without error' };
+    }
+    if (formStillOpen && isDuplicateCompanyError(await collectFormErrors(page))) {
+      return { status: 'already_exists', name, evidence: 'the target rejected the name as a duplicate' };
+    }
     await page.waitForTimeout(400);
   }
 

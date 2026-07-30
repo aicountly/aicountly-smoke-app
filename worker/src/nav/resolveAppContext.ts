@@ -1,8 +1,15 @@
 import type { Page } from 'playwright';
 import { appendLog, backend, type Job } from '../backend.js';
 import { captureScreenshot } from '../scanner/screenshotCapture.js';
+import { describeVisibleControls } from '../forms/formDom.js';
 import { askOrRecallDecision, forgetDecisionMemory, type DecisionOption } from './askDecision.js';
-import { hasEmptyCompanyCopy, looksLikeCompanyPicker } from './companyPicker.js';
+import { describeCards, findCompanyCards, pickCompany, waitForCompanyCards } from './companyCards.js';
+import {
+  hasEmptyCompanyCopy,
+  isEmptyCompanyWorkspace,
+  looksLikeCompanyPicker,
+  readCompanyCount,
+} from './companyPicker.js';
 import { performNavAction, type NavActionResult } from './performNavAction.js';
 
 export type ResolveAppContextOptions = {
@@ -13,13 +20,9 @@ export type ResolveAppContextResult = NavActionResult & {
   detected: boolean;
 };
 
-const COMPANY_CARD_SELECTOR = [
-  '[data-company-id]',
-  '[data-testid*="company" i]',
-  '[class*="company-card" i]',
-  '[class*="organisation-card" i]',
-  '[class*="organization-card" i]',
-].join(', ');
+/** A company created on a sibling app is not in the picker's list the instant we return. */
+const WORKSPACE_SETTLE_MS = 25_000;
+const LIST_SETTLE_MS = 15_000;
 
 export async function resolveAppContext(
   page: Page,
@@ -27,14 +30,15 @@ export async function resolveAppContext(
   options: ResolveAppContextOptions = {},
 ): Promise<ResolveAppContextResult> {
   const url = page.url();
-  const bodyText = (await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '')).slice(0, 30_000);
+  const bodyText = await readBody(page);
   if (!looksLikeCompanyPicker(url, bodyText)) {
     return { detected: false, navigated: false, rescan: false, skipped: false };
   }
 
-  const cards = await visibleCompanyCards(page);
-  const empty = hasEmptyCompanyCopy(bodyText);
-  const companyName = process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
+  const cards = await findCompanyCards(page);
+  const listed = readCompanyCount(bodyText);
+  const empty = isEmptyCompanyWorkspace(bodyText);
+  const companyName = preferredCompanyName();
 
   if (cards.length > 0) {
     const preferred = process.env.SMOKE_COMPANY_NAME?.trim();
@@ -65,6 +69,37 @@ export async function resolveAppContext(
         { error: errorMessage(error), labels: cards.map((item) => item.label) },
       );
     }
+  }
+
+  // The picker counts companies it is listing, but nothing we can match. That is our
+  // markup guess failing, not an empty workspace, and answering "create" here only
+  // adds a duplicate. Try the name we know, then ask for one we can click by name.
+  if (listed !== null && listed > 0) {
+    if (await openByName(page, job, companyName)) {
+      return { detected: true, navigated: true, rescan: true, skipped: false };
+    }
+    await reportUnreadablePicker(page, job, listed);
+    return decide(
+      page,
+      job,
+      options,
+      'company_picker_unreadable',
+      `The picker lists ${listed} compan${listed === 1 ? 'y' : 'ies'}, but none of them could be identified in the page markup. `
+      + 'How should the smoke run proceed?',
+      // No rescan on offer: re-reading the same markup cannot make it identifiable,
+      // and the picker already told us the list is rendered.
+      [
+        {
+          id: 'open_named_company',
+          label: 'Open a company by name — type its exact name in the note below',
+          action: 'open_company',
+          requires_note: true,
+        },
+        { id: 'skip_company_scoped_menus', label: 'Skip company-scoped navigation', action: 'skip_target' },
+        { id: 'abort_session', label: 'Abort this session', action: 'abort_session' },
+      ],
+      { listed_company_count: listed, labels: [], detection: 'no_match', company_name: companyName },
+    );
   }
 
   if (empty || cards.length === 0) {
@@ -105,11 +140,38 @@ export async function resolveAppContext(
         { id: 'skip_company_scoped_menus', label: 'Skip company-scoped navigation', action: 'skip_target' },
         { id: 'abort_session', label: 'Abort this session', action: 'abort_session' },
       ],
-      { labels: [], empty_state_detected: empty, company_name: companyName },
+      { labels: [], empty_state_detected: empty, listed_company_count: listed, company_name: companyName },
     );
   }
 
   return { detected: true, navigated: false, rescan: false, skipped: false };
+}
+
+/**
+ * A picker whose rows carry no name, id or test hook is a real product finding: no
+ * automation can address a company on it. Record what was on screen so it does not
+ * cost another run to work out why nothing matched.
+ */
+async function reportUnreadablePicker(page: Page, job: Job, listed: number): Promise<void> {
+  const inventory = await describeVisibleControls(page).catch(() => null);
+  await log(
+    job,
+    `Company picker lists ${listed} compan${listed === 1 ? 'y' : 'ies'} but exposes no identifiable company rows `
+    + `(no [data-company-id], company test id, or company-card class, and no row text that reads as a name). `
+    + `url=${page.url()}`
+    + (inventory ? ` visible_controls=[${inventory.buttons.join(' | ')}]` : ''),
+    'warn',
+  );
+}
+
+async function openByName(page: Page, job: Job, name: string): Promise<boolean> {
+  const target = page.getByText(name, { exact: false }).filter({ visible: true }).first();
+  if (!await target.count().catch(() => 0)) return false;
+  const clicked = await target.click({ timeout: 8_000 }).then(() => true).catch(() => false);
+  if (!clicked) return false;
+  await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => {});
+  await log(job, `Opened company context by name "${name}" (picker exposed no matchable company rows)`);
+  return true;
 }
 
 async function decide(
@@ -121,10 +183,11 @@ async function decide(
   options: DecisionOption[],
   context: Record<string, unknown>,
 ): Promise<ResolveAppContextResult> {
-  const screenshotPath = resolveOptions.screenshotsDir
-    ? await captureScreenshot(page, resolveOptions.screenshotsDir, `decision-${situationKey}`).catch(() => undefined)
-    : undefined;
-  const ask = (ignoreMemory: boolean) => askOrRecallDecision({
+  const pickerUrl = page.url();
+  const shoot = () => (resolveOptions.screenshotsDir
+    ? captureScreenshot(page, resolveOptions.screenshotsDir, `decision-${situationKey}`).catch(() => undefined)
+    : Promise.resolve(undefined));
+  const ask = (ignoreMemory: boolean, screenshotPath?: string) => askOrRecallDecision({
     job,
     page,
     situationKey,
@@ -139,7 +202,7 @@ async function decide(
     screenshotsDir: resolveOptions.screenshotsDir,
   });
 
-  const choice = await ask(false);
+  const choice = await ask(false, await shoot());
   try {
     return await finishDecision(page, job, choice, act);
   } catch (error) {
@@ -154,7 +217,10 @@ async function decide(
     await forgetDecisionMemory(job, situationKey).catch(async (forgetError: unknown) => {
       await log(job, `Could not forget bad decision memory: ${errorMessage(forgetError)}`, 'warn');
     });
-    return finishDecision(page, job, await ask(true), act);
+    // The failed action may have left us on another app entirely. Ask about the
+    // screen the question is about, or the operator answers for the wrong page.
+    await returnToPicker(page, job, pickerUrl);
+    return finishDecision(page, job, await ask(true, await shoot()), act);
   }
 }
 
@@ -166,7 +232,7 @@ async function finishDecision(
 ): Promise<ResolveAppContextResult> {
   const pickerUrl = page.url();
   if (choice.option.action === 'create_company') {
-    await log(job, `Creating company "${choice.option.company_name || 'Smoke Test Co'}" (source=${choice.source})`);
+    await log(job, `Creating company "${choice.option.company_name || preferredCompanyName()}" (source=${choice.source})`);
   }
   const result = { detected: true as const, ...await act(choice) };
   if (choice.option.action === 'create_company') {
@@ -199,8 +265,12 @@ function hostOf(url: string): string | null {
 }
 
 async function openCreatedCompanyIfListed(page: Page, job: Job, preferred?: string): Promise<void> {
-  const name = preferred || process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
-  const cards = await visibleCompanyCards(page);
+  const name = preferred || preferredCompanyName();
+
+  // The picker was rendered before the company existed, so give the list time to
+  // catch up. Failing here on the first read is what turned a create that had
+  // worked into a session failure.
+  const cards = await waitForCompanyCards(page, LIST_SETTLE_MS);
   if (cards.length > 0) {
     const card = pickCompany(cards, name);
     try {
@@ -214,36 +284,66 @@ async function openCreatedCompanyIfListed(page: Page, job: Job, preferred?: stri
   }
 
   // HRMS may list companies as plain rows/links without card selectors.
-  const byName = page.getByText(name, { exact: false }).filter({ visible: true }).first();
-  if (await byName.count().catch(() => 0)) {
-    await byName.click({ timeout: 8_000 }).catch(() => {});
-    await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => {});
-    await log(job, `Opened company context after create via name match "${name}"`);
-  }
+  if (await openByName(page, job, name)) return;
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => {});
+  await openByName(page, job, name);
 }
 
 /** After create/open, refuse to pretend success while the empty picker is still up. */
 async function assertWorkspaceReady(page: Page, job: Job, action: string): Promise<void> {
   if (action !== 'create_company' && action !== 'open_company') return;
-  if (!(await isEmptyCompanyPicker(page))) {
-    await log(job, `Company workspace ready after ${action}`);
-    return;
+
+  const deadline = Date.now() + WORKSPACE_SETTLE_MS;
+  let reloaded = false;
+  for (;;) {
+    if (!(await isEmptyCompanyPicker(page))) {
+      await log(job, `Company workspace ready after ${action}`);
+      return;
+    }
+    if (Date.now() >= deadline) break;
+    // Half way through, assume the list we are staring at was cached before the
+    // company existed rather than that the company is missing.
+    if (!reloaded && Date.now() >= deadline - WORKSPACE_SETTLE_MS / 2) {
+      reloaded = true;
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => {});
+    }
+    await page.waitForTimeout(1_000);
   }
+
+  const bodyText = await readBody(page);
   throw new Error(
-    `Company workspace is still empty after ${action} (picker still shows no companies).`,
+    `Company workspace is still empty after ${action} (picker still shows no companies `
+    + `after ${Math.round(WORKSPACE_SETTLE_MS / 1_000)}s). url=${page.url()} `
+    + `listed_count=${readCompanyCount(bodyText) ?? 'not stated'} `
+    + `cards=${describeCards(await findCompanyCards(page))} `
+    + `empty_copy=${hasEmptyCompanyCopy(bodyText)}`,
   );
 }
 
 export async function isEmptyCompanyPicker(page: Page): Promise<boolean> {
-  const bodyText = (await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '')).slice(0, 30_000);
-  if (hasEmptyCompanyCopy(bodyText)) return true;
+  const bodyText = await readBody(page);
+  // Off the picker means a workspace is open, which is the whole point of the check.
+  // Empty-state copy makes a page count as a picker, so that case still lands below.
   if (!looksLikeCompanyPicker(page.url(), bodyText)) return false;
-  return (await visibleCompanyCards(page)).length === 0
+  const listed = readCompanyCount(bodyText);
+  // A counter is the picker's own answer, so it settles the question either way.
+  if (listed !== null) return listed === 0;
+  if (hasEmptyCompanyCopy(bodyText)) return true;
+  return (await findCompanyCards(page)).length === 0
     && !bodyMentionsPreferredCompany(bodyText);
 }
 
+async function readBody(page: Page): Promise<string> {
+  const text = await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '');
+  return text.slice(0, 30_000);
+}
+
+function preferredCompanyName(): string {
+  return process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
+}
+
 function bodyMentionsPreferredCompany(bodyText: string): boolean {
-  const name = process.env.SMOKE_COMPANY_NAME?.trim() || 'Smoke Test Co';
+  const name = preferredCompanyName();
   return bodyText.toLowerCase().includes(name.toLowerCase()) && !hasEmptyCompanyCopy(bodyText);
 }
 
@@ -289,37 +389,6 @@ async function priorCreateCompanyInRun(job: Job): Promise<PriorCreate | null> {
     }
   }
   return null;
-}
-
-type CompanyCard = {
-  label: string;
-  starred: boolean;
-  locator: ReturnType<Page['locator']>;
-};
-
-async function visibleCompanyCards(page: Page): Promise<CompanyCard[]> {
-  const cards = page.locator(COMPANY_CARD_SELECTOR);
-  const result: CompanyCard[] = [];
-  const count = Math.min(await cards.count().catch(() => 0), 50);
-  for (let index = 0; index < count; index++) {
-    const locator = cards.nth(index);
-    if (!await locator.isVisible().catch(() => false)) continue;
-    const label = (await locator.innerText().catch(() => '')).trim().replace(/\s+/g, ' ').slice(0, 160);
-    const starred = await locator.locator(
-      '[aria-label*="star" i], [title*="star" i], [class*="starred" i], [data-starred="true"]',
-    ).count().then((n) => n > 0).catch(() => false);
-    result.push({ label, starred, locator });
-  }
-  return result;
-}
-
-function pickCompany(cards: CompanyCard[], preferred?: string): CompanyCard {
-  if (preferred) {
-    const normalized = preferred.toLowerCase();
-    const match = cards.find((card) => card.label.toLowerCase().includes(normalized));
-    if (match) return match;
-  }
-  return cards.find((card) => card.starred) ?? cards[0];
 }
 
 async function log(job: Job, message: string, level: 'info' | 'warn' | 'error' = 'info'): Promise<void> {

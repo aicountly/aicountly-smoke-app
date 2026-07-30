@@ -132,7 +132,8 @@ class DecisionReportFormatter
         }
         return match ($key) {
             'company_picker_empty' => 'No companies found',
-            'company_picker_ambiguous' => 'Multiple companies found',
+            'company_picker_ambiguous' => 'Company not identified on picker',
+            'company_picker_unreadable' => 'Companies listed but not identifiable',
             'company_picker_click_blocked' => 'Company picker blocked',
             default => str_replace('_', ' ', $key),
         };

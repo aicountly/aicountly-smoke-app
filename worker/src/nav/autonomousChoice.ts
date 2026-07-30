@@ -37,11 +37,20 @@ const GIVES_UP: NavAction[] = ['skip_target', 'rescan_menus'];
  * move is to ask and only fall back if nobody answers.
  */
 export function humanCouldDoMore(environment: string, options: DecisionOption[]): boolean {
-  const ours = options.filter((option) => isAutonomouslyAllowed(environment, option.action));
+  const ours = options.filter((option) => optionIsAutonomouslyAllowed(environment, option));
   if (ours.length === 0) return true;
   if (ours.some((option) => !GIVES_UP.includes(option.action))) return false;
   return options.some((option) => option.action !== 'abort_session'
-    && !isAutonomouslyAllowed(environment, option.action));
+    && !optionIsAutonomouslyAllowed(environment, option));
+}
+
+/**
+ * An option the run cannot supply the input for is not an option the run has. Offering
+ * "open the company named in the note" and then taking it alone means opening nothing.
+ */
+export function optionIsAutonomouslyAllowed(environment: string, option: DecisionOption): boolean {
+  if (option.requires_note) return false;
+  return isAutonomouslyAllowed(environment, option.action);
 }
 
 export function isAutonomouslyAllowed(environment: string, action: NavAction): boolean {
@@ -58,7 +67,7 @@ export function autonomousOption(
   options: DecisionOption[],
   recommended?: string,
 ): DecisionOption | null {
-  const usable = options.filter((option) => isAutonomouslyAllowed(environment, option.action));
+  const usable = options.filter((option) => optionIsAutonomouslyAllowed(environment, option));
   if (usable.length === 0) return null;
 
   const preferred = usable.find((option) => option.id === recommended);

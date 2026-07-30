@@ -126,12 +126,26 @@ class DeterministicAdapter extends AbstractAdapter
         $env = (string) ($options['environment'] ?? 'sandbox');
         $hints = strtolower($userPrompt . ' ' . (string) json_encode($context));
         $situationKey = strtolower((string) ($context['situation_key'] ?? ''));
-        $questionHint = trim((string) ($context['question'] ?? ''));
 
+        // The worker's own question arrives as the user prompt and describes the screen
+        // it is actually looking at. Replacing it with a canned line here once told an
+        // operator "No companies were found" about a picker listing two companies.
+        $questionHint = trim((string) ($context['question'] ?? ''));
+        if ($questionHint === '') {
+            $questionHint = trim($userPrompt);
+        }
+
+        // Match the situation key, which is exact. Phrase matching is a fallback for
+        // callers that send none, and it must not fire on "no company card could be
+        // identified" — that is a detection failure on a populated picker, and
+        // answering it with Create only adds a duplicate.
         $emptyCompany = str_contains($situationKey, 'company_picker_empty')
-            || str_contains($hints, 'no companies')
-            || str_contains($hints, 'no company')
-            || (str_contains($hints, 'company/all') && str_contains($hints, 'empty'));
+            || ($situationKey === '' && (
+                str_contains($hints, 'no companies were found')
+                || str_contains($hints, 'no companies yet')
+                || str_contains($hints, 'no companies exist')
+                || (str_contains($hints, 'company/all') && str_contains($hints, 'empty'))
+            ));
         if ($emptyCompany) {
             $companyName = trim((string) ($context['company_name'] ?? $context['preferred_company_name'] ?? 'Smoke Test Co'));
             if ($companyName === '') {
@@ -163,6 +177,37 @@ class DeterministicAdapter extends AbstractAdapter
                 'recommended' => Environments::isObserverOnly($env)
                     ? 'skip_company_scoped_menus'
                     : 'create_company',
+            ];
+        }
+
+        // The picker counts its companies but exposes none we can address. Creating
+        // another one is the wrong answer here; only a name an operator can give us,
+        // or going around the screen, gets the run anywhere.
+        if (str_contains($situationKey, 'company_picker_unreadable')) {
+            return [
+                'question' => $questionHint !== ''
+                    ? $questionHint
+                    : 'The company picker lists companies that cannot be identified in the page markup. How should smoke proceed?',
+                'options' => [
+                    [
+                        'id'     => 'open_named_company',
+                        'label'  => 'Open a company by name — type its exact name in the note below',
+                        'action' => 'open_company',
+                    ],
+                    [
+                        'id'     => 'skip_company_scoped_menus',
+                        'label'  => 'Skip company-scoped menus',
+                        'action' => 'skip_target',
+                    ],
+                    [
+                        'id'     => 'abort_session',
+                        'label'  => 'Abort this session',
+                        'action' => 'abort_session',
+                    ],
+                ],
+                // Naming the company needs a human, so the run's own best move is to go
+                // around the screen and have the session reported as blocked.
+                'recommended' => 'skip_company_scoped_menus',
             ];
         }
 
