@@ -52,3 +52,40 @@ export async function signature(page: Page): Promise<PageSignature> {
 export function signatureKey(value: PageSignature): string {
   return `${value.url}|${value.title}|${value.markCount}|${value.domHash}|${value.dialogCount}`;
 }
+
+/**
+ * Wait for a React/SPA render to settle by polling the DOM hash until it is
+ * unchanged for quietMs, or until maxMs elapses. Navigation load events are
+ * unreliable on client-side route changes.
+ */
+export async function waitForSettle(
+  page: Page,
+  options: { maxMs?: number; quietMs?: number; pollMs?: number } = {},
+): Promise<void> {
+  const maxMs = Math.max(200, options.maxMs ?? 4_000);
+  const quietMs = Math.max(100, options.quietMs ?? 350);
+  const pollMs = Math.max(50, options.pollMs ?? 150);
+  const started = Date.now();
+  let lastHash = '';
+  let stableSince = 0;
+
+  while (Date.now() - started < maxMs) {
+    const next = await page.evaluate<string>(`(() => {
+      const source = (document.body && document.body.innerText || '') + '|' + document.querySelectorAll('*').length;
+      let hash = 2166136261;
+      for (let i = 0; i < source.length; i += 1) {
+        hash ^= source.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16);
+    })()`).catch(() => '');
+    if (next && next === lastHash) {
+      if (stableSince === 0) stableSince = Date.now();
+      if (Date.now() - stableSince >= quietMs) return;
+    } else {
+      lastHash = next;
+      stableSince = 0;
+    }
+    await page.waitForTimeout(pollMs);
+  }
+}

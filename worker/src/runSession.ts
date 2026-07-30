@@ -228,6 +228,32 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
           `agent-${String(step.ordinal).padStart(3, '0')}-${step.action.type}`,
           step.screenshot,
         );
+        const label = step.target_label ? `"${step.target_label}"` : step.action.type;
+        const change = step.signature_changed ? 'screen changed' : 'screen unchanged';
+        const level = step.outcome === 'refused' || step.outcome === 'failed' ? 'warn' : 'info';
+        await appendLog({
+          run_id: job.run_id,
+          session_id: job.session.id,
+          job_id: job.job_id,
+          level,
+          message: `Agent step ${step.ordinal}/${config.maxScreensPerSession}: ${step.action.type} ${label} -> ${step.outcome}, ${change} — ${step.observation || step.outcome_observation}`,
+          context: {
+            action: step.action,
+            target_label: step.target_label,
+            typed_value: step.typed_value,
+            guard: step.guard,
+            signature_changed: step.signature_changed,
+          },
+        }).catch(() => {});
+      },
+      onLoopWarning: async (message) => {
+        await appendLog({
+          run_id: job.run_id,
+          session_id: job.session.id,
+          job_id: job.job_id,
+          level: 'warn',
+          message,
+        }).catch(() => {});
       },
     });
     agentSteps = loop.steps;

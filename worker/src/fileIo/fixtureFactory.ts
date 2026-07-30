@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { SyntheticDataset } from '../data/syntheticData.js';
+import { isRenderableExtension, renderFixture } from './renderFixture.js';
 import type { FileIoScenario, FixtureManifest, MaterializedFixture } from './types.js';
 
 export function loadFixtureManifest(repoRoot: string): FixtureManifest {
@@ -17,6 +19,7 @@ export function materializeFixture(
   repoRoot: string,
   reportsDir: string,
   scenario: FileIoScenario,
+  dataset?: SyntheticDataset,
 ): MaterializedFixture {
   const fixtureRoot = path.resolve(repoRoot, 'samples', 'fixtures');
   const sourcePath = path.resolve(fixtureRoot, scenario.fixture);
@@ -28,6 +31,14 @@ export function materializeFixture(
   const targetDir = path.join(reportsDir, 'fixtures', safeSegment(scenario.key));
   fs.mkdirSync(targetDir, { recursive: true });
   const runPath = path.join(targetDir, path.basename(sourcePath));
+
+  if (dataset && isRenderableExtension(runPath)) {
+    const rendered = renderFixture(runPath, dataset);
+    if (rendered.ok) {
+      return { scenario, sourcePath, runPath, name: path.basename(runPath) };
+    }
+  }
+
   fs.copyFileSync(sourcePath, runPath);
   return { scenario, sourcePath, runPath, name: path.basename(runPath) };
 }

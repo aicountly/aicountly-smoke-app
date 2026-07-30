@@ -424,19 +424,26 @@ ${card.image_data_uri ? `<img src="${card.image_data_uri}" alt="${esc(card.scree
 
 function agentStepCard(step: AgentStepRecord): string {
   const image = toDataUri(step.screenshot) ?? '';
+  const typed = step.typed_value ? `<p><strong>Typed:</strong> ${esc(step.typed_value)}</p>` : '';
   return `<article class="card step"><div class="step-no">${step.ordinal}</div>
 <div>${image ? `<img src="${image}" alt="Agent step ${step.ordinal}">` : '<div class="muted">Screenshot unavailable.</div>'}</div>
-<div><span class="badge">${esc(step.outcome)}</span><h3>${esc(actionLabel(step.action))}</h3>
+<div><span class="badge">${esc(step.outcome)}</span><h3>${esc(actionLabel(step))}</h3>
 <p><strong>Observed:</strong> ${esc(step.observation)}</p>
 <p><strong>Reasoning:</strong> ${esc(step.reasoning)}</p>
 <p><strong>Outcome:</strong> ${esc(step.outcome_observation)}</p>
+${typed}
 <p><strong>Guard:</strong> ${esc(step.guard.allowed ? 'allowed' : step.guard.reason || 'refused')}</p>
 <p><strong>Goal progress:</strong> ${esc(step.goal_progress)}</p>
 <p class="muted">Signature ${step.signature_changed ? 'changed' : 'unchanged'} · ${esc(step.signature_after.url)}</p></div></article>`;
 }
 
-function actionLabel(action: AgentStepRecord['action']): string {
-  if ('mark' in action) return `${action.type} mark ${action.mark}`;
+function actionLabel(step: AgentStepRecord): string {
+  const action = step.action;
+  if ('mark' in action) {
+    return step.target_label
+      ? `${action.type} "${step.target_label}" (mark ${action.mark})`
+      : `${action.type} mark ${action.mark}`;
+  }
   if (action.type === 'navigate') return `${action.type} ${action.url}`;
   return action.type;
 }

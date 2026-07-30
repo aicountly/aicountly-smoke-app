@@ -2,6 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { evaluateClick, evaluateFileAction } from './safeActionGuard.js';
 
+const writeCtx = {
+  environment: 'production_full_access',
+  allowSafeDemo: true,
+  destructiveAllowed: true,
+  allowedActions: ['click_menu', 'fill_form', 'submit_form', 'create_record', 'upload_file'],
+};
+
 test('file gate always blocks production uploads even with every opt-in', () => {
   const decision = evaluateFileAction('upload_file', {
     environment: 'production_readonly',
@@ -89,31 +96,51 @@ test('production_full_access still honours the per-session and profile opt-ins',
   assert.match(noSafeDemo.reason ?? '', /allow_safe_demo/);
 });
 
-test('destructive labels are clickable on production_full_access but never on the observer tiers', () => {
-  const fullAccess = evaluateClick('Save Invoice', {
-    environment: 'production_full_access',
-    allowSafeDemo: true,
-    destructiveAllowed: true,
-  });
-  assert.equal(fullAccess.allowed, true);
+test('constructive labels are clickable on full-access with opt-ins but never on observer tiers', () => {
+  assert.equal(evaluateClick('Save Invoice', writeCtx, 'submit_form').allowed, true);
 
   for (const environment of ['production_readonly', 'production_restricted']) {
     const decision = evaluateClick('Save Invoice', {
       environment,
       allowSafeDemo: true,
       destructiveAllowed: true,
-    });
-    assert.equal(decision.allowed, false, `${environment} must block destructive labels`);
+      allowedActions: ['submit_form'],
+    }, 'submit_form');
+    assert.equal(decision.allowed, false, `${environment} must block constructive labels`);
     assert.equal(decision.matchedToken, 'save');
   }
 });
 
-test('production_full_access without the session opt-in still refuses destructive labels', () => {
-  const decision = evaluateClick('Delete Employee', {
+test('irreversible labels are permanently denied even on production_full_access', () => {
+  for (const label of ['Delete Employee', 'Approve Leave', 'Pay Salary', 'Void Payment', 'Sign Out']) {
+    const decision = evaluateClick(label, writeCtx, 'click_menu');
+    assert.equal(decision.allowed, false, `${label} must stay denied`);
+    assert.match(decision.reason ?? '', /irreversible/);
+  }
+});
+
+test('production_full_access without the session opt-in still refuses constructive labels', () => {
+  const decision = evaluateClick('Save Employee', {
     environment: 'production_full_access',
     allowSafeDemo: true,
     destructiveAllowed: false,
-  });
+    allowedActions: ['submit_form'],
+  }, 'submit_form');
   assert.equal(decision.allowed, false);
   assert.match(decision.reason ?? '', /destructive_allowed=false/);
+});
+
+test('create_record umbrella permits fill_form and submit_form', () => {
+  assert.equal(evaluateClick('First name', {
+    environment: 'sandbox',
+    allowSafeDemo: true,
+    destructiveAllowed: true,
+    allowedActions: ['create_record'],
+  }, 'fill_form').allowed, true);
+  assert.equal(evaluateClick('Save', {
+    environment: 'sandbox',
+    allowSafeDemo: true,
+    destructiveAllowed: true,
+    allowedActions: ['create_record'],
+  }, 'submit_form').allowed, true);
 });

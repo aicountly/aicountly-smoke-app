@@ -1,0 +1,3 @@
+employee_code,first_name,last_name,email,department,join_date
+SMOKE-E001,SMOKE-Ada,SMOKE-Lovelace,smoke.ada@example.com,Engineering,2025-04-01
+SMOKE-E002,SMOKE-Grace,SMOKE-Hopper,smoke.grace@example.com,Payroll,2025-04-15

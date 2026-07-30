@@ -1,9 +1,15 @@
 import type { Page } from 'playwright';
 import type { Job } from '../backend.js';
+import { applyMarker } from '../data/syntheticMarker.js';
 import { evaluateHostGuard } from '../utils/hostGuard.js';
-import { evaluateClick, parseAllowedActions, type GuardDecision } from '../utils/safeActionGuard.js';
+import {
+  evaluateClick,
+  isConstructiveLabel,
+  parseAllowedActions,
+  type GuardDecision,
+} from '../utils/safeActionGuard.js';
 import { markInteractive, unmark, type MarkDescriptor } from './marks.js';
-import { captureViewportJpeg, signature, type PageSignature } from './perceive.js';
+import { captureViewportJpeg, signature, waitForSettle, type PageSignature } from './perceive.js';
 
 export type AgentAction =
   | { type: 'click'; mark: number }
@@ -24,6 +30,8 @@ export type ActionOutcome = {
   screenshot?: string;
   before: PageSignature;
   after: PageSignature;
+  target_label: string;
+  typed_value?: string;
 };
 
 export type AgentStepRecord = {
@@ -38,6 +46,8 @@ export type AgentStepRecord = {
   outcome: ActionOutcome['status'];
   outcome_observation: string;
   guard: GuardDecision;
+  target_label: string;
+  typed_value?: string;
   signature_before: PageSignature;
   signature_after: PageSignature;
   signature_changed: boolean;
@@ -54,9 +64,11 @@ export async function executeAction(input: {
   const { page, job, action, marks } = input;
   const before = await signature(page);
   const descriptor = 'mark' in action ? marks.find((item) => item.mark === action.mark) : undefined;
+  const targetLabel = descriptor?.name ?? '';
   let guard: GuardDecision = { allowed: true };
   let status: ActionOutcome['status'] = 'executed';
   let observation = '';
+  let typedValue: string | undefined;
 
   if (action.type === 'done' || action.type === 'blocked' || action.type === 'ask_operator') {
     status = 'terminal';
@@ -68,8 +80,9 @@ export async function executeAction(input: {
       observation = `That control is destructive or disallowed on this tier: ${guard.reason ?? 'blocked by safety guard'}. Choose another action.`;
     } else {
       try {
-        await perform(page, action);
-        observation = `Executed ${describeAction(action)}.`;
+        const performed = await perform(page, action, descriptor);
+        typedValue = performed.typedValue;
+        observation = `Executed ${describeAction(action, targetLabel)}${typedValue ? ` with "${typedValue}"` : ''}.`;
       } catch (error) {
         status = 'failed';
         observation = `Action failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -85,7 +98,24 @@ export async function executeAction(input: {
     input.screenshotsDir,
     `agent-step-${String(input.ordinal).padStart(3, '0')}-${action.type}`,
   );
-  return { status, observation, guard, screenshot: shot.path, before, after };
+  return {
+    status,
+    observation,
+    guard,
+    screenshot: shot.path,
+    before,
+    after,
+    target_label: targetLabel,
+    typed_value: typedValue,
+  };
+}
+
+function semanticActionName(action: AgentAction, descriptor: MarkDescriptor | undefined): string {
+  if (action.type === 'type' || action.type === 'select') return 'fill_form';
+  if (action.type === 'click' && isConstructiveLabel(descriptor?.name ?? '').matched) {
+    return 'submit_form';
+  }
+  return 'click_menu';
 }
 
 function guardAction(action: AgentAction, descriptor: MarkDescriptor | undefined, job: Job): GuardDecision {
@@ -105,19 +135,29 @@ function guardAction(action: AgentAction, descriptor: MarkDescriptor | undefined
       environment: job.profile.environment,
       allowSafeDemo: Boolean(job.profile.allow_safe_demo),
       allowedActions: parseAllowedActions(job.session.allowed_actions_json),
-    });
+    }, semanticActionName(action, descriptor));
   }
   return { allowed: true };
 }
 
-async function perform(page: Page, action: AgentAction): Promise<void> {
+async function perform(
+  page: Page,
+  action: AgentAction,
+  descriptor?: MarkDescriptor,
+): Promise<{ typedValue?: string }> {
+  let typedValue: string | undefined;
   switch (action.type) {
     case 'click':
       await page.locator(`[data-smoke-mark="${action.mark}"]`).click({ timeout: 10_000 });
       break;
     case 'type': {
       const target = page.locator(`[data-smoke-mark="${action.mark}"]`);
-      await target.fill(action.text, { timeout: 10_000 });
+      typedValue = applyMarker(action.text, {
+        type: descriptor?.type,
+        name: descriptor?.name,
+        tag: descriptor?.tag,
+      });
+      await target.fill(typedValue, { timeout: 10_000 });
       if (action.submit) await target.press('Enter');
       break;
     }
@@ -133,6 +173,7 @@ async function perform(page: Page, action: AgentAction): Promise<void> {
       break;
     case 'navigate':
       await page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: 25_000 });
+      await page.waitForLoadState('domcontentloaded', { timeout: 8_000 }).catch(() => {});
       break;
     case 'wait':
       await page.waitForTimeout(Math.max(0, Math.min(10_000, action.ms)));
@@ -142,12 +183,18 @@ async function perform(page: Page, action: AgentAction): Promise<void> {
     case 'ask_operator':
       break;
   }
-  await page.waitForLoadState('domcontentloaded', { timeout: 8_000 }).catch(() => {});
-  await page.waitForTimeout(250);
+  if (action.type !== 'wait' && action.type !== 'done' && action.type !== 'blocked' && action.type !== 'ask_operator') {
+    await waitForSettle(page);
+  }
+  return { typedValue };
 }
 
-function describeAction(action: AgentAction): string {
-  if ('mark' in action) return `${action.type} on mark ${action.mark}`;
+function describeAction(action: AgentAction, label: string): string {
+  if ('mark' in action) {
+    return label
+      ? `${action.type} "${label}" (mark ${action.mark})`
+      : `${action.type} on mark ${action.mark}`;
+  }
   if (action.type === 'navigate') return `navigate to ${action.url}`;
   return action.type;
 }

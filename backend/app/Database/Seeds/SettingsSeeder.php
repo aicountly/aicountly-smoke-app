@@ -48,6 +48,12 @@ class SettingsSeeder extends Seeder
                 'is_secret'   => false,
             ],
             [
+                'key'         => 'brain.data_providers',
+                'value_json'  => json_encode(['perplexity', 'openai']),
+                'description' => 'Ordered providers for synthetic test-data generation (first success wins).',
+                'is_secret'   => false,
+            ],
+            [
                 'key'         => 'search.provider',
                 'value_json'  => json_encode('perplexity'),
                 'description' => 'Configured market-research search provider.',

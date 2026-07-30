@@ -68,11 +68,11 @@ class SessionPlanner
     {
         return <<<'PROMPT'
 You are an internal AI session planner for AICOUNTLY's product intelligence
-portal. The smoke portal is observer-first. File downloads/exports are allowed
-only when listed in allowed_actions and never on production_readonly or
-production_restricted. Synthetic fixture uploads/imports require sandbox,
-gh_staging or production_full_access, profile allow_safe_demo, explicit owner
-intent, destructive_allowed, and explicit upload/import allowed_actions.
+portal. Observer-only tiers (production_readonly, production_restricted) never
+write. On sandbox, gh_staging or production_full_access with profile
+allow_safe_demo=true, plan for synthetic CREATE flows: fill forms, save/submit,
+and upload/import fixtures. Irreversible controls (delete, approve, pay, void,
+efile, send) remain permanently blocked in the worker regardless of the plan.
 
 Given a master prompt and a target app context, decompose the work into a list
 of independent observation sessions, one per main menu / module. If a single
@@ -99,21 +99,20 @@ valid JSON object that conforms exactly to this schema:
   ]
 }
 
-allowed_actions MUST be drawn from this safe vocabulary:
+allowed_actions MUST be drawn from this vocabulary:
   click_menu, click_submenu, click_tab, open_filter, change_filter,
   open_dropdown, open_modal_readonly, scroll, screenshot, capture_console,
-  capture_network, hover
+  capture_network, hover,
+  fill_form, submit_form, create_record,
   download_file, export_file, upload_file, import_file, compare_file
 
-NEVER include: submit_form, save, delete, post, approve, reject, finalize,
-generate_invoice, file_return, send, sync, reconcile, reset.
+On write-enabled profiles (full-access + allow_safe_demo), set
+destructive_allowed=true and include fill_form, submit_form, create_record on
+module sessions so the vision agent can create one synthetic SMOKE- record per
+module. Never plan delete/approve/pay/void/efile actions.
 
-destructive_allowed MUST be false unless the user explicitly says
-"ALLOW DESTRUCTIVE" in their prompt AND environment is sandbox, gh_staging or
-production_full_access.
-
-Include one "File I/O & exports" session. In safe demo environments it may use
-upload_file, import_file, download_file, export_file, compare_file. Otherwise
+Include one "File I/O & exports" session. In write-enabled environments it may
+use upload_file, import_file, download_file, export_file, compare_file. Otherwise
 use download_file and export_file for presence/export observation only.
 
 Output ONLY the JSON object -- no prose, no markdown fences.
@@ -153,9 +152,10 @@ EOT;
         $plan['environment']  = (string) ($plan['environment']  ?? $environment);
         $plan['rationale']    = (string) ($plan['rationale']    ?? '');
         $sessions = [];
+        // Write-enabled when the tier allows full access and the profile opted into safe demo.
+        // Irreversible labels remain permanently blocked in the worker guard.
         $mayEnableDestructive = Environments::allowsFullAccess($environment)
-            && ! empty($profile['allow_safe_demo'])
-            && stripos($prompt, 'ALLOW DESTRUCTIVE') !== false;
+            && ! empty($profile['allow_safe_demo']);
         $i = 1;
         foreach ((array) ($plan['sessions'] ?? []) as $s) {
             if (! is_array($s)) {
@@ -168,7 +168,7 @@ EOT;
                 'description'         => (string) ($s['description'] ?? ''),
                 'scope'               => is_array($s['scope'] ?? null) ? $s['scope'] : ['menus' => [], 'screens' => []],
                 'allowed_actions'     => $this->sanitizeActions($s['allowed_actions'] ?? null, $mayEnableDestructive),
-                'destructive_allowed' => $mayEnableDestructive && ! empty($s['destructive_allowed']),
+                'destructive_allowed' => $mayEnableDestructive && (($s['destructive_allowed'] ?? true) !== false),
                 'expected_screens'    => (int) ($s['expected_screens'] ?? 5),
             ];
             $sessions[] = $session;
@@ -209,12 +209,21 @@ EOT;
             'click_menu', 'click_submenu', 'click_tab', 'open_filter', 'change_filter',
             'open_dropdown', 'open_modal_readonly', 'scroll', 'screenshot',
             'capture_console', 'capture_network', 'hover',
+            'fill_form', 'submit_form', 'create_record',
             'download_file', 'export_file', 'upload_file', 'import_file', 'compare_file',
         ];
         $set = is_array($input) ? array_values(array_unique(array_filter($input, 'is_string'))) : [];
         $set = array_values(array_intersect($set, $allowed));
         if (! $mayEnableDestructive) {
-            $set = array_values(array_diff($set, ['upload_file', 'import_file']));
+            $set = array_values(array_diff($set, [
+                'upload_file', 'import_file', 'fill_form', 'submit_form', 'create_record',
+            ]));
+        } elseif (array_intersect($set, ['click_menu', 'click_submenu', 'screenshot']) !== []) {
+            foreach (['fill_form', 'submit_form', 'create_record'] as $writeAction) {
+                if (! in_array($writeAction, $set, true)) {
+                    $set[] = $writeAction;
+                }
+            }
         }
         if (array_intersect($set, ['download_file', 'export_file']) !== []
             && ! in_array('compare_file', $set, true)) {
@@ -225,15 +234,21 @@ EOT;
 
     private function defaultSessions(string $product, bool $mayEnableDestructive): array
     {
+        $navActions = ['click_menu', 'click_submenu', 'screenshot', 'scroll'];
+        $reportActions = ['click_menu', 'open_filter', 'change_filter', 'screenshot'];
+        if ($mayEnableDestructive) {
+            array_push($navActions, 'fill_form', 'submit_form', 'create_record');
+            array_push($reportActions, 'fill_form', 'submit_form', 'create_record');
+        }
         $fileActions = ['click_menu', 'click_submenu', 'download_file', 'export_file', 'compare_file', 'screenshot'];
         if ($mayEnableDestructive) {
             array_splice($fileActions, 4, 0, ['upload_file', 'import_file']);
         }
         return [
             ['ordinal' => 1, 'name' => 'Login + Dashboard',         'menu_path' => '/',          'description' => 'Land on dashboard, capture default view, observe top-level KPIs and shortcuts.', 'scope' => [], 'allowed_actions' => ['screenshot', 'scroll', 'capture_console'], 'destructive_allowed' => false, 'expected_screens' => 4],
-            ['ordinal' => 2, 'name' => 'Primary Navigation Sweep',  'menu_path' => '/menu/*',    'description' => 'Walk every main menu and submenu, capture screenshots, list visible options.',     'scope' => [], 'allowed_actions' => ['click_menu', 'click_submenu', 'screenshot', 'scroll'], 'destructive_allowed' => false, 'expected_screens' => 12],
-            ['ordinal' => 3, 'name' => 'Reports & Filters',         'menu_path' => '/reports/*', 'description' => 'Open each report screen, observe filters, exports, print/download options.',      'scope' => [], 'allowed_actions' => ['click_menu', 'open_filter', 'change_filter', 'screenshot'], 'destructive_allowed' => false, 'expected_screens' => 8],
-            ['ordinal' => 4, 'name' => 'Settings & Configuration',  'menu_path' => '/settings/*','description' => 'Read-only walk through settings/configuration screens.',                            'scope' => [], 'allowed_actions' => ['click_menu', 'click_submenu', 'screenshot'], 'destructive_allowed' => false, 'expected_screens' => 6],
+            ['ordinal' => 2, 'name' => 'Primary Navigation Sweep',  'menu_path' => '/menu/*',    'description' => 'Walk every main menu and submenu; create one synthetic SMOKE- record per module when forms exist.', 'scope' => [], 'allowed_actions' => $navActions, 'destructive_allowed' => $mayEnableDestructive, 'expected_screens' => 12],
+            ['ordinal' => 3, 'name' => 'Reports & Filters',         'menu_path' => '/reports/*', 'description' => 'Open each report screen, observe filters, exports, and report standards against synthetic data.', 'scope' => [], 'allowed_actions' => $reportActions, 'destructive_allowed' => $mayEnableDestructive, 'expected_screens' => 8],
+            ['ordinal' => 4, 'name' => 'Settings & Configuration',  'menu_path' => '/settings/*','description' => 'Walk through settings/configuration screens; create synthetic config only when safe.', 'scope' => [], 'allowed_actions' => $navActions, 'destructive_allowed' => $mayEnableDestructive, 'expected_screens' => 6],
             ['ordinal' => 5, 'name' => 'File I/O & exports',         'menu_path' => '/menu/*',    'description' => "Detect upload/import/download/export controls and test approved synthetic fixtures. Product: {$product}.", 'scope' => [], 'allowed_actions' => $fileActions, 'destructive_allowed' => $mayEnableDestructive, 'expected_screens' => 6],
         ];
     }

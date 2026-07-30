@@ -1,12 +1,13 @@
 import fs from 'node:fs/promises';
 import type { Page } from 'playwright';
 import type { Job } from '../backend.js';
-import { invokeBrain } from '../brain/ensemble.js';
+import { BrainUnavailableError, invokeBrain } from '../brain/ensemble.js';
 import { config } from '../config.js';
+import { requestFormValues } from '../data/syntheticData.js';
 import { askOrRecallDecision, type DecisionOption } from '../nav/askDecision.js';
 import { executeAction, type AgentAction, type AgentStepRecord } from './actions.js';
-import { markInteractive } from './marks.js';
-import { captureViewportJpeg, signature, signatureKey } from './perceive.js';
+import { markInteractive, type MarkDescriptor } from './marks.js';
+import { captureViewportJpeg, signature, signatureKey, type PageSignature } from './perceive.js';
 
 export type AgentLoopResult = {
   status: 'done' | 'blocked' | 'budget' | 'operator';
@@ -25,8 +26,21 @@ type ModelDecision = {
 
 const SYSTEM_PROMPT = `You are a visual smoke-testing agent operating a signed-in web app.
 Use only numbered Set-of-Marks controls supplied in the prompt. Never invent selectors or marks.
-Explore the requested session scope, inspect meaningful screens, and stop when the goal is covered.
-Respect safety refusals and choose another route. Return JSON only:
+
+Creation mode (required for a successful run):
+- In every module that supports creating records, attempt ONE end-to-end synthetic create:
+  open the create/add form, fill every required field (prefer suggested_values when present),
+  save/submit, then verify the new record appears in the list before moving on.
+- All free-text values you type MUST begin with "SMOKE-" (emails may use a smoke. local-part).
+- Never fill credential, OTP, captcha, password, GSTIN, PAN, Aadhaar, bank account, IFSC or CIN fields.
+- Never click irreversible controls (delete, remove, approve, reject, pay, refund, void, transfer,
+  send, sign out, efile, close period, finalize). If the only path forward is irreversible,
+  choose another route or return blocked.
+- Treat safety-guard refusals as expected and route around them — do not retry the same refused control.
+
+Explore the requested session scope, create synthetic records where possible, inspect meaningful
+screens (including reports fed by that data), and stop when the goal is covered.
+Return JSON only:
 {"observation":"","reasoning":"","action":{"type":"click","mark":1},"goal_progress":"","blockers":[]}
 Allowed action types: click, type, select, press, scroll, navigate, wait, done, blocked, ask_operator.`;
 
@@ -37,6 +51,7 @@ export async function runAgentLoop(input: {
   budget: number;
   screenshotsDir: string;
   onStep?: (step: AgentStepRecord) => Promise<void>;
+  onLoopWarning?: (message: string) => Promise<void>;
 }): Promise<AgentLoopResult> {
   const steps: AgentStepRecord[] = [];
   const recentTriples: string[] = [];
@@ -44,6 +59,7 @@ export async function runAgentLoop(input: {
   let unchangedCount = 0;
   let stuckWarnings = 0;
   let feedback = '';
+  const suggestedCache = new Map<string, Record<string, string>>();
   // Retention only thins stored screenshots; it must not cap how many actions the
   // agent may take before the session's own budget is spent.
   const budget = Math.max(1, input.budget);
@@ -56,21 +72,30 @@ export async function runAgentLoop(input: {
       `agent-decision-${String(ordinal).padStart(3, '0')}`,
     );
     const current = await signature(input.page);
+    const suggestedValues = await loadSuggestedValues({
+      page: input.page,
+      job: input.job,
+      marks,
+      current,
+      cache: suggestedCache,
+    });
     const history = steps.slice(-6).map((step) => ({
       action: step.action,
       outcome: step.outcome,
       observation: step.outcome_observation,
       url: step.signature_after.url,
+      target: step.target_label,
     }));
     const prompt = JSON.stringify({
       goal: input.goal,
       current: { url: current.url, title: current.title },
       elements: marks,
+      suggested_values: Object.keys(suggestedValues).length ? suggestedValues : undefined,
       recent_actions: history,
       prior_feedback: feedback || undefined,
       budget: { step: ordinal, maximum: budget },
       stuck_warning: stuckWarnings > 0
-        ? 'The page/action pattern is repeating. Choose a materially different action or return blocked.'
+        ? 'The page/action pattern is repeating without screen change. Choose a materially different action or return blocked.'
         : undefined,
     });
     let response: Awaited<ReturnType<typeof invokeBrain>>;
@@ -112,6 +137,8 @@ export async function runAgentLoop(input: {
       outcome: outcome.status,
       outcome_observation: outcome.observation,
       guard: outcome.guard,
+      target_label: outcome.target_label,
+      typed_value: outcome.typed_value,
       signature_before: outcome.before,
       signature_after: outcome.after,
       signature_changed: changed,
@@ -121,18 +148,30 @@ export async function runAgentLoop(input: {
     await input.onStep?.(step);
     feedback = outcome.observation;
 
-    const triple = actionTriple(decision.action, outcome.before.url);
-    recentTriples.push(triple);
-    if (recentTriples.length > 8) recentTriples.shift();
-    const tripleRepeats = recentTriples.filter((value) => value === triple).length >= 3;
-    unchangedCount = signatureKey(priorSignature) === signatureKey(outcome.after) ? unchangedCount + 1 : 0;
-    priorSignature = outcome.after;
-    if (tripleRepeats || unchangedCount >= 4) {
+    const loop = evaluateLoopDetection({
+      action: decision.action,
+      before: outcome.before,
+      after: outcome.after,
+      recentTriples,
+      unchangedCount,
+      priorSignature,
+    });
+    recentTriples.splice(0, recentTriples.length, ...loop.recentTriples);
+    unchangedCount = loop.unchangedCount;
+    priorSignature = loop.priorSignature;
+    if (loop.warned) {
       stuckWarnings += 1;
-      unchangedCount = 0;
       feedback += ' Loop detection fired; take a different route.';
-      if (stuckWarnings >= 2) {
-        return { status: 'blocked', reason: 'Repeated actions or unchanged page after two warnings.', steps, screenCount: steps.length };
+      await input.onLoopWarning?.(
+        `Loop detection warning ${stuckWarnings}/3: stalled action pattern or unchanged page.`,
+      );
+      if (stuckWarnings >= 3) {
+        return {
+          status: 'blocked',
+          reason: 'Repeated actions or unchanged page after three warnings.',
+          steps,
+          screenCount: steps.length,
+        };
       }
     }
 
@@ -151,6 +190,83 @@ export async function runAgentLoop(input: {
     }
   }
   return { status: 'budget', reason: `Action budget of ${budget} exhausted.`, steps, screenCount: steps.length };
+}
+
+/** Exported for unit tests — pure loop-detection state update. */
+export function evaluateLoopDetection(input: {
+  action: AgentAction;
+  before: PageSignature;
+  after: PageSignature;
+  recentTriples: string[];
+  unchangedCount: number;
+  priorSignature: PageSignature;
+}): {
+  recentTriples: string[];
+  unchangedCount: number;
+  priorSignature: PageSignature;
+  warned: boolean;
+} {
+  const changed = signatureKey(input.before) !== signatureKey(input.after);
+  const recentTriples = [...input.recentTriples];
+  let unchangedCount = signatureKey(input.priorSignature) === signatureKey(input.after)
+    ? input.unchangedCount + 1
+    : 0;
+
+  if (changed) {
+    // Progress: clear stalled-action history.
+    recentTriples.length = 0;
+  } else {
+    const triple = actionTriple(input.action, input.before);
+    recentTriples.push(triple);
+    if (recentTriples.length > 12) recentTriples.shift();
+  }
+
+  const tripleRepeats = !changed
+    && recentTriples.filter((value) => value === actionTriple(input.action, input.before)).length >= 5;
+  const warned = tripleRepeats || unchangedCount >= 6;
+  if (warned) unchangedCount = 0;
+
+  return {
+    recentTriples,
+    unchangedCount,
+    priorSignature: input.after,
+    warned,
+  };
+}
+
+async function loadSuggestedValues(input: {
+  page: Page;
+  job: Job;
+  marks: MarkDescriptor[];
+  current: PageSignature;
+  cache: Map<string, Record<string, string>>;
+}): Promise<Record<string, string>> {
+  const emptyInputs = input.marks.filter((mark) => {
+    const tag = mark.tag.toLowerCase();
+    if (tag !== 'input' && tag !== 'textarea') return false;
+    if (mark.disabled) return false;
+    const type = mark.type.toLowerCase();
+    if (['hidden', 'password', 'file', 'submit', 'button', 'checkbox', 'radio'].includes(type)) return false;
+    return !String(mark.value || '').trim();
+  });
+  if (emptyInputs.length < 3) return {};
+  const cacheKey = `${signatureKey(input.current)}|${emptyInputs.map((m) => m.name).join('|')}`;
+  const cached = input.cache.get(cacheKey);
+  if (cached) return cached;
+  try {
+    const result = await requestFormValues({
+      marks: input.marks,
+      product: input.job.run.product_name,
+      environment: input.job.profile.environment,
+      sessionName: input.job.session.name,
+      url: input.current.url,
+    });
+    input.cache.set(cacheKey, result.fields);
+    return result.fields;
+  } catch (error) {
+    if (error instanceof BrainUnavailableError) throw error;
+    return {};
+  }
 }
 
 function parseDecision(value: unknown): ModelDecision {
@@ -198,8 +314,8 @@ function positiveMark(value: unknown): number {
   return mark;
 }
 
-function actionTriple(action: AgentAction, url: string): string {
-  return `${action.type}|${'mark' in action ? action.mark : ''}|${url}`;
+export function actionTriple(action: AgentAction, sig: PageSignature): string {
+  return `${action.type}|${'mark' in action ? action.mark : ''}|${signatureKey(sig)}`;
 }
 
 async function escalateToOperator(

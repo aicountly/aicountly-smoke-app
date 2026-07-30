@@ -12,6 +12,7 @@ import {
 import type { GuardContext, GuardDecision } from '../utils/safeActionGuard.js';
 import { compareArtifacts, inspectExportArtifact } from './compareArtifacts.js';
 import { downloadArtifact } from './downloadHelper.js';
+import { requestDataset } from '../data/syntheticData.js';
 import { materializeFixture, scenariosForProduct } from './fixtureFactory.js';
 import { reviewFileQuality } from './fileQualityBrain.js';
 import { BrainUnavailableError } from '../brain/ensemble.js';
@@ -65,12 +66,39 @@ export async function runFileIoScenarios(input: {
       continue;
     }
 
+    let datasetProvider: string | undefined;
+    let datasetMeta: unknown;
+    let dataset;
+    if (scenario.kind !== 'export') {
+      try {
+        const generated = await requestDataset({
+          scenario,
+          product: job.run.product_name,
+          environment: job.run.environment,
+        });
+        dataset = generated.dataset;
+        datasetProvider = generated.provider;
+        datasetMeta = generated.dataset;
+      } catch (error) {
+        if (error instanceof BrainUnavailableError) throw error;
+        await appendLog({
+          run_id: job.run.id,
+          session_id: job.session.id,
+          job_id: job.job_id,
+          level: 'warn',
+          message: `File I/O ${scenario.key}: synthetic dataset request failed — using static fixture`,
+          context: { error: error instanceof Error ? error.message : String(error) },
+        }).catch(() => {});
+      }
+    }
     const fixture = scenario.kind === 'export'
       ? undefined
-      : materializeFixture(config.repoRoot, reportsDir, scenario);
+      : materializeFixture(config.repoRoot, reportsDir, scenario, dataset);
     let uploadOk = false;
     let downloadOk = false;
-    const evidence: Record<string, unknown> = {};
+    const evidence: Record<string, unknown> = {
+      ...(datasetProvider ? { dataset_provider: datasetProvider, dataset: datasetMeta } : {}),
+    };
 
     if (scenario.kind === 'upload' || scenario.kind === 'import' || scenario.kind === 'round_trip') {
       if (!fixture) throw new Error(`Scenario ${scenario.key} requires a fixture.`);

@@ -65,6 +65,11 @@ class BrainEnsemble
             return $this->invokeFastPlan($systemPrompt, $userPrompt, $contextOptions);
         }
 
+        // Synthetic form/file datasets: Perplexity first, OpenAI fallback. Sequential.
+        if ($task === 'synthetic_data') {
+            return $this->invokeDataProviders($systemPrompt, $userPrompt, $contextOptions);
+        }
+
         $parallel = $this->parallelMembers();
         $parallelResults = $this->runMembers($parallel, $systemPrompt, $userPrompt, $contextOptions);
 
@@ -168,6 +173,117 @@ class BrainEnsemble
             && isset($output['sessions'])
             && is_array($output['sessions'])
             && $output['sessions'] !== [];
+    }
+
+    /**
+     * Sequential synthetic-data path: Perplexity then OpenAI (configurable).
+     * First valid JSON payload wins; one repair attempt per provider.
+     *
+     * @param array<string,mixed> $contextOptions
+     * @return array<string,mixed>
+     */
+    private function invokeDataProviders(string $systemPrompt, string $userPrompt, array $contextOptions): array
+    {
+        $contextOptions['timeout'] = min((int) ($contextOptions['timeout'] ?? 60), 45);
+        $members = $this->resolveMembers(
+            $this->settings->getStringList('brain.data_providers', ['perplexity', 'openai']),
+        );
+        $parallelResults = [];
+        $winner = null;
+        $failures = [];
+
+        foreach ($members as $member) {
+            if ($member instanceof DeterministicAdapter) {
+                continue;
+            }
+            try {
+                $result = $member->complete($systemPrompt, $userPrompt, $contextOptions);
+                if (! $this->looksLikeSyntheticData($result['output'] ?? null)) {
+                    $repair = $member->complete(
+                        $systemPrompt,
+                        $userPrompt . "\n\nYour previous response was malformed. Return the required JSON object only.",
+                        $contextOptions,
+                    );
+                    if (! $this->looksLikeSyntheticData($repair['output'] ?? null)) {
+                        throw new BrainUnavailableException(
+                            $member->name(),
+                            0,
+                            'Provider returned malformed synthetic_data JSON after one repair attempt.',
+                        );
+                    }
+                    $result = $repair;
+                }
+                $parallelResults[$member->name()] = $result;
+                $winner = $result;
+                break;
+            } catch (Throwable $e) {
+                $parallelResults[$member->name()] = [
+                    'provider' => $member->name(),
+                    'error'    => $e->getMessage(),
+                    'output'   => null,
+                ];
+                $failures[] = $member->name() . ': ' . $e->getMessage();
+            }
+        }
+
+        if ($winner === null) {
+            if ($failures === []) {
+                throw new BrainUnavailableException('none', 0, 'No configured synthetic-data provider.');
+            }
+            throw new BrainUnavailableException(
+                'synthetic_data',
+                0,
+                'All configured data providers failed: ' . implode('; ', $failures),
+            );
+        }
+
+        return [
+            'task'       => 'synthetic_data',
+            'final'      => $winner['output'] ?? $winner,
+            'arbiter'    => $winner['provider'] ?? 'unknown',
+            'parallel'   => $parallelResults,
+            'context'    => $contextOptions + ['data_mode' => 'sequential'],
+            'created_at' => date(DATE_ATOM),
+        ];
+    }
+
+    /** @param mixed $output */
+    private function looksLikeSyntheticData($output): bool
+    {
+        if (! is_array($output)) {
+            return false;
+        }
+        $hasFields = false;
+        if (isset($output['fields']) && is_array($output['fields'])) {
+            foreach ($output['fields'] as $value) {
+                if (is_scalar($value)) {
+                    $hasFields = true;
+                    break;
+                }
+            }
+        } else {
+            foreach ($output as $key => $value) {
+                if (in_array($key, ['dataset', 'notes', 'fields'], true)) {
+                    continue;
+                }
+                if (is_scalar($value)) {
+                    $hasFields = true;
+                    break;
+                }
+            }
+        }
+
+        $hasDataset = false;
+        $dataset = is_array($output['dataset'] ?? null) ? $output['dataset'] : null;
+        if ($dataset !== null
+            && is_array($dataset['columns'] ?? null)
+            && $dataset['columns'] !== []
+            && is_array($dataset['rows'] ?? null)
+            && $dataset['rows'] !== []) {
+            $hasDataset = true;
+        }
+
+        return $hasFields || $hasDataset;
     }
 
     /** @param mixed $output */
