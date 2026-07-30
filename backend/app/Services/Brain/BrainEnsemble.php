@@ -367,8 +367,8 @@ class BrainEnsemble
     }
 
     /**
-     * Vision uses one provider to keep per-step latency bounded. Exactly one
-     * repair request is permitted when the provider returns malformed JSON.
+     * Vision providers are tried in configured order. Exactly one repair
+     * request per provider is permitted when it returns malformed JSON.
      *
      * @param array<int,array{mime_type?:string,data:string}> $images
      * @param array<string,mixed> $context
@@ -384,17 +384,6 @@ class BrainEnsemble
         $members = $this->resolveMembers(
             $this->settings->getStringList('brain.vision_providers', ['gemini', 'openai']),
         );
-        $member = null;
-        foreach ($members as $candidate) {
-            if ($candidate instanceof GeminiAdapter || $candidate instanceof OpenAIAdapter) {
-                $member = $candidate;
-                break;
-            }
-        }
-        if ($member === null) {
-            throw new BrainUnavailableException('none', 0, 'No configured vision-capable provider.');
-        }
-
         $options = [
             'expect_json' => true,
             'temperature' => $context['temperature'] ?? 0.1,
@@ -402,37 +391,59 @@ class BrainEnsemble
             'images' => $images,
             'context' => $context,
         ];
-        try {
-            $result = $member->complete($systemPrompt, $userPrompt, $options);
-            if (! $this->looksLikeVisionDecision($result['output'] ?? null)) {
-                $repair = $member->complete(
-                    $systemPrompt,
-                    $userPrompt . "\n\nYour previous response was malformed. Return the required JSON object only.",
-                    $options,
-                );
-                if (! $this->looksLikeVisionDecision($repair['output'] ?? null)) {
-                    throw new BrainUnavailableException(
-                        $member->name(),
-                        0,
-                        'Provider returned malformed JSON after one repair attempt.',
-                    );
-                }
-                $result = $repair;
+
+        $failures = [];
+        $lastError = null;
+        foreach ($members as $member) {
+            if (! ($member instanceof GeminiAdapter || $member instanceof OpenAIAdapter)) {
+                continue;
             }
-        } catch (BrainUnavailableException $error) {
-            throw $error;
-        } catch (Throwable $error) {
-            throw BrainUnavailableException::fromThrowable($member->name(), $error);
+
+            try {
+                $result = $member->complete($systemPrompt, $userPrompt, $options);
+                if (! $this->looksLikeVisionDecision($result['output'] ?? null)) {
+                    $repair = $member->complete(
+                        $systemPrompt,
+                        $userPrompt . "\n\nYour previous response was malformed. Return the required JSON object only.",
+                        $options,
+                    );
+                    if (! $this->looksLikeVisionDecision($repair['output'] ?? null)) {
+                        throw new BrainUnavailableException(
+                            $member->name(),
+                            0,
+                            'Provider returned malformed JSON after one repair attempt.',
+                        );
+                    }
+                    $result = $repair;
+                }
+            } catch (Throwable $error) {
+                $lastError = $error instanceof BrainUnavailableException
+                    ? $error
+                    : BrainUnavailableException::fromThrowable($member->name(), $error);
+                $failures[] = $member->name() . ': ' . $lastError->responseSnippet;
+                continue;
+            }
+
+            return [
+                'task' => $task,
+                'final' => $result['output'],
+                'arbiter' => $member->name(),
+                'parallel' => [$member->name() => $result],
+                'context' => $context,
+                'created_at' => date(DATE_ATOM),
+            ];
         }
 
-        return [
-            'task' => $task,
-            'final' => $result['output'],
-            'arbiter' => $member->name(),
-            'parallel' => [$member->name() => $result],
-            'context' => $context,
-            'created_at' => date(DATE_ATOM),
-        ];
+        if ($lastError === null) {
+            throw new BrainUnavailableException('none', 0, 'No configured vision-capable provider.');
+        }
+
+        throw new BrainUnavailableException(
+            $lastError->provider,
+            $lastError->httpStatus,
+            'All configured vision providers failed: ' . implode('; ', $failures),
+            $lastError,
+        );
     }
 
     /** @return array<int,array{name:string,configured:bool,vision_capable:bool,enabled_for_vision:bool}> */

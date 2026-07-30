@@ -21,7 +21,7 @@ class GeminiAdapter extends AbstractAdapter
     {
         $key   = (string) env('GEMINI_API_KEY', '');
         $base  = rtrim((string) env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'), '/');
-        $model = (string) ($options['model'] ?? env('GEMINI_MODEL', 'gemini-2.5-pro'));
+        $model = (string) ($options['model'] ?? env('GEMINI_MODEL', 'gemini-2.5-flash'));
 
         $url = $base . '/models/' . urlencode($model) . ':generateContent?key=' . urlencode($key);
 
