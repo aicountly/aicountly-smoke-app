@@ -3,25 +3,36 @@
  * element BEFORE invoking .click() to prevent destructive actions in observer
  * mode.
  *
- * Tokens split into:
- *   - constructive: save/submit/create/upload — allowed only on full-access
- *     tiers with allow_safe_demo + destructive_allowed
- *   - irreversible: delete/approve/pay/void/... — permanently denied on every
- *     tier, regardless of any opt-in flag
+ * On full-access tiers with allow_safe_demo + destructive_allowed, every
+ * restricted label is permitted (including delete/approve/pay). Observer tiers
+ * refuse the whole vocabulary. Narrow carve-outs:
+ *   - session-ending controls (sign out / logout) denied on every tier
+ *   - exact-match dismissal controls (cancel, close, …) allowed on every tier
+ *   - bare "add"/"create" are not restricted (opening a form writes nothing)
  */
 
 import { allowsFullAccess, isObserverOnlyEnvironment } from './environments.js';
 
+/** Labels used only for the submit_form action-name heuristic. */
 const CONSTRUCTIVE_TOKENS = [
-  'save', 'submit', 'add', 'create', 'upload', 'import',
+  'save', 'submit', 'upload', 'import',
   'apply', 'confirm', 'assign', 'activate', 'enable',
 ];
 
-const IRREVERSIBLE_TOKENS = [
+/**
+ * Single restricted vocabulary gated by tier. Bare add/create are intentionally
+ * omitted so observer sessions can still open create forms. Session-ending
+ * tokens are handled separately and stay denied on every tier.
+ */
+const RESTRICTED_TOKENS = [
+  // constructive writes
+  'save', 'submit', 'upload', 'import',
+  'apply', 'confirm', 'assign', 'activate', 'enable',
+  // irreversible / money / filing
   'delete', 'remove', 'approve', 'reject', 'post',
   'pay', 'payment', 'refund', 'void', 'transfer',
   'discard', 'archive', 'reset', 'overwrite', 'replace',
-  'deactivate', 'disable', 'send', 'sign out', 'sign-off',
+  'deactivate', 'disable', 'send',
   'e-sign', 'esign', 'reconcile', 'sync', 'finalize', 'finalise',
   'file return', 'efile', 'close period', 'post journal',
   'credit note', 'debit note', 'journal',
@@ -32,13 +43,20 @@ const IRREVERSIBLE_TOKENS = [
   'merge', 'split', 'cancel',
 ];
 
+/** Exact-match only — "Cancel Invoice" still goes through the restricted gate. */
+const DISMISSAL_LABELS = new Set([
+  'cancel', 'close', 'dismiss', 'back', 'no', 'not now',
+]);
+
+const SESSION_ENDING_REGEX = /\b(sign[\s-]?out|log[\s-]?out)\b/i;
+
 const CONSTRUCTIVE_REGEX = new RegExp(
   '\\b(' + CONSTRUCTIVE_TOKENS.map(escapeRe).join('|') + ')\\b',
   'i',
 );
 
-const IRREVERSIBLE_REGEX = new RegExp(
-  '\\b(' + IRREVERSIBLE_TOKENS.map(escapeRe).join('|') + ')\\b',
+const RESTRICTED_REGEX = new RegExp(
+  '\\b(' + RESTRICTED_TOKENS.map(escapeRe).join('|') + ')\\b',
   'i',
 );
 
@@ -110,13 +128,17 @@ export function evaluateFileActionContract(actions: FileAction[], ctx: GuardCont
   return { allowed: true };
 }
 
-export function isIrreversibleLabel(label: string | null | undefined): { matched: boolean; token?: string } {
-  if (!label) return { matched: false };
-  const m = IRREVERSIBLE_REGEX.exec(label);
-  if (m) return { matched: true, token: m[1].toLowerCase() };
-  return { matched: false };
+export function isSessionEndingLabel(label: string | null | undefined): boolean {
+  if (!label) return false;
+  return SESSION_ENDING_REGEX.test(label.trim());
 }
 
+export function isDismissalLabel(label: string | null | undefined): boolean {
+  if (!label) return false;
+  return DISMISSAL_LABELS.has(label.trim().toLowerCase());
+}
+
+/** Used by the agent to pick the submit_form action name for save/submit clicks. */
 export function isConstructiveLabel(label: string | null | undefined): { matched: boolean; token?: string } {
   if (!label) return { matched: false };
   const m = CONSTRUCTIVE_REGEX.exec(label);
@@ -124,11 +146,12 @@ export function isConstructiveLabel(label: string | null | undefined): { matched
   return { matched: false };
 }
 
-/** True when the label matches either constructive or irreversible vocabulary. */
 export function isRestrictedLabel(label: string | null | undefined): { matched: boolean; token?: string } {
-  const irreversible = isIrreversibleLabel(label);
-  if (irreversible.matched) return irreversible;
-  return isConstructiveLabel(label);
+  if (!label) return { matched: false };
+  if (isDismissalLabel(label)) return { matched: false };
+  const m = RESTRICTED_REGEX.exec(label);
+  if (m) return { matched: true, token: m[1].toLowerCase() };
+  return { matched: false };
 }
 
 function actionPermitted(action: string, allowedActions: string[] | undefined): boolean {
@@ -139,7 +162,7 @@ function actionPermitted(action: string, allowedActions: string[] | undefined): 
     return true;
   }
   // Typing into ordinary fields is no more privileged than clicking a menu;
-  // constructive labels are still gated separately below.
+  // restricted labels are still gated separately below for clicks.
   if (action === 'fill_form' && allowedActions.includes('click_menu')) {
     return true;
   }
@@ -151,49 +174,54 @@ export function evaluateClick(label: string | null, ctx: GuardContext, action = 
     return { allowed: false, reason: `allowed_actions does not include ${action}` };
   }
 
-  const irreversible = isIrreversibleLabel(label ?? '');
-  if (irreversible.matched) {
+  // Session-ending controls abort the run — refuse on every tier.
+  if (isSessionEndingLabel(label)) {
     return {
       allowed: false,
-      reason: 'irreversible control is permanently denied on every tier',
-      matchedToken: irreversible.token,
+      reason: 'session-ending control is denied on every tier',
+      matchedToken: 'sign out',
     };
   }
 
-  const constructive = isConstructiveLabel(label ?? '');
-  if (!constructive.matched) {
+  // Exact-match dismissal controls must always be available to clear modals.
+  if (isDismissalLabel(label)) {
+    return { allowed: true };
+  }
+
+  const restricted = isRestrictedLabel(label ?? '');
+  if (!restricted.matched) {
     return { allowed: true };
   }
 
   if (isObserverOnlyEnvironment(ctx.environment)) {
     return {
       allowed: false,
-      reason: 'production environment forbids constructive write labels',
-      matchedToken: constructive.token,
+      reason: 'production environment forbids destructive labels',
+      matchedToken: restricted.token,
     };
   }
   if (!allowsFullAccess(ctx.environment)) {
     return {
       allowed: false,
-      reason: 'constructive writes require sandbox, gh_staging or production_full_access',
-      matchedToken: constructive.token,
+      reason: 'restricted labels require sandbox, gh_staging or production_full_access',
+      matchedToken: restricted.token,
     };
   }
   if (!ctx.destructiveAllowed) {
     return {
       allowed: false,
       reason: 'session has destructive_allowed=false',
-      matchedToken: constructive.token,
+      matchedToken: restricted.token,
     };
   }
   if (!ctx.allowSafeDemo) {
     return {
       allowed: false,
       reason: 'profile.allow_safe_demo is false',
-      matchedToken: constructive.token,
+      matchedToken: restricted.token,
     };
   }
-  return { allowed: true };
+  return { allowed: true, matchedToken: restricted.token };
 }
 
 function escapeRe(s: string): string {
@@ -201,6 +229,4 @@ function escapeRe(s: string): string {
 }
 
 export const CONSTRUCTIVE_VOCABULARY = CONSTRUCTIVE_TOKENS.slice();
-export const IRREVERSIBLE_VOCABULARY = IRREVERSIBLE_TOKENS.slice();
-/** @deprecated Prefer CONSTRUCTIVE_VOCABULARY + IRREVERSIBLE_VOCABULARY. */
-export const RESTRICTED_VOCABULARY = [...CONSTRUCTIVE_TOKENS, ...IRREVERSIBLE_TOKENS];
+export const RESTRICTED_VOCABULARY = RESTRICTED_TOKENS.slice();

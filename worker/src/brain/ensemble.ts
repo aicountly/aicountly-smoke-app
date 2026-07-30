@@ -31,7 +31,8 @@ export async function invokeBrain(
     const r = await backend.post<{ data: { task: string; final: unknown; arbiter: string; parallel: unknown } }>(
       '/worker/brain/invoke',
       { task, system_prompt: systemPrompt, user_prompt: userPrompt, context, images },
-      { timeout: images.length ? 30_000 : undefined },
+      // Vision: 30s. Text (synthetic_data etc.): 50s — backend caps provider wait at 45s.
+      { timeout: images.length ? 30_000 : 50_000 },
     );
     return r.data.data;
   } catch (error) {

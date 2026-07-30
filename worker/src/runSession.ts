@@ -230,19 +230,28 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
         );
         const label = step.target_label ? `"${step.target_label}"` : step.action.type;
         const change = step.signature_changed ? 'screen changed' : 'screen unchanged';
-        const level = step.outcome === 'refused' || step.outcome === 'failed' ? 'warn' : 'info';
+        const restrictedWrite = step.outcome === 'executed'
+          && step.action.type === 'click'
+          && Boolean(step.guard.matchedToken);
+        const level = step.outcome === 'refused' || step.outcome === 'failed' || restrictedWrite
+          ? 'warn'
+          : 'info';
+        const writeNote = restrictedWrite
+          ? ` [restricted write: ${step.guard.matchedToken}]`
+          : '';
         await appendLog({
           run_id: job.run_id,
           session_id: job.session.id,
           job_id: job.job_id,
           level,
-          message: `Agent step ${step.ordinal}/${config.maxScreensPerSession}: ${step.action.type} ${label} -> ${step.outcome}, ${change} — ${step.observation || step.outcome_observation}`,
+          message: `Agent step ${step.ordinal}/${config.maxScreensPerSession}: ${step.action.type} ${label} -> ${step.outcome}, ${change}${writeNote} — ${step.observation || step.outcome_observation}`,
           context: {
             action: step.action,
             target_label: step.target_label,
             typed_value: step.typed_value,
             guard: step.guard,
             signature_changed: step.signature_changed,
+            restricted_write: restrictedWrite,
           },
         }).catch(() => {});
       },

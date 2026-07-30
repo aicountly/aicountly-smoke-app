@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { actionTriple, evaluateLoopDetection, parseAgentAction } from './agentLoop.js';
+import { actionTriple, evaluateLoopDetection, formIdentityKey, parseAgentAction } from './agentLoop.js';
+import type { MarkDescriptor } from './marks.js';
 import { signatureKey, type PageSignature } from './perceive.js';
 
 test('parses Set-of-Marks actions without selectors', () => {
@@ -50,6 +51,28 @@ test('repeated action that changes the screen is not a loop warning', () => {
     prior = next.priorSignature;
   }
   assert.equal(recentTriples.length, 0);
+});
+
+test('form identity key stays stable as empty fields shrink', () => {
+  const page: PageSignature = {
+    url: 'https://hrms.test/employees/new',
+    title: 'Add Employee',
+    markCount: 5,
+    domHash: 'before',
+    dialogCount: 0,
+  };
+  const marks = (values: string[]): MarkDescriptor[] => ([
+    { mark: 1, tag: 'input', role: '', name: 'First name', type: 'text', value: values[0] ?? '', checked: null, disabled: false, bbox: { x: 0, y: 0, width: 10, height: 10 } },
+    { mark: 2, tag: 'input', role: '', name: 'Last name', type: 'text', value: values[1] ?? '', checked: null, disabled: false, bbox: { x: 0, y: 0, width: 10, height: 10 } },
+    { mark: 3, tag: 'select', role: '', name: 'Department', type: '', value: values[2] ?? '', checked: null, disabled: false, bbox: { x: 0, y: 0, width: 10, height: 10 } },
+    { mark: 4, tag: 'button', role: 'button', name: 'Save', type: 'submit', value: '', checked: null, disabled: false, bbox: { x: 0, y: 0, width: 10, height: 10 } },
+  ]);
+  const empty = formIdentityKey(page, marks(['', '', '']));
+  const filled = formIdentityKey(
+    { ...page, domHash: 'after-typing' },
+    marks(['SMOKE-Ada', 'SMOKE-Lovelace', 'Engineering']),
+  );
+  assert.equal(empty, filled);
 });
 
 test('five identical stalled actions warn; fewer do not', () => {

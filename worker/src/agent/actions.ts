@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { Job } from '../backend.js';
 import { applyMarker } from '../data/syntheticMarker.js';
+import { isUnsafeToFill } from '../forms/fieldSynthesis.js';
 import { evaluateHostGuard } from '../utils/hostGuard.js';
 import {
   evaluateClick,
@@ -127,7 +128,34 @@ function guardAction(action: AgentAction, descriptor: MarkDescriptor | undefined
     });
     return host.ok ? { allowed: true } : { allowed: false, reason: host.message ?? 'host not allowed' };
   }
-  if (action.type === 'click' || action.type === 'type' || action.type === 'select'
+  if (action.type === 'type' || action.type === 'select') {
+    if (!descriptor) return { allowed: false, reason: `mark ${action.mark} is not present` };
+    const allowedActions = parseAllowedActions(job.session.allowed_actions_json);
+    if (allowedActions.length && !allowedActions.includes('fill_form')
+      && !allowedActions.includes('create_record')
+      && !allowedActions.includes('click_menu')) {
+      return { allowed: false, reason: 'allowed_actions does not include fill_form' };
+    }
+    // Typing never commits — gate on credential/statutory patterns, not the click vocabulary.
+    if (isUnsafeToFill({
+      tag: (descriptor.tag === 'select' || descriptor.tag === 'textarea' ? descriptor.tag : 'input'),
+      type: descriptor.type,
+      name: descriptor.name,
+      id: '',
+      placeholder: '',
+      ariaLabel: descriptor.name,
+      label: descriptor.name,
+      required: false,
+    })) {
+      return {
+        allowed: false,
+        reason: 'field is credential, OTP, or a statutory identifier and must not be filled',
+        matchedToken: descriptor.name,
+      };
+    }
+    return { allowed: true };
+  }
+  if (action.type === 'click'
     || (action.type === 'press' && action.key.toLowerCase() === 'enter')) {
     if ('mark' in action && !descriptor) return { allowed: false, reason: `mark ${action.mark} is not present` };
     return evaluateClick(descriptor?.name ?? action.type, {

@@ -33,16 +33,19 @@ Creation mode (required for a successful run):
   save/submit, then verify the new record appears in the list before moving on.
 - All free-text values you type MUST begin with "SMOKE-" (emails may use a smoke. local-part).
 - Never fill credential, OTP, captcha, password, GSTIN, PAN, Aadhaar, bank account, IFSC or CIN fields.
-- Never click irreversible controls (delete, remove, approve, reject, pay, refund, void, transfer,
-  send, sign out, efile, close period, finalize). If the only path forward is irreversible,
-  choose another route or return blocked.
+- Prefer not to click irreversible controls (delete, remove, approve, reject, pay, refund, void,
+  transfer, send, efile, close period, finalize). If you must use delete or approve, do so ONLY on
+  a record this session created itself (identifiable by the SMOKE- marker). Never sign out.
 - Treat safety-guard refusals as expected and route around them — do not retry the same refused control.
+- Bare Cancel / Close / Dismiss / Back may be used freely to clear modals and return from forms.
 
 Explore the requested session scope, create synthetic records where possible, inspect meaningful
 screens (including reports fed by that data), and stop when the goal is covered.
 Return JSON only:
 {"observation":"","reasoning":"","action":{"type":"click","mark":1},"goal_progress":"","blockers":[]}
 Allowed action types: click, type, select, press, scroll, navigate, wait, done, blocked, ask_operator.`;
+
+const SYNTHETIC_DATA_CALL_CAP = 8;
 
 export async function runAgentLoop(input: {
   page: Page;
@@ -60,6 +63,7 @@ export async function runAgentLoop(input: {
   let stuckWarnings = 0;
   let feedback = '';
   const suggestedCache = new Map<string, Record<string, string>>();
+  let syntheticDataCalls = 0;
   // Retention only thins stored screenshots; it must not cap how many actions the
   // agent may take before the session's own budget is spent.
   const budget = Math.max(1, input.budget);
@@ -78,6 +82,11 @@ export async function runAgentLoop(input: {
       marks,
       current,
       cache: suggestedCache,
+      callBudget: {
+        used: syntheticDataCalls,
+        maximum: SYNTHETIC_DATA_CALL_CAP,
+        consume: () => { syntheticDataCalls += 1; },
+      },
     });
     const history = steps.slice(-6).map((step) => ({
       action: step.action,
@@ -234,26 +243,50 @@ export function evaluateLoopDetection(input: {
   };
 }
 
+function isEmptyFillableMark(mark: MarkDescriptor): boolean {
+  const tag = mark.tag.toLowerCase();
+  if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') return false;
+  if (mark.disabled) return false;
+  const type = mark.type.toLowerCase();
+  if (['hidden', 'password', 'file', 'submit', 'button', 'checkbox', 'radio', 'image'].includes(type)) {
+    return false;
+  }
+  return !String(mark.value || '').trim();
+}
+
+/** Exported for unit tests — stable form identity for synthetic_data caching. */
+export function formIdentityKey(current: PageSignature, marks: MarkDescriptor[]): string {
+  const names = marks
+    .filter((mark) => {
+      const tag = mark.tag.toLowerCase();
+      if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') return false;
+      if (mark.disabled) return false;
+      const type = mark.type.toLowerCase();
+      return !['hidden', 'password', 'file', 'submit', 'button', 'checkbox', 'radio', 'image'].includes(type);
+    })
+    .map((mark) => mark.name || `${mark.tag}:${mark.type}`)
+    .sort();
+  // Form identity — URL + title + field names. Deliberately omits domHash so
+  // progressive filling of the same form reuses one synthetic_data response.
+  return `${current.url}|${current.title}|${names.join('|')}`;
+}
+
 async function loadSuggestedValues(input: {
   page: Page;
   job: Job;
   marks: MarkDescriptor[];
   current: PageSignature;
   cache: Map<string, Record<string, string>>;
+  callBudget: { used: number; maximum: number; consume: () => void };
 }): Promise<Record<string, string>> {
-  const emptyInputs = input.marks.filter((mark) => {
-    const tag = mark.tag.toLowerCase();
-    if (tag !== 'input' && tag !== 'textarea') return false;
-    if (mark.disabled) return false;
-    const type = mark.type.toLowerCase();
-    if (['hidden', 'password', 'file', 'submit', 'button', 'checkbox', 'radio'].includes(type)) return false;
-    return !String(mark.value || '').trim();
-  });
-  if (emptyInputs.length < 3) return {};
-  const cacheKey = `${signatureKey(input.current)}|${emptyInputs.map((m) => m.name).join('|')}`;
+  const emptyFields = input.marks.filter(isEmptyFillableMark);
+  if (emptyFields.length < 3) return {};
+  const cacheKey = formIdentityKey(input.current, input.marks);
   const cached = input.cache.get(cacheKey);
   if (cached) return cached;
+  if (input.callBudget.used >= input.callBudget.maximum) return {};
   try {
+    input.callBudget.consume();
     const result = await requestFormValues({
       marks: input.marks,
       product: input.job.run.product_name,
