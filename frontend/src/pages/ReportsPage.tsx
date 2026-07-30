@@ -9,8 +9,11 @@ import { ReportPrompts } from '@/components/ReportPrompts';
 import {
   asReportJson,
   extractPromptPack,
+  fetchMasterPrompt,
   openReportTab,
   reportViewPath,
+  scoreLabel,
+  UNSCORED_HINT,
 } from '@/lib/reports';
 import { collectFindings, facetCounts, severitySummaryTotal } from '@/lib/reportFindings';
 import { useFindingsView } from '@/lib/useFindingsView';
@@ -24,8 +27,9 @@ type Report = {
   run_code: string;
   run_id?: number | null;
   session_id?: number | null;
-  maturity_score: number;
-  ux_score: number;
+  /** Null until the report is scored; a run that observed no screens never is. */
+  maturity_score: number | string | null;
+  ux_score: number | string | null;
   created_at: string;
 };
 
@@ -104,7 +108,22 @@ export function ReportsPage() {
   const findingRows = useMemo(() => collectFindings(reportJson ?? null), [reportJson]);
   const findingCounts = useMemo(() => facetCounts(findingRows), [findingRows]);
   const sevTotal = useMemo(() => severitySummaryTotal(reportJson ?? null), [reportJson]);
-  const promptPack = extractPromptPack(reportJson ?? null);
+
+  // The server rebuilds old reports into the master-prompt format on demand; if
+  // that request fails for any reason, fall back to whatever this browser
+  // already has from the JSON payload rather than showing nothing.
+  const {
+    data: masterPrompt,
+    isLoading: masterPromptLoading,
+    isError: masterPromptError,
+  } = useQuery({
+    queryKey: ['report-prompt-pack', active],
+    queryFn: () => fetchMasterPrompt(active as number),
+    enabled: active != null,
+    retry: false,
+  });
+  const legacyPromptPack = extractPromptPack(reportJson ?? null);
+  const promptPack = masterPrompt ?? (masterPromptError ? legacyPromptPack : '');
   const hasPromptPack = promptPack.length > 0;
   const hasJson = reportJson != null;
 
@@ -117,7 +136,7 @@ export function ReportsPage() {
       setActionMsg('No prompt pack in this report.');
       return;
     }
-    downloadText(promptPack, 'text/markdown;charset=utf-8', `${reportSlug()}.cursor-prompts.md`);
+    downloadText(promptPack, 'text/markdown;charset=utf-8', `${reportSlug()}.master-cursor-prompt.md`);
     setActionMsg(null);
   }
 
@@ -178,8 +197,13 @@ export function ReportsPage() {
                 <div className="text-xs text-ink-500">{r.product_name} &middot; {r.environment}</div>
                 <div className="flex gap-2 mt-1 text-[11px]">
                   <span className="badge-neutral">{r.kind}</span>
-                  <span className="badge-brand">UX {Number(r.ux_score ?? 0).toFixed(0)}</span>
-                  <span className="badge-info">Maturity {Number(r.maturity_score ?? 0).toFixed(0)}</span>
+                  <span className="badge-brand">UX {scoreLabel(r.ux_score)}</span>
+                  <span
+                    className="badge-info"
+                    title={r.maturity_score == null ? UNSCORED_HINT : undefined}
+                  >
+                    Maturity {scoreLabel(r.maturity_score)}
+                  </span>
                 </div>
                 <div className="flex flex-wrap gap-2 mt-2" onClick={(e) => e.stopPropagation()}>
                   <Link
@@ -238,18 +262,18 @@ export function ReportsPage() {
                       type="button"
                       className="btn-secondary text-xs py-1 px-2"
                       onClick={handleDownloadPromptPack}
-                      disabled={jsonLoading || !hasPromptPack}
-                      title={hasPromptPack ? 'Download the Cursor prompt pack as Markdown' : 'No prompt pack available'}
+                      disabled={masterPromptLoading || !hasPromptPack}
+                      title={hasPromptPack ? 'Download the master Cursor prompt as Markdown' : 'No prompt pack available'}
                     >
-                      Download prompt pack
+                      Download master prompt
                     </button>
                     <CopyButton
                       text={promptPack}
-                      label="Copy all for Cursor"
-                      copiedLabel="Copied all"
+                      label="Copy master prompt"
+                      copiedLabel="Copied"
                       className="btn-secondary text-xs py-1 px-2"
-                      disabled={jsonLoading || !hasPromptPack}
-                      title={hasPromptPack ? 'Copy every prompt in this report' : 'No prompts available'}
+                      disabled={masterPromptLoading || !hasPromptPack}
+                      title={hasPromptPack ? 'Copy the master Cursor prompt for this report' : 'No prompts available'}
                     />
                     <button
                       type="button"
@@ -274,8 +298,13 @@ export function ReportsPage() {
                     {activeReport.kind ? (
                       <span className="badge-neutral">{activeReport.kind}</span>
                     ) : null}
-                    <span className="badge-brand">UX {Number(activeReport.ux_score ?? 0).toFixed(0)}</span>
-                    <span className="badge-info">Maturity {Number(activeReport.maturity_score ?? 0).toFixed(0)}</span>
+                    <span className="badge-brand">UX {scoreLabel(activeReport.ux_score)}</span>
+                    <span
+                      className="badge-info"
+                      title={activeReport.maturity_score == null ? UNSCORED_HINT : undefined}
+                    >
+                      Maturity {scoreLabel(activeReport.maturity_score)}
+                    </span>
                   </div>
                 )}
 

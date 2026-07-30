@@ -90,8 +90,10 @@ SQL)->getRowArray();
             ->get()
             ->getRowArray();
 
+        // Unscored reports stay out of the average: a run that observed nothing
+        // has no score, and counting it as zero drags the product down.
         $byProduct = $db->table('smoke_reports r')
-            ->select('run.product_name AS product_name, AVG(COALESCE(r.maturity_score,0)) AS maturity_avg, AVG(COALESCE(r.ux_score,0)) AS ux_avg, COUNT(*) AS reports', false)
+            ->select('run.product_name AS product_name, AVG(r.maturity_score) AS maturity_avg, AVG(r.ux_score) AS ux_avg, COUNT(*) AS reports', false)
             ->join('smoke_observation_runs run', 'run.id = r.run_id')
             ->where('r.kind', 'final')
             ->groupBy('run.product_name')

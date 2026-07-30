@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FeatureGap } from '../reviewer/featureGapEngine.js';
 import type { UxIssue } from '../reviewer/uxReviewEngine.js';
+import { assembleMasterPrompt } from './cursorHandoff.js';
 import {
   DEFAULT_REPO_RULES,
   resolveOwnership,
@@ -61,7 +62,13 @@ export function buildUxCursorPrompt(issue: UxIssue, context: CursorPromptContext
     ...sampleLines('Network', evidence.network_events ?? evidence.sample),
   ];
   const fileIo = issue.category === 'file_io';
-  const ownership = ownershipFor(context, urls);
+  const isErrors = issue.category === 'errors';
+  // A page can render cleanly while a failing request underneath it (a logo,
+  // an /api/manage proxy call) belongs to a different repository than the one
+  // that owns the page itself; ownership must follow the failing request, not
+  // just the screen it was observed on.
+  const failingRequestUrls = isErrors ? errorRequestUrls(evidence) : [];
+  const ownership = ownershipFor(context, [...urls, ...failingRequestUrls]);
 
   return [
     `# ${issue.title}`,
@@ -84,6 +91,9 @@ export function buildUxCursorPrompt(issue: UxIssue, context: CursorPromptContext
       ...taskLines(ownership, context, fileIo
         ? `fix the file upload/download/export fidelity failure. ${sentence(issue.recommendation)}`
         : sentence(issue.recommendation)),
+      ...(isErrors && ownership.groups.length > 1
+        ? ['Split the fix: the frontend repository should add a graceful fallback for the failing call (do not let it break the page); the backend/API repository that actually serves the failing request should fix or confirm the endpoint itself.']
+        : []),
       'Keep the implementation on the affected product surface; do not modify the smoke-testing application.',
     ]),
     section('Done when', fileIo ? [
@@ -155,36 +165,45 @@ export function buildFeatureGapCursorPrompt(gap: FeatureGap, context: CursorProm
   ].join('\n\n');
 }
 
+/**
+ * Assembles the session's master Cursor prompt: every finding's individual
+ * prompt (built via buildUxCursorPrompt / buildFeatureGapCursorPrompt when not
+ * already precomputed), wrapped in the verify-before-implement contract and
+ * trust grouping from cursorHandoff.ts.
+ *
+ * @param allInventoryLabels Full session inventory labels (independent of any
+ *   one finding's own narrow evidence sample), used to demote findings this
+ *   session's own UI already contradicts -- e.g. a company/FY selector or
+ *   search box the detector missed because it isn't a native `<select>` or
+ *   `input[type=search]`.
+ */
 export function buildCursorPromptPack(
   context: CursorPromptContext,
   uxIssues: UxIssue[],
   featureGaps: FeatureGap[],
+  allInventoryLabels: string[] = [],
 ): string {
-  const prompts = [
-    ...uxIssues.map((issue) => issue.developer_prompt || buildUxCursorPrompt(issue, context)),
-    ...featureGaps.map((gap) => gap.developer_prompt || buildFeatureGapCursorPrompt(gap, context)),
-  ];
   const ownership = ownershipFor(context, [
     ...uxIssues.flatMap((issue) => stringList(issue.evidence?.affected_urls ?? issue.evidence?.url)),
     ...featureGaps.flatMap((gap) => stringList(gap.evidence?.screens_checked)),
   ]);
-  const repos = ownership.groups.map((group) => group.repo);
-  return [
-    `# Cursor prompts: ${context.run_code} / ${context.session_name}`,
-    '',
-    ...(repos.length
-      ? [
-          `Owner repositories in this run: ${repos.join(', ')}.`,
-          'Each prompt names the repository that owns the change; do not apply changes outside the repository named in the prompt.',
-        ]
-      : [
-          'Owner repository was not resolved from the observed URLs.',
-          'Ownership must be confirmed before changing code; do not apply changes outside the repository named in the prompt.',
-        ]),
-    '',
-    ...prompts.flatMap((prompt, index) => [index ? '\n---\n' : '', prompt]),
-    '',
-  ].join('\n');
+
+  return assembleMasterPrompt({
+    context: {
+      run_code: context.run_code,
+      product_name: context.product_name,
+      environment: context.environment,
+      repos: ownership.groups.map((group) => group.repo),
+    },
+    uxIssues: withDeveloperPrompt(uxIssues, (issue) => buildUxCursorPrompt(issue, context)),
+    featureGaps: withDeveloperPrompt(featureGaps, (gap) => buildFeatureGapCursorPrompt(gap, context)),
+    allInventoryLabels,
+  });
+}
+
+/** Fills developer_prompt on a copy when it was not already precomputed, without mutating the caller's findings. */
+function withDeveloperPrompt<T extends { developer_prompt: string }>(items: T[], build: (item: T) => string): T[] {
+  return items.map((item) => (item.developer_prompt ? item : { ...item, developer_prompt: build(item) }));
 }
 
 function contextLines(context: CursorPromptContext): string[] {
@@ -267,6 +286,44 @@ function inventoryLines(value: unknown): string[] {
 }
 
 const ANALYTICS_NOISE_REGEX = /google-analytics\.com|\/g\/collect|gtm\.js|gtm=/i;
+
+/**
+ * Pulls the failing request's own URL out of network/console evidence, so
+ * ownership can be resolved against the endpoint that actually failed rather
+ * than only the page it was observed on. Network events carry a `.url`
+ * field (or a pre-formatted "URL failed with STATUS" string in tests);
+ * console events carry a `location` of the shape "URL:line".
+ */
+function errorRequestUrls(evidence: Record<string, unknown>): string[] {
+  const fromNetwork = urlsFromEvents(evidence.network_events ?? evidence.sample, 'url');
+  const fromConsole = urlsFromEvents(evidence.console_events ?? evidence.events, 'location');
+  return [...fromNetwork, ...fromConsole].filter((url) => !ANALYTICS_NOISE_REGEX.test(url));
+}
+
+function urlsFromEvents(value: unknown, objectKey: 'url' | 'location'): string[] {
+  if (!Array.isArray(value)) return [];
+  const urls: string[] = [];
+  for (const item of value) {
+    if (typeof item === 'string') {
+      const url = firstUrl(item);
+      if (url) urls.push(url);
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const raw = (item as Record<string, unknown>)[objectKey];
+      if (typeof raw === 'string' && raw) {
+        // console location is "url:lineNumber" -- the trailing ":line" is not part of the URL.
+        urls.push(objectKey === 'location' ? raw.replace(/:\d+$/, '') : raw);
+      }
+    }
+  }
+  return urls;
+}
+
+function firstUrl(text: string): string | null {
+  const match = text.match(/https?:\/\/\S+/);
+  return match ? match[0] : null;
+}
 
 function sampleLines(prefix: string, value: unknown): string[] {
   if (!Array.isArray(value)) return [];

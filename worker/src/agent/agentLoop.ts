@@ -6,8 +6,12 @@ import { config } from '../config.js';
 import { requestFormValues } from '../data/syntheticData.js';
 import { askOrRecallDecision, type DecisionOption } from '../nav/askDecision.js';
 import type { UxIssue } from '../reviewer/uxReviewEngine.js';
-import { isConstructiveLabel } from '../utils/safeActionGuard.js';
-import { executeAction, type AgentAction, type AgentStepRecord } from './actions.js';
+import {
+  executeAction,
+  type AgentAction,
+  type AgentStepRecord,
+  type FillEntry,
+} from './actions.js';
 import {
   buildDateFindings,
   buildNativeLocaleFinding,
@@ -21,8 +25,10 @@ import {
   scrollExtent,
   signature,
   signatureKey,
+  visibleText,
   type PageSignature,
 } from './perceive.js';
+import { looksLikeSubmitLabel } from './submitLabels.js';
 
 export type AgentLoopResult = {
   status: 'done' | 'blocked' | 'budget' | 'operator';
@@ -46,6 +52,7 @@ export type CreatedRecord = {
   url: string;
   formKey: string;
   values: Record<string, string>;
+  /** True only once a value this session typed was seen on a later screen. */
   verifiedInList: boolean;
 };
 
@@ -80,9 +87,13 @@ Creation mode (required for a successful run):
 - In every module that supports creating records, attempt ONE end-to-end synthetic create:
   open the create/add form, fill every required field (prefer suggested_values when present),
   save/submit, then verify the new record appears in the list before moving on.
-- Once session_facts.records_already_created lists a verified create for a module, stop creating
-  in that module and move to observation/reports — do not attempt a second create of the same
-  entity type in the same session.
+- Opening a create form is not a create. A create counts only once you have filled the fields,
+  saved, and then seen the record (or a success message naming it). Clicking "Create New X" or
+  "+ Add X" and then navigating away leaves the module untested.
+- session_facts.records_already_created entries carry "verified". A verified entry means stop
+  creating that entity type — move to observation/reports. An entry with "verified": false is a
+  save we could not confirm: go back to that module's list to confirm it, finish the form, or
+  report what stopped it. Do not treat it as done.
 - Only create records inside this session's stated Scope (see the goal's menu_path). If you
   navigate outside the session's declared module to create something, stop and use "blocked"
   instead.
@@ -96,6 +107,21 @@ Creation mode (required for a successful run):
 - Treat safety-guard refusals as expected and route around them — do not retry the same refused control.
 - Bare Cancel / Close / Dismiss / Back may be used freely to clear modals and return from forms.
 
+Filling forms — one action, not one field at a time:
+- When a form has two or more empty fields, return a single fill_form action covering every field
+  you can fill at once. Never spend a step per field.
+  {"type":"fill_form","fields":[{"mark":12,"value":"SMOKE-Anita"},{"mark":19,"option":"Permanent"}]}
+- Use "value" for a text, number or date field. Use "option" for a dropdown, including one whose
+  name ends in a placeholder such as "— Select —" that you would otherwise have to click open.
+- Take the value from suggested_values wherever the field label appears there.
+- Include fields flagged "offscreen":true. They are scrolled to automatically, so do not scroll
+  or split the form into batches to reach them.
+- Never put a Save, Submit or Create control in fill_form. Read the screenshot that comes back
+  first, then click it.
+- The result names every field that was set and every field that was not, and for a dropdown whose
+  option did not match it lists the options really on offer. Fix that handful with type, select or
+  click one at a time, then submit.
+
 Reading the elements list:
 - It covers the whole page, not just the visible part. Entries flagged "offscreen":true sit outside
   the viewport (viewport_offset is pixels above, if negative, or below, if positive) and carry no
@@ -105,11 +131,21 @@ Reading the elements list:
 - After submitting a form, read the validation messages on screen and fix the named fields rather
   than resubmitting unchanged.
 
+Coverage, not repetition:
+- screens_already_visited lists every screen this session has landed on and how many times.
+  Revisiting one teaches the run nothing. Never re-walk a menu you have already swept: open a
+  screen you have not seen, create or confirm a record in scope, or finish.
+- When a screen cannot proceed until a context is chosen (company, branch, financial year) or
+  shows an empty/fallback state whose way forward is missing, hidden or offscreen, name that
+  screen and what was missing in your "blocked" reason (or in the observation you finish with).
+  That report is the finding. Walking the rest of the navigation instead loses it.
+
 Explore the requested session scope, create synthetic records where possible, inspect meaningful
 screens (including reports fed by that data), and stop when the goal is covered.
 Return JSON only:
 {"observation":"","reasoning":"","action":{"type":"click","mark":1},"goal_progress":"","blockers":[]}
-Allowed action types: click, type, select, press, scroll, navigate, wait, done, blocked, ask_operator.`;
+Allowed action types: click, type, select, fill_form, press, scroll, navigate, wait, done, blocked,
+ask_operator.`;
 
 const SYNTHETIC_DATA_CALL_CAP = 8;
 
@@ -153,6 +189,10 @@ export async function runAgentLoop(input: {
   let blockedRefusals = 0;
   let consecutiveScrolls = 0;
   let deepestScrollSeen = 0;
+  // Circling is judged over a window of steps, so it is only re-judged once a
+  // fresh window has passed; otherwise one sweep would spend all three warnings
+  // on consecutive steps and end the session before the model could react.
+  let lastCirclingWarning = 0;
   // Retention only thins stored screenshots; it must not cap how many actions the
   // agent may take before the session's own budget is spent.
   const budget = Math.max(1, input.budget);
@@ -212,6 +252,7 @@ export async function runAgentLoop(input: {
         verified: record.verifiedInList,
       }));
     }
+    const visited = visitedScreens(steps);
     const prompt = JSON.stringify({
       goal: input.goal,
       current: { url: current.url, title: current.title },
@@ -227,6 +268,10 @@ export async function runAgentLoop(input: {
       session_facts: Object.keys(sessionFacts).length ? sessionFacts : undefined,
       suggested_values: Object.keys(suggestedValues).length ? suggestedValues : undefined,
       recent_actions: history,
+      // recent_actions only reaches six steps back, which is shorter than a menu
+      // sweep: without this the model cannot tell a screen it has never opened
+      // from one it has already read twice.
+      screens_already_visited: visited.length > 2 ? visited : undefined,
       prior_feedback: feedback || undefined,
       budget: { step: ordinal, maximum: budget },
       stuck_warning: stuckWarnings > 0
@@ -289,6 +334,7 @@ export async function runAgentLoop(input: {
       guard: outcome.guard,
       target_label: outcome.target_label,
       typed_value: outcome.typed_value,
+      fill_results: outcome.fill_results,
       signature_before: outcome.before,
       signature_after: outcome.after,
       signature_changed: changed,
@@ -299,24 +345,37 @@ export async function runAgentLoop(input: {
     feedback = step.outcome_observation;
     consecutiveScrolls = decision.action.type === 'scroll' ? consecutiveScrolls + 1 : 0;
 
-    // Created-record ledger: a submit-style click (isConstructiveLabel or the
-    // COMMITS_FORM vocabulary, same test submittedControls uses) that executed
-    // and was followed by a URL or DOM change is the closest thing we have to a
-    // "this probably created something" oracle. Recorded so the prompt can tell
-    // the model not to create the same entity twice, and so the synthetic-value
-    // cache for that form is invalidated (a second visit must get fresh values
-    // rather than replay ones that will now collide on a unique key).
+    // Created-record ledger: a submit-style click (see looksLikeSubmitLabel, the
+    // same test submittedControls uses) that executed and was followed by a URL
+    // or DOM change is the closest thing we have to a "this probably created
+    // something" oracle. Recorded so the prompt can tell the model not to create
+    // the same entity twice, and so the synthetic-value cache for that form is
+    // invalidated (a second visit must get fresh values rather than replay ones
+    // that will now collide on a unique key).
+    //
+    // The fill requirement is what keeps the ledger honest: a submit click with
+    // nothing typed into that screen cannot have created a record, and a session
+    // that books one anyway reads its own claim back out of session_facts and
+    // stops creating for the rest of the run.
     if (decision.action.type === 'click' && outcome.status === 'executed'
       && looksLikeSubmitLabel(outcome.target_label)
       && (outcome.before.url !== outcome.after.url || outcome.before.domHash !== outcome.after.domHash)) {
-      const formKey = formIdentityKey(current, marks);
-      createdRecords.push({
-        url: outcome.before.url,
-        formKey,
-        values: recentFieldValues(steps.slice(0, -1), outcome.before.url),
-        verifiedInList: true,
-      });
-      suggestedCache.delete(formKey);
+      const values = recentFieldValues(steps.slice(0, -1), outcome.before.url);
+      if (Object.keys(values).length) {
+        const formKey = formIdentityKey(current, marks);
+        createdRecords.push({ url: outcome.before.url, formKey, values, verifiedInList: false });
+        suggestedCache.delete(formKey);
+      }
+    }
+
+    // A create is verified when a value this session typed turns up on a later
+    // screen — the list or detail view the app lands on, or a toast naming the
+    // record. Reading it off the page keeps creates_verified (and the coverage
+    // verdict built on it) an observation rather than an assumption. Field values
+    // do not appear in innerText, so the form we just submitted cannot confirm
+    // itself.
+    if (createdRecords.some(isAwaitingVerification)) {
+      markVerifiedByPageText(createdRecords, await visibleText(input.page));
     }
 
     // Scope-not-found exit. Heuristic: parse "Scope: <menu_path>" out of the goal
@@ -361,18 +420,34 @@ export async function runAgentLoop(input: {
     recentTriples.splice(0, recentTriples.length, ...loop.recentTriples);
     unchangedCount = loop.unchangedCount;
     priorSignature = loop.priorSignature;
-    if (loop.warned) {
+    // Re-walking a menu changes the screen on every click, so it resets every
+    // counter evaluateLoopDetection keeps and is invisible to it. Judged here, on
+    // the trail of screens instead of the shape of one action.
+    const circling = ordinal - lastCirclingWarning >= CIRCLING_WINDOW
+      ? evaluateNavigationCircling({ steps })
+      : { circling: false, revisited: [] };
+    if (circling.circling) lastCirclingWarning = ordinal;
+    if (loop.warned || circling.circling) {
       stuckWarnings += 1;
-      feedback += ' Loop detection fired; take a different route.';
+      const note = circling.circling
+        ? `The last ${CIRCLING_WINDOW} steps only revisited screens already covered `
+          + `(${circling.revisited.join(', ')}). Open a screen you have not seen, create or confirm `
+          + 'a record in scope, or finish and say what is missing.'
+        : 'Loop detection fired; take a different route.';
+      feedback += ` ${note}`;
       await input.onLoopWarning?.(
         `Loop detection warning ${stuckWarnings}/3: ${
-          consecutiveScrolls >= 4 ? 'four or more scrolls in a row without acting' : 'stalled action pattern or unchanged page'
+          circling.circling
+            ? `only already-visited screens for the last ${CIRCLING_WINDOW} steps`
+            : consecutiveScrolls >= 4
+              ? 'four or more scrolls in a row without acting'
+              : 'stalled action pattern or unchanged page'
         }.`,
       );
       if (stuckWarnings >= 3) {
         return finish({
           status: 'blocked',
-          reason: 'Repeated actions or unchanged page after three warnings.',
+          reason: 'Repeated actions, unchanged page, or navigation already covered after three warnings.',
           steps,
           screenCount: steps.length,
         });
@@ -421,11 +496,13 @@ export function evaluateLoopDetection(input: {
 } {
   const changed = signatureKey(input.before) !== signatureKey(input.after);
   const recentTriples = [...input.recentTriples];
-  // type/select are exempt from the unchanged counter: formHash now changes when
-  // a field's value changes, so a fill is already not "unchanged" in the normal
+  // Fills are exempt from the unchanged counter: formHash now changes when a
+  // field's value changes, so a fill is already not "unchanged" in the normal
   // case — this is a defensive backstop for a field whose value round-trips to
   // the same string (e.g. a re-typed value identical to what was already there).
-  const exemptFromUnchangedCounter = input.action.type === 'type' || input.action.type === 'select';
+  const exemptFromUnchangedCounter = input.action.type === 'type'
+    || input.action.type === 'select'
+    || input.action.type === 'fill_form';
   let unchangedCount = exemptFromUnchangedCounter
     ? input.unchangedCount
     : (signatureKey(input.priorSignature) === signatureKey(input.after) ? input.unchangedCount + 1 : 0);
@@ -456,31 +533,135 @@ export function evaluateLoopDetection(input: {
   };
 }
 
-export type SubmittedControl = { mark: number; label: string; step: number };
+/** Screens are keyed by route and title: that is the unit the agent navigates in. */
+function screenKey(sig: PageSignature): string {
+  return `${sig.url}|${sig.title}`;
+}
+
+/** How many recent steps of pure re-navigation count as circling. */
+export const CIRCLING_WINDOW = 6;
 
 /**
- * Labels that commit a form. Wider than the safety guard's constructive
- * vocabulary, which leaves out create and add on purpose so that an observer
- * session may still open a create form. Bare "add" stays out here too, because
- * "Add Employee" opens the form rather than saving it.
+ * Every screen this session has landed on, with visit counts, most-visited
+ * first. Handed to the model because `recent_actions` only reaches six steps
+ * back — shorter than a menu sweep, which is how a session can walk the same six
+ * sidebar destinations twice and believe the second pass is new coverage.
  */
-const COMMITS_FORM = /\b(create|update|register|generate|insert|post)\b/i;
-
-/** Shared by `submittedControls` and the created-record ledger. */
-function looksLikeSubmitLabel(label: string): boolean {
-  return isConstructiveLabel(label).matched || COMMITS_FORM.test(label);
+export function visitedScreens(
+  steps: AgentStepRecord[],
+  limit = 12,
+): Array<{ title: string; url: string; visits: number }> {
+  const byScreen = new Map<string, { title: string; url: string; visits: number }>();
+  for (const step of steps) {
+    if (step.outcome !== 'executed') continue;
+    const sig = step.signature_after;
+    const key = screenKey(sig);
+    const entry = byScreen.get(key);
+    if (entry) entry.visits += 1;
+    else byScreen.set(key, { title: sig.title, url: sig.url, visits: 1 });
+  }
+  return [...byScreen.values()].sort((left, right) => right.visits - left.visits).slice(0, limit);
 }
 
 /**
- * Best-effort reconstruction of "what did the model just fill in on this form":
- * the most recent type/select actions whose *before* screen was the same URL as
- * the submit click, most-recent-first collapsed to one entry per field label.
+ * Whether the recent window only re-walked screens the session had already seen,
+ * with no form filling or submitting among them.
+ *
+ * A sidebar click changes the screen, so a sweep that loops Dashboard →
+ * Invitations → Dashboard → Companies … clears the stalled-action triples and
+ * zeroes the unchanged counter on every single step. `evaluateLoopDetection`
+ * cannot see it, which is how a session spends twenty steps re-reading a menu it
+ * had already covered and still reports itself done. Filling or submitting
+ * anything in the window exempts it: revisiting a list to check a record you just
+ * saved is the run working, not stalling.
  */
-function recentFieldValues(steps: AgentStepRecord[], url: string, limit = 20): Record<string, string> {
+export function evaluateNavigationCircling(input: {
+  steps: AgentStepRecord[];
+  window?: number;
+}): { circling: boolean; revisited: string[] } {
+  const idle = { circling: false, revisited: [] as string[] };
+  const window = Math.max(2, input.window ?? CIRCLING_WINDOW);
+  // Needs a history to have revisited, not just a window to judge.
+  if (input.steps.length < window + 4) return idle;
+  const recent = input.steps.slice(-window);
+  const earlier = input.steps.slice(0, -window);
+  const productive = recent.some((step) => step.action.type === 'type'
+    || step.action.type === 'select'
+    || step.action.type === 'fill_form'
+    || (step.action.type === 'click' && step.outcome === 'executed'
+      && looksLikeSubmitLabel(step.target_label)));
+  if (productive) return idle;
+  const landings = recent.filter((step) => step.outcome === 'executed').map((step) => step.signature_after);
+  if (landings.length < window) return idle;
+  const seenEarlier = new Set(earlier.flatMap((step) => [
+    screenKey(step.signature_before),
+    screenKey(step.signature_after),
+  ]));
+  if (!landings.every((sig) => seenEarlier.has(screenKey(sig)))) return idle;
+  return {
+    circling: true,
+    revisited: [...new Set(landings.map((sig) => sig.title || sig.url))].slice(0, 8),
+  };
+}
+
+/**
+ * Values distinctive enough to be worth searching for in a screen's text: long,
+ * and carrying a run of letters. A bare number — a PIN code, an amount, a date —
+ * matches something on almost any screen and would confirm a create that never
+ * happened. Free text the agent types is marker-prefixed ("SMOKE-…"), which is
+ * exactly the run of letters this looks for.
+ */
+const VERIFIABLE_VALUE_LENGTH = 6;
+const VERIFIABLE_VALUE_SHAPE = /[a-z]{4,}/i;
+
+/** A create we booked but have not yet seen evidence of on any later screen. */
+export function isAwaitingVerification(record: CreatedRecord): boolean {
+  return !record.verifiedInList && verifiableValues(record).length > 0;
+}
+
+/** Marks pending creates verified once a value they typed appears in `pageText`. */
+export function markVerifiedByPageText(records: CreatedRecord[], pageText: string): void {
+  const haystack = pageText.toLowerCase();
+  if (!haystack) return;
+  for (const record of records) {
+    if (!isAwaitingVerification(record)) continue;
+    if (verifiableValues(record).some((value) => haystack.includes(value))) {
+      record.verifiedInList = true;
+    }
+  }
+}
+
+function verifiableValues(record: CreatedRecord): string[] {
+  return Object.values(record.values)
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length >= VERIFIABLE_VALUE_LENGTH && VERIFIABLE_VALUE_SHAPE.test(value));
+}
+
+export type SubmittedControl = { mark: number; label: string; step: number };
+
+/**
+ * Best-effort reconstruction of "what did the model just fill in on this form":
+ * the most recent fills whose *before* screen was the same URL as the submit
+ * click, collapsed to one entry per field label.
+ *
+ * A `fill_form` step is read out of its per-field results rather than its
+ * action, because the batch is the only thing that knows which of the fields it
+ * was handed were actually written. Missing them here would empty the ledger the
+ * created-record check is built on, and a run that fills a form in one step
+ * would stop counting its own creates.
+ */
+export function recentFieldValues(steps: AgentStepRecord[], url: string, limit = 20): Record<string, string> {
   const values: Record<string, string> = {};
   for (const step of steps.slice(-limit)) {
-    if (step.action.type !== 'type' && step.action.type !== 'select') continue;
     if (step.signature_before.url !== url) continue;
+    if (step.action.type === 'fill_form') {
+      for (const result of step.fill_results ?? []) {
+        if (result.status !== 'filled' && result.status !== 'chosen') continue;
+        values[result.label || `mark ${result.mark}`] = result.value ?? '';
+      }
+      continue;
+    }
+    if (step.action.type !== 'type' && step.action.type !== 'select') continue;
     const label = step.target_label || `mark ${step.action.mark}`;
     const value = step.action.type === 'type' ? (step.typed_value ?? step.action.text) : step.action.option;
     values[label] = value;
@@ -640,6 +821,7 @@ export function parseAgentAction(value: unknown): AgentAction {
   if (type === 'click') return { type, mark: positiveMark(action.mark) };
   if (type === 'type') return { type, mark: positiveMark(action.mark), text: String(action.text ?? ''), submit: Boolean(action.submit) };
   if (type === 'select') return { type, mark: positiveMark(action.mark), option: String(action.option ?? '') };
+  if (type === 'fill_form') return { type, fields: parseFillEntries(action.fields) };
   if (type === 'press') return { type, key: String(action.key ?? '') || 'Escape' };
   if (type === 'scroll') return {
     type,
@@ -655,6 +837,34 @@ export function parseAgentAction(value: unknown): AgentAction {
     options: Array.isArray(action.options) ? action.options.map(String) : [],
   };
   throw new Error(`Vision decision contains unsupported action type "${type}".`);
+}
+
+/**
+ * Tolerant of the aliases a model reaches for — `text` for `value`, `label` for
+ * `option` — because a whole form's worth of work rides on this one action, and
+ * rejecting the batch over a synonym would cost the very steps it exists to
+ * save. An entry naming neither is kept and dropped by `planBatchFill`, which
+ * reports it back by field name instead of failing the step.
+ */
+export function parseFillEntries(value: unknown): FillEntry[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('A fill_form action needs a non-empty "fields" array.');
+  }
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('Every fill_form field must be an object naming a mark and a value.');
+    }
+    const row = item as Record<string, unknown>;
+    const entry: FillEntry = { mark: positiveMark(row.mark) };
+    const option = row.option ?? row.label;
+    const text = row.value ?? row.text;
+    if (option !== undefined && option !== null && String(option).trim()) {
+      entry.option = String(option);
+    } else if (text !== undefined && text !== null) {
+      entry.value = String(text);
+    }
+    return entry;
+  });
 }
 
 function positiveMark(value: unknown): number {

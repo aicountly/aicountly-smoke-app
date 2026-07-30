@@ -1,12 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '@/lib/api';
+import { scoreLabel } from '@/lib/reports';
+
+type Score = number | string | null;
 
 type DashboardSummary = {
   cards: Record<string, number>;
   last_run: { run_code: string; product_name: string; status: string } | null;
-  product_scores: Array<{ product_name: string; maturity_avg: number; ux_avg: number; reports: number }>;
-  recent_reports: Array<{ id: number; title: string; product_name: string; environment: string; created_at: string; ux_score: number; maturity_score: number }>;
+  product_scores: Array<{ product_name: string; maturity_avg: Score; ux_avg: Score; reports: number }>;
+  recent_reports: Array<{ id: number; title: string; product_name: string; environment: string; created_at: string; ux_score: Score; maturity_score: Score }>;
 };
 
 const CARDS: Array<{ key: string; label: string }> = [
@@ -73,8 +76,8 @@ export function DashboardPage() {
               {(data?.product_scores ?? []).map((p) => (
                 <tr key={p.product_name} className="border-t border-ink-200">
                   <td className="py-1">{p.product_name}</td>
-                  <td className="text-center">{Number(p.maturity_avg).toFixed(1)}</td>
-                  <td className="text-center">{Number(p.ux_avg).toFixed(1)}</td>
+                  <td className="text-center">{scoreLabel(p.maturity_avg, 1)}</td>
+                  <td className="text-center">{scoreLabel(p.ux_avg, 1)}</td>
                   <td className="text-center">{p.reports}</td>
                 </tr>
               ))}

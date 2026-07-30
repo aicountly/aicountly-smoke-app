@@ -51,7 +51,9 @@
     <strong>Status:</strong> {{status}} &nbsp;
     <strong>Started:</strong> {{started_at}} &nbsp;
     <strong>Completed:</strong> {{completed_at}}<br>
-    <strong>Menu path:</strong> <code>{{menu_path}}</code>
+    <strong>Menu path:</strong> <code>{{menu_path}}</code><br>
+    <strong>Maturity Score:</strong> {{maturity_label}} &nbsp;
+    <strong>UX Score:</strong> {{ux_score}}/100
   </div>
 
   <div class="grid">

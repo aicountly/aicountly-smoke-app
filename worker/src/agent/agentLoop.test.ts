@@ -2,11 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   actionTriple,
+  CIRCLING_WINDOW,
   evaluateBlockedDecision,
   evaluateLoopDetection,
+  evaluateNavigationCircling,
   formIdentityKey,
+  isAwaitingVerification,
+  markVerifiedByPageText,
   parseAgentAction,
+  parseFillEntries,
+  recentFieldValues,
   submittedControls,
+  visitedScreens,
+  type CreatedRecord,
 } from './agentLoop.js';
 import type { AgentStepRecord } from './actions.js';
 import type { MarkDescriptor } from './marks.js';
@@ -71,6 +79,31 @@ test('parses Set-of-Marks actions without selectors', () => {
   );
   assert.throws(() => parseAgentAction({ type: 'click', mark: 0 }), /Invalid Set-of-Marks/);
   assert.throws(() => parseAgentAction({ type: 'click', selector: '#save' }), /Invalid Set-of-Marks/);
+});
+
+test('a batch fill parses into typed and chosen fields', () => {
+  assert.deepEqual(
+    parseAgentAction({
+      type: 'fill_form',
+      fields: [{ mark: 2, value: 'SMOKE-Anita' }, { mark: 5, option: 'Permanent' }],
+    }),
+    { type: 'fill_form', fields: [{ mark: 2, value: 'SMOKE-Anita' }, { mark: 5, option: 'Permanent' }] },
+  );
+});
+
+test('a batch fill accepts the field aliases models reach for', () => {
+  assert.deepEqual(
+    parseFillEntries([{ mark: 2, text: 'SMOKE-Anita' }, { mark: 5, label: 'Permanent' }]),
+    [{ mark: 2, value: 'SMOKE-Anita' }, { mark: 5, option: 'Permanent' }],
+  );
+  // A blank option is not a choice, so the value alongside it is used instead.
+  assert.deepEqual(parseFillEntries([{ mark: 3, option: '  ', value: '42' }]), [{ mark: 3, value: '42' }]);
+});
+
+test('a batch fill with no usable fields is rejected outright', () => {
+  assert.throws(() => parseAgentAction({ type: 'fill_form', fields: [] }), /non-empty/);
+  assert.throws(() => parseAgentAction({ type: 'fill_form' }), /non-empty/);
+  assert.throws(() => parseFillEntries([{ value: 'x' }]), /Invalid Set-of-Marks/);
 });
 
 test('page signature key changes on dialogs and DOM/form changes, but not on scroll alone', () => {
@@ -191,6 +224,18 @@ test('type/select on an unchanging screen does not increment the unchanged count
   });
   assert.equal(afterSelect.unchangedCount, 0);
   assert.equal(afterSelect.warned, false);
+
+  // A whole form filled in one action is exempt on the same grounds.
+  const afterBatch = evaluateLoopDetection({
+    action: { type: 'fill_form', fields: [{ mark: 4, value: 'SMOKE-value' }] },
+    before: stuck,
+    after: stuck,
+    recentTriples: [],
+    unchangedCount: 0,
+    priorSignature: prior,
+  });
+  assert.equal(afterBatch.unchangedCount, 0);
+  assert.equal(afterBatch.warned, false);
 });
 
 test('an ordinary click on an unchanging screen still counts toward the unchanged counter', () => {
@@ -250,6 +295,109 @@ test('only successful clicks on save-style controls count as submitted', () => {
   ]);
   assert.equal(found.length, 1);
   assert.deepEqual(found[0], { mark: 28, label: 'Create employee master', step: 19 });
+});
+
+test('a control that only opens a create form is not a submit', () => {
+  // "ADD COMPANY Create New Company" opens the form. Reading it as a submit told
+  // the model, via session_facts, that a company had already been created, so it
+  // never filled the form at all.
+  for (const label of ['ADD COMPANY Create New Company', '+ Add New Branch', 'New Employee']) {
+    assert.deepEqual(submittedControls([step({ target_label: label })]), [], label);
+  }
+  assert.equal(submittedControls([step({ target_label: 'Create employee master' })]).length, 1);
+  assert.equal(submittedControls([step({ target_label: 'Save' })]).length, 1);
+});
+
+test('a create is only awaiting verification once distinctive values were typed', () => {
+  const record = (values: Record<string, string>): CreatedRecord => ({
+    url: 'https://hrms.test/company/new',
+    formKey: 'k',
+    values,
+    verifiedInList: false,
+  });
+  // A submit click with nothing typed cannot have created anything, so there is
+  // nothing to look for and nothing to claim.
+  assert.equal(isAwaitingVerification(record({})), false);
+  assert.equal(isAwaitingVerification(record({ 'PIN code': '560001' })), false);
+  assert.equal(isAwaitingVerification(record({ Name: 'SMOKE-Acme Traders' })), true);
+});
+
+test('a create is verified by its own value showing up on a later screen', () => {
+  const records: CreatedRecord[] = [{
+    url: 'https://hrms.test/company/new',
+    formKey: 'k',
+    values: { Name: 'SMOKE-Acme Traders' },
+    verifiedInList: false,
+  }];
+
+  markVerifiedByPageText(records, 'All companies (2)\nSmoke Test Co\nNothing else here');
+  assert.equal(records[0]!.verifiedInList, false);
+
+  markVerifiedByPageText(records, 'All companies (3)\nSMOKE-Acme Traders\nSmoke Test Co');
+  assert.equal(records[0]!.verifiedInList, true);
+});
+
+test('visited screens carry their visit counts, most-visited first', () => {
+  const landing = (title: string, url: string) => step({
+    signature_after: sig({ title, url }),
+  });
+  const visited = visitedScreens([
+    landing('Dashboard', 'https://hrms.test/'),
+    landing('Invitations', 'https://hrms.test/invitations'),
+    landing('Dashboard', 'https://hrms.test/'),
+    landing('Companies', 'https://hrms.test/companies'),
+    landing('Dashboard', 'https://hrms.test/'),
+    step({ outcome: 'refused', signature_after: sig({ title: 'Never counted', url: 'https://hrms.test/x' }) }),
+  ]);
+  assert.deepEqual(visited[0], { title: 'Dashboard', url: 'https://hrms.test/', visits: 3 });
+  assert.equal(visited.length, 3);
+});
+
+/** A sidebar hop: a click that lands on an already-known destination. */
+function hop(ordinal: number, title: string): AgentStepRecord {
+  return step({
+    ordinal,
+    target_label: title,
+    signature_after: sig({ title, url: `https://hrms.test/${title.toLowerCase()}`, domHash: title }),
+  });
+}
+
+test('re-walking a menu already covered is circling, even though every click changes the screen', () => {
+  const sweep = ['Dashboard', 'Invitations', 'Companies', 'Branches', 'Financial Years', 'Key Persons'];
+  const first = sweep.map((title, index) => hop(index + 1, title));
+  assert.equal(evaluateNavigationCircling({ steps: first }).circling, false);
+
+  const second = sweep.map((title, index) => hop(first.length + index + 1, title));
+  const verdict = evaluateNavigationCircling({ steps: [...first, ...second] });
+  assert.equal(verdict.circling, true);
+  assert.deepEqual(verdict.revisited, sweep);
+  assert.equal(second.length, CIRCLING_WINDOW);
+});
+
+test('a sweep that opens a screen never seen before is not circling', () => {
+  const first = ['Dashboard', 'Invitations', 'Companies', 'Branches', 'Financial Years', 'Key Persons']
+    .map((title, index) => hop(index + 1, title));
+  const second = ['Dashboard', 'Invitations', 'Companies', 'Branches', 'Financial Years', 'Print Assets']
+    .map((title, index) => hop(first.length + index + 1, title));
+  assert.equal(evaluateNavigationCircling({ steps: [...first, ...second] }).circling, false);
+});
+
+test('revisiting a list to check a record just saved is not circling', () => {
+  const first = ['Dashboard', 'Invitations', 'Companies', 'Branches', 'Financial Years', 'Key Persons']
+    .map((title, index) => hop(index + 1, title));
+  const second = ['Dashboard', 'Invitations', 'Companies', 'Branches', 'Financial Years']
+    .map((title, index) => hop(first.length + index + 1, title));
+  const withWork = [
+    ...first,
+    ...second,
+    step({
+      ordinal: 12,
+      action: { type: 'type', mark: 4, text: 'SMOKE-Acme' },
+      target_label: 'Company name',
+      signature_after: sig({ title: 'Dashboard', url: 'https://hrms.test/dashboard' }),
+    }),
+  ];
+  assert.equal(evaluateNavigationCircling({ steps: withWork }).circling, false);
 });
 
 test('blocked is refused once when the session already submitted that control', () => {
@@ -348,4 +496,61 @@ test('blocked is accepted when nothing was submitted and the page was fully seen
     }),
     null,
   );
+});
+
+const FORM_URL = 'https://app.test/employees/new';
+
+test('a form filled in one batch still feeds the created-record ledger', () => {
+  const values = recentFieldValues([
+    step({
+      action: {
+        type: 'fill_form',
+        fields: [{ mark: 2, value: 'Anita' }, { mark: 5, option: 'Permanent' }, { mark: 9, value: 'x' }],
+      },
+      // The batch's own label counts fields; the per-field results carry the names.
+      target_label: '2 of 3 fields',
+      fill_results: [
+        { mark: 2, label: 'First name', status: 'filled', value: 'SMOKE-Anita' },
+        { mark: 5, label: 'Employment type', status: 'chosen', value: 'Permanent' },
+        { mark: 9, label: 'PAN', status: 'refused', reason: 'statutory identifier' },
+      ],
+      signature_before: sig({ url: FORM_URL }),
+      signature_after: sig({ url: FORM_URL }),
+    }),
+  ], FORM_URL);
+
+  assert.deepEqual(values, { 'First name': 'SMOKE-Anita', 'Employment type': 'Permanent' });
+});
+
+test('a batch on a different screen does not count toward this form', () => {
+  const values = recentFieldValues([
+    step({
+      action: { type: 'fill_form', fields: [{ mark: 2, value: 'Anita' }] },
+      fill_results: [{ mark: 2, label: 'Search', status: 'filled', value: 'SMOKE-Anita' }],
+      signature_before: sig({ url: 'https://app.test/elsewhere' }),
+      signature_after: sig({ url: 'https://app.test/elsewhere' }),
+    }),
+  ], FORM_URL);
+
+  assert.deepEqual(values, {});
+});
+
+test('single fills and batch fills on the same form are collected together', () => {
+  const values = recentFieldValues([
+    step({
+      action: { type: 'fill_form', fields: [{ mark: 2, value: 'Anita' }] },
+      fill_results: [{ mark: 2, label: 'First name', status: 'filled', value: 'SMOKE-Anita' }],
+      signature_before: sig({ url: FORM_URL }),
+      signature_after: sig({ url: FORM_URL }),
+    }),
+    step({
+      action: { type: 'type', mark: 7, text: 'SMOKE-E1' },
+      target_label: 'Employee code',
+      typed_value: 'SMOKE-E1',
+      signature_before: sig({ url: FORM_URL }),
+      signature_after: sig({ url: FORM_URL }),
+    }),
+  ], FORM_URL);
+
+  assert.deepEqual(values, { 'First name': 'SMOKE-Anita', 'Employee code': 'SMOKE-E1' });
 });

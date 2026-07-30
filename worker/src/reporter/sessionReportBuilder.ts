@@ -5,6 +5,7 @@ import type { SessionRow, RunRow } from '../backend.js';
 import type { UxIssue } from '../reviewer/uxReviewEngine.js';
 import type { FeatureGap } from '../reviewer/featureGapEngine.js';
 import { buildCursorPromptPack, type CursorPromptContext } from './cursorPromptBuilder.js';
+import { maturityLabel, scoreMaturity, scoreUx, type SeveritySummary } from './maturityScore.js';
 import type { FileIoTestResult } from '../fileIo/types.js';
 import type { SessionCoverage } from '../utils/sessionCoverage.js';
 import type { AgentStepRecord } from '../agent/actions.js';
@@ -32,6 +33,8 @@ export type SessionReportInput = {
   inventoryCount: number;
   uxIssues: UxIssue[];
   featureGaps: FeatureGap[];
+  /** Every inventory label collected across the session, for cursorHandoff's trust classification -- see buildCursorPromptPack. */
+  allInventoryLabels?: string[];
   screenshots: string[];
   /** Parallel to `screenshots` by index; screen URL captured alongside each shot, when known. */
   screenshotUrls?: string[];
@@ -69,6 +72,8 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
   fs.mkdirSync(sessionsDir, { recursive: true });
 
   const sevSummary = countBy(input.uxIssues.map((i) => i.severity));
+  const uxScore = scoreUx(sevSummary, input.screensObserved);
+  const maturityScore = scoreMaturity(sevSummary, input.featureGaps, input.screensObserved);
   const shotDataUris = input.screenshots
     .map((s) => toDataUri(s))
     .filter((s): s is string => Boolean(s));
@@ -86,7 +91,7 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
     session_name: session.name,
     menu_path: session.menu_path,
   };
-  const cursorPrompts = buildCursorPromptPack(promptContext, input.uxIssues, input.featureGaps);
+  const cursorPrompts = buildCursorPromptPack(promptContext, input.uxIssues, input.featureGaps, input.allInventoryLabels ?? []);
   const decisions = input.decisions
     ?? await fetchSessionDecisions(run.id, session.id).catch(() => [] as SessionDecision[]);
   const decisionCards = decisions.map((decision) => formatDecisionCard(decision));
@@ -116,6 +121,9 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
     creates_verified: input.createsVerified ?? 0,
     loop_status: input.loopStatus ?? '',
     severity_summary: sevSummary,
+    ux_score: uxScore,
+    maturity_score: maturityScore,
+    maturity_label: maturityLabel(maturityScore),
     screenshots: input.screenshots,
     screenshot_data_uris: shotDataUris,
     screenshot_cards: screenshotCards,
@@ -133,8 +141,6 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
   fs.writeFileSync(htmlPath, renderSessionHtml(payloadWithArtifact), 'utf8');
   fs.writeFileSync(cursorPromptsPath, cursorPrompts, 'utf8');
 
-  const uxScore = scoreUx(sevSummary, Math.max(1, input.screensObserved));
-
   const reportId = await recordReport({
     run_id: run.id,
     session_id: session.id,
@@ -151,6 +157,7 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
       cursor_prompts_path: cursorPromptsPath,
     },
     ux_score: uxScore,
+    maturity_score: maturityScore,
     html_path: htmlPath,
     json_path: jsonPath,
     auditor_visible: false,
@@ -159,22 +166,12 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
   return { html_path: htmlPath, json_path: jsonPath, cursor_prompts_path: cursorPromptsPath, report_id: reportId };
 }
 
-type SeveritySummary = { critical: number; high: number; medium: number; low: number; suggestion: number };
-
 function countBy(arr: string[]): SeveritySummary {
   const o: SeveritySummary = { critical: 0, high: 0, medium: 0, low: 0, suggestion: 0 };
   for (const v of arr) {
     if (v in o) (o as Record<string, number>)[v] = (o as Record<string, number>)[v] + 1;
   }
   return o;
-}
-
-function scoreUx(sev: SeveritySummary, denom: number): number {
-  const w = { critical: 5, high: 3, medium: 1.5, low: 0.5, suggestion: 0.1 } as Record<string, number>;
-  let p = 0;
-  for (const [k, n] of Object.entries(sev)) p += (w[k] ?? 0) * (n as number);
-  const score = 100 - (p * 100) / Math.max(1, denom * 5);
-  return Math.round(Math.max(0, Math.min(100, score)) * 100) / 100;
 }
 
 function toDataUri(filePath: string): string | null {
@@ -202,6 +199,8 @@ export function renderSessionHtml(p: {
   estimated_screens: number;
   inventory_count: number;
   severity_summary: SeveritySummary;
+  ux_score?: number;
+  maturity_score?: number | null;
   ux_issues: UxIssue[];
   feature_gaps: FeatureGap[];
   file_io_tests: FileIoTestResult[];
@@ -294,6 +293,8 @@ ${p.status === 'blocked'
   <div class="card"><div>High UX</div><div class="v">${p.severity_summary.high}</div></div>
   <div class="card"><div>Creates verified</div><div class="v">${p.creates_verified ?? 0}</div></div>
   <div class="card"><div>Loop status</div><div class="v">${esc(p.loop_status || '—')}</div></div>
+  <div class="card"><div>UX score</div><div class="v">${p.ux_score == null ? '—' : `${p.ux_score}/100`}</div></div>
+  <div class="card"><div>Maturity</div><div class="v">${p.maturity_score == null ? 'Not scored' : `${p.maturity_score}/100`}</div></div>
 </div>
 <h2>Decisions taken</h2><p class="muted">Choices made while the worker was blocked, including remembered answers applied automatically.</p>
 <div class="findings">${decisionCards}</div>
@@ -461,6 +462,9 @@ function actionLabel(step: AgentStepRecord): string {
       : `${action.type} mark ${action.mark}`;
   }
   if (action.type === 'navigate') return `${action.type} ${action.url}`;
+  if (action.type === 'fill_form') {
+    return step.target_label ? `fill_form (${step.target_label})` : `fill_form (${action.fields.length} fields)`;
+  }
   return action.type;
 }
 

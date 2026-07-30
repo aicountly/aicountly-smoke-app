@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Services\Reports\CursorHandoff;
 use App\Services\Reports\ReportArtifactResolver;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Database;
@@ -70,6 +71,47 @@ class ReportsController extends BaseController
             ->setStatusCode(200)
             ->setHeader('Content-Type', 'application/json')
             ->setBody($body);
+    }
+
+    /**
+     * The single downloadable file a developer/agent needs: every finding in
+     * this report wrapped in cursorHandoff's verify-before-implement contract.
+     * Rebuilds in place when the on-disk file predates the master-prompt format.
+     */
+    public function promptPack(int $id): ResponseInterface
+    {
+        $db  = Database::connect();
+        $row = $db->table('smoke_reports r')
+            ->select('r.*, run.run_code')
+            ->join('smoke_observation_runs run', 'run.id = r.run_id', 'left')
+            ->where('r.id', $id)
+            ->get()->getRowArray();
+        if (! $row) {
+            return $this->jsonError('not_found', 'Report not found', 404);
+        }
+
+        $roles = $this->userRoles();
+        if (
+            ! in_array('owner', $roles, true)
+            && ! in_array('product_reviewer', $roles, true)
+            && ! in_array('developer_viewer', $roles, true)
+            && empty($row['auditor_visible'])
+        ) {
+            return $this->jsonError('forbidden', 'Not permitted to view this report', 403);
+        }
+
+        $prompts = $this->loadMasterPrompt($id, $row);
+        if ($prompts === null || trim($prompts) === '') {
+            return $this->jsonError('not_found', 'No prompt pack available for this report', 404);
+        }
+
+        $slug = preg_replace('/[^A-Za-z0-9._-]+/', '-', (string) ($row['run_code'] ?? ('report-' . $id))) ?: ('report-' . $id);
+
+        return $this->response
+            ->setStatusCode(200)
+            ->setHeader('Content-Type', 'text/markdown; charset=utf-8')
+            ->setHeader('Content-Disposition', 'attachment; filename="' . $slug . '.master-cursor-prompt.md"')
+            ->setBody($prompts);
     }
 
     public function files(int $id): ResponseInterface
@@ -147,6 +189,56 @@ class ReportsController extends BaseController
         }
 
         return $this->syntheticReportBody($row, $format);
+    }
+
+    /**
+     * Reads the master prompt out of the report's JSON body, rebuilding when the
+     * file is missing entirely or predates the master-prompt format (no v1
+     * sentinel) so old reports upgrade in place without a re-run.
+     */
+    private function loadMasterPrompt(int $id, array $row): ?string
+    {
+        $prompts = $this->extractCursorPrompts($this->loadReportBody($id, 'json'));
+        if ($prompts !== null && str_contains($prompts, CursorHandoff::SENTINEL)) {
+            return $prompts;
+        }
+
+        try {
+            $built = null;
+            if (($row['kind'] ?? '') === 'session' && ! empty($row['session_id']) && ! empty($row['run_id'])) {
+                $built = Services::sessionReport()->build((int) $row['run_id'], (int) $row['session_id'], [], false);
+            } elseif (($row['kind'] ?? '') === 'final' && ! empty($row['run_id'])) {
+                $built = Services::finalReport()->build((int) $row['run_id'], false);
+            }
+            $jsonPath = $built['json_path'] ?? '';
+            if ($jsonPath !== '' && is_file($jsonPath)) {
+                $rebuilt = $this->extractCursorPrompts((string) file_get_contents($jsonPath));
+                if ($rebuilt !== null) {
+                    return $rebuilt;
+                }
+            }
+        } catch (\Throwable $e) {
+            log_message('error', 'Master prompt rebuild failed for #{id}: {msg}', [
+                'id'  => $id,
+                'msg' => $e->getMessage(),
+            ]);
+        }
+
+        // Stale (pre-sentinel) is still better than nothing if the rebuild above failed.
+        return $prompts;
+    }
+
+    private function extractCursorPrompts(?string $jsonBody): ?string
+    {
+        if ($jsonBody === null || $jsonBody === '') {
+            return null;
+        }
+        $decoded = json_decode($jsonBody, true);
+        if (! is_array($decoded)) {
+            return null;
+        }
+        $prompts = trim((string) ($decoded['cursor_prompts'] ?? ''));
+        return $prompts !== '' ? $prompts : null;
     }
 
     /**

@@ -1,4 +1,10 @@
 import type { Page } from 'playwright';
+import {
+  BRANCH_LABEL_PATTERN_SOURCE,
+  FY_LABEL_PATTERN_SOURCE,
+  SEARCH_LABEL_PATTERN_SOURCE,
+  SELECTOR_LABEL_PATTERN_SOURCE,
+} from './controlPatterns.js';
 
 export type InventoryEntry = {
   kind: 'menu' | 'submenu' | 'button' | 'form' | 'table' | 'filter' | 'export' | 'print' | 'download' | 'upload' | 'shortcut' | 'help' | 'tab' | 'modal' | 'company_selector' | 'fy_selector' | 'branch_selector' | 'search' | 'ai_copilot';
@@ -13,6 +19,10 @@ export type InventoryEntry = {
  * Body is a string so tsx/esbuild cannot inject `__name` into Playwright evaluate.
  */
 const COLLECT_INVENTORY_JS = `
+  const selectorLabelPattern = /${SELECTOR_LABEL_PATTERN_SOURCE}/i;
+  const branchLabelPattern = /${BRANCH_LABEL_PATTERN_SOURCE}/i;
+  const fyLabelPattern = /${FY_LABEL_PATTERN_SOURCE}/i;
+  const searchLabelPattern = /${SEARCH_LABEL_PATTERN_SOURCE}/i;
   const visible = (el) => {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
@@ -89,6 +99,21 @@ const COLLECT_INVENTORY_JS = `
     const n = (el.name || '').toLowerCase();
     const kind = n.includes('branch') ? 'branch_selector' : n.includes('financial') ? 'fy_selector' : 'company_selector';
     out.push({ kind: kind, label: text(el) || kind, selector: cssPath(el), url: url, payload: {} });
+  }
+  // A custom button/combobox-based switcher (current company/branch/FY shown
+  // as clickable topbar chrome rather than a native <select>) is structurally
+  // invisible to the block above; catch it by its own visible label text,
+  // scoped to the app shell so an unrelated body button cannot match.
+  const shellScope = document.querySelector('header, nav, aside, [role="banner"]') || document;
+  for (const el of Array.from(shellScope.querySelectorAll('button, [role="button"], [role="combobox"]')).filter(visible)) {
+    const label = text(el);
+    if (!label) continue;
+    if (selectorLabelPattern.test(label)) {
+      const kind = branchLabelPattern.test(label) ? 'branch_selector' : fyLabelPattern.test(label) ? 'fy_selector' : 'company_selector';
+      out.push({ kind: kind, label: label, selector: cssPath(el), url: url, payload: {} });
+    } else if (searchLabelPattern.test(label)) {
+      out.push({ kind: 'search', label: label, selector: cssPath(el), url: url, payload: {} });
+    }
   }
   if (/\\b(copilot|ai assistant|ai chat)\\b/i.test(document.body.innerText || '')) {
     out.push({ kind: 'ai_copilot', label: 'AI / copilot detected', selector: 'body', url: url, payload: {} });

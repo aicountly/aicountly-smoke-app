@@ -1,0 +1,145 @@
+{
+  "caveats": [
+    {
+      "id": "navigation-breadcrumb",
+      "category": "navigation",
+      "title_pattern": "breadcrumb",
+      "detected_by": "Looks for `[aria-label*=\"breadcrumb\"]`, `.breadcrumb`, or `.breadcrumbs` on the page.",
+      "blind_spot": "A breadcrumb implemented with different markup or class names is invisible to this check.",
+      "disprove": "Open the screen and look at the top of the content area for a route-hierarchy trail before adding a new component."
+    },
+    {
+      "id": "navigation-search",
+      "category": "navigation",
+      "title_pattern": "search|command",
+      "detected_by": "Looks for `input[type=\"search\"]`, `[role=\"searchbox\"]`, or `[aria-label*=\"search\"]` inside the page's `header`/`nav`/`aside`/`[role=\"banner\"]`.",
+      "blind_spot": "A button that opens a search/command palette on click (rather than a visible text input) does not match any of those selectors, even though it provides the same capability.",
+      "disprove": "Check this run's own UI inventory for a button labelled like \"Search ...\" in the topbar before building a new palette."
+    },
+    {
+      "id": "keyboard",
+      "category": "keyboard",
+      "detected_by": "Scans the first 50KB of page HTML for the literal substrings `ctrl`, `cmd`, or the ⌘/⇧ glyphs.",
+      "blind_spot": "Shortcuts documented inside a help modal that loads lazily, or that use words like \"hotkey\" instead of ctrl/cmd, are missed.",
+      "disprove": "Open any help/settings panel on the screen and check for a shortcuts list before adding one."
+    },
+    {
+      "id": "help",
+      "category": "help",
+      "detected_by": "Scans the first 50KB of page HTML for the literal substrings `help`, `tooltip`, or `info`.",
+      "blind_spot": "Icon-only tooltips implemented via `title` attributes, custom popovers, or lazy-loaded content past the 50KB scan window can be missed.",
+      "disprove": "Hover the non-obvious icon controls on the screen before adding new tooltip markup."
+    },
+    {
+      "id": "multi_tenant",
+      "category": "multi_tenant",
+      "detected_by": "Looks only for `[data-company-selector]`, `[data-branch-selector]`, `[data-fy-selector]`, or a native `<select name*=\"company|branch|financial\">`. Fires on any screen whose title matches /book|invoice|gst|hrms|payroll/, including pre-login screens.",
+      "blind_spot": "A custom button-based dropdown (e.g. a topbar button showing the company name, branch, or financial year that opens a menu on click) is structurally invisible to this check, and the check does not require the screen to be an authenticated app shell.",
+      "disprove": "Check this run's own UI inventory for topbar buttons showing a company name, \"HO\"/branch code, or a year range (e.g. \"2026 - 27\") before adding a new selector. Also confirm the screen is actually an authenticated, multi-company screen and not the pre-login landing page."
+    },
+    {
+      "id": "reports-export",
+      "category": "reports",
+      "title_pattern": "export",
+      "detected_by": "Requires a visible table (`meta.tables > 0`) and the literal word \"export\" nowhere in the page's visible text.",
+      "blind_spot": "An export action rendered as an icon-only button, inside an overflow/kebab menu, or using different wording (e.g. \"Download list\") is missed.",
+      "disprove": "Open any row-action or toolbar overflow menu on the table before adding a new Export control."
+    },
+    {
+      "id": "reports-print",
+      "category": "reports",
+      "title_pattern": "print|download",
+      "detected_by": "Requires a visible table and neither the literal word \"print\" nor \"download\" anywhere in the page's visible text.",
+      "blind_spot": "Print/Download actions behind an overflow menu or expressed with icon-only buttons are missed.",
+      "disprove": "Check the table's row and header action menus before adding new Print/Download controls."
+    },
+    {
+      "id": "filters",
+      "category": "filters",
+      "detected_by": "Requires a visible table and zero elements matching `select`, `[role=\"combobox\"]`, `.filter`, or `[class*=\"filter\"]` on the page.",
+      "blind_spot": "A custom filter bar built from plain buttons, chips, or a search box (with no matching class name) is invisible to this check.",
+      "disprove": "Look for date-range, status, or search controls above the table before adding a new filter bar."
+    },
+    {
+      "id": "layout-duplicate-placeholder",
+      "category": "layout",
+      "title_pattern": "duplicate button label",
+      "detected_by": "Counts visible buttons sharing an identical accessible label/text; flags any label repeated more than twice.",
+      "blind_spot": "When the shared label is a form-field placeholder (e.g. \"— select —\", \"Select\", \"Choose\"), the buttons are usually distinct per-field controls whose *visible copy* is intentionally identical; renaming the visible text would break the design system rather than fix an ambiguity.",
+      "disprove": "If the duplicated label is a placeholder-style string, the fix is almost always a per-field accessible name (`aria-label` / `aria-labelledby` pointing at the adjacent field label), not new visible copy. Confirm before changing any on-screen text."
+    },
+    {
+      "id": "layout-overflow",
+      "category": "layout",
+      "title_pattern": "overflow",
+      "detected_by": "Compares the widest visible table/modal's bounding-box width or height against the viewport at capture time.",
+      "blind_spot": "A container with its own internal `overflow: auto` scroll region can still measure wider/taller than the viewport at the outer level, producing a false positive.",
+      "disprove": "Resize the browser and check whether the table/modal already scrolls internally before adding a new scroll container."
+    },
+    {
+      "id": "errors-console",
+      "category": "errors",
+      "title_pattern": "console error",
+      "detected_by": "Flags the page whenever any console event of type `error` or `pageerror` was captured, regardless of cause.",
+      "blind_spot": "A resource-load 404 (e.g. a missing optional avatar/logo image) triggers a browser console error identical in shape to a real script exception, and is not itself a functional regression.",
+      "disprove": "Read the actual console message. If every flagged event is a 404 for an image/logo/asset URL, the fix is a graceful client-side fallback (skip the request, or catch the load error and show a placeholder), not a JavaScript bug hunt. Also check whether the failing request's host/path is owned by a different repository than the one this prompt names."
+    },
+    {
+      "id": "errors-network",
+      "category": "errors",
+      "title_pattern": "network|api failures",
+      "detected_by": "Counts failed (`ok: false`) network requests captured during page observation, on the page's own URL, regardless of which host or path the failing request itself targeted.",
+      "blind_spot": "Ownership is resolved from the *page* URL, not the *failing request* URL. If the product's API lives on a different host/path prefix than its frontend, the finding lands on the frontend repository even when the failing endpoint belongs to the backend repository.",
+      "disprove": "Check the failing request's own URL against the repository ownership rules before assuming this repository owns the fix. A 404 on an optional asset (avatar, logo) usually only needs a frontend fallback; a 5xx on a data endpoint is a backend defect."
+    },
+    {
+      "id": "old_theme",
+      "category": "old_theme",
+      "detected_by": "Looks for legacy markup: `table[border]`, `font`/`marquee`/`blink` tags, `[bgcolor]`, `img[align]`, or `<center>`.",
+      "blind_spot": "A modern component that happens to render one of these attributes for a legitimate reason (rare) would be a false positive; conversely, legacy styling done purely in CSS without these tags is missed.",
+      "disprove": "Confirm the flagged markup is actually legacy-authored, not a modern component's incidental output, before migrating anything."
+    },
+    {
+      "id": "empty_state",
+      "category": "empty_state",
+      "detected_by": "Regex-matches page text for phrases like \"no records\", \"no ... selected\", \"nothing here\", or \"select a ... to ...\", only on authenticated screens with zero visible tables.",
+      "blind_spot": "Any short sentence coincidentally matching the pattern (not actually a fallback state) would be misclassified; a genuine fallback state whose wording falls outside the pattern is missed.",
+      "disprove": "Confirm the screen is genuinely blocked waiting for a prerequisite (company/branch/FY selection, no data yet) rather than a normal empty list."
+    },
+    {
+      "id": "date_input",
+      "category": "date_input",
+      "detected_by": "Manual/heuristic probe of `<input type=\"date\">` fields; flags any native date input, since its displayed order follows the browser's locale rather than the product's.",
+      "blind_spot": "None significant — this is a real product-level inconsistency risk on any native date input, independent of which locale a given tester's browser was pinned to.",
+      "disprove": "Verify the exact field names/labels named in the finding still use native date inputs before building a custom date control."
+    },
+    {
+      "id": "file_io",
+      "category": "file_io",
+      "detected_by": "Compares an uploaded/exported fixture file's content and structure after a round trip through the product.",
+      "blind_spot": "A fidelity mismatch can originate in the upload path, the export/render path, or the storage layer; the finding does not localize which one.",
+      "disprove": "Reproduce the round trip locally and bisect which stage (upload, storage, export) introduces the mismatch before changing code."
+    },
+    {
+      "id": "feature-gap-implement-partial",
+      "category": "feature_gap",
+      "mode": "implement",
+      "detected_by": "Splits the expected capability's display name into whitespace tokens and requires every token to appear (as a whole word, or substring for longer tokens) somewhere in the observed inventory's labels/URLs/hrefs. Any single missing token — even a near-synonym of a token that *did* match — keeps the whole capability unobserved.",
+      "blind_spot": "A capability that exists under a different name, or whose route/label doesn't contain the literal expected word, is reported as `partial`/`implement` even when fully present. `matched_context` in the evidence lists exactly which tokens were found; anything not listed there was never seen anywhere in the run's inventory, on any screen.",
+      "disprove": "Compare `matched_context` in the evidence against the full expected-feature name. If the missing tokens are near-synonyms of ones already matched (e.g. \"employee\" matched but \"directory\" did not, for \"employee directory\"), search this repository directly for the capability by its actual route/component name before implementing anything."
+    },
+    {
+      "id": "feature-gap-validate-first",
+      "category": "feature_gap",
+      "mode": "validate_first",
+      "detected_by": "The expected capability's tokens matched nowhere in the run's inventory, and the capability's name has no token overlap with the current session's scope, so this run has no first-hand evidence about it either way.",
+      "blind_spot": "Zero evidence is not evidence of absence — the capability may live in a module this run never visited.",
+      "disprove": "This is a scope question, not a defect. Confirm with the product owner before opening any implementation ticket; do not treat this as a build order."
+    }
+  ],
+  "fallback": {
+    "detected_by": "A generic heuristic check specific to this finding's category.",
+    "blind_spot": "Heuristic DOM/text checks cannot see every valid implementation of a capability.",
+    "disprove": "Verify directly against the live screen and this repository's code before implementing anything."
+  }
+}

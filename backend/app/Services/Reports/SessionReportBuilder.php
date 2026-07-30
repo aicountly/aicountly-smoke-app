@@ -35,22 +35,27 @@ class SessionReportBuilder
                 : (string) ($test['compare_status'] ?? '');
         }
         unset($test);
-        $cursorPromptParts = [];
-        foreach (array_merge($ux, $gaps) as $finding) {
-            $prompt = trim((string) ($finding['developer_prompt'] ?? ''));
-            if ($prompt !== '') {
-                $cursorPromptParts[] = $prompt;
-            }
-        }
-        $cursorPrompts = '# Cursor prompts: ' . $run['run_code'] . ' / ' . $sess['name']
-            . "\n\n" . $this->promptPackOwnershipHeader($cursorPromptParts) . "\n\n"
-            . implode("\n\n---\n\n", $cursorPromptParts) . "\n";
+        $allInventoryLabels = array_values(array_unique(array_filter(array_column($inv, 'label'))));
+        $cursorPrompts = CursorHandoff::assembleMasterPrompt(
+            [
+                'run_code'     => $run['run_code'],
+                'product_name' => $run['product_name'],
+                'environment'  => $run['environment'],
+            ],
+            $this->decodeEvidenceRows($ux),
+            $this->decodeEvidenceRows($gaps),
+            $allInventoryLabels,
+        );
 
         $severityCount = ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0, 'suggestion' => 0];
         foreach ($ux as $i) {
             $s = strtolower((string) $i['severity']);
             if (isset($severityCount[$s])) $severityCount[$s]++;
         }
+
+        // Scored before prepareFinding() rewrites the rows for display.
+        $uxScore  = MaturityScore::ux($severityCount, count($results));
+        $maturity = MaturityScore::forScope($severityCount, $gaps, count($results));
 
         $resolver = new ReportArtifactResolver();
         $screenshotCards = $this->buildScreenshotCards(
@@ -92,6 +97,9 @@ class SessionReportBuilder
             'decisions'         => $decisions,
             'has_decisions'     => $decisions !== [],
             'severity_summary'  => $severityCount,
+            'ux_score'          => $uxScore,
+            'maturity_score'    => $maturity,
+            'maturity_label'    => MaturityScore::label($maturity),
             'screenshots'       => $shotDataUris,
             'screenshot_data_uris' => $shotDataUris,
             'screenshot_cards'  => $screenshotCards,
@@ -131,8 +139,8 @@ class SessionReportBuilder
                     'file_io_tests'    => count($fileIo),
                     'cursor_prompts_path' => $cursorPromptsPath,
                 ]),
-                'maturity_score' => null,
-                'ux_score'       => $this->uxScore($severityCount, count($results) ?: 1),
+                'maturity_score' => $maturity,
+                'ux_score'       => $uxScore,
                 'html_path'      => $htmlPath,
                 'json_path'      => $jsonPath,
             ]);
@@ -142,32 +150,20 @@ class SessionReportBuilder
     }
 
     /**
-     * A smoke session crosses hosts owned by different repositories, so the pack
-     * header must not claim a single one. The worker resolves ownership per URL;
-     * here we only read back the "- Repository:" lines it already wrote, keeping
-     * the URL -> repository mapping in one place.
+     * CursorHandoff reads a decoded 'evidence' array, not the raw evidence_json
+     * column text every smoke_ux_issues/smoke_feature_gaps row carries.
      *
-     * @param string[] $promptParts
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
      */
-    private function promptPackOwnershipHeader(array $promptParts): string
+    private function decodeEvidenceRows(array $rows): array
     {
-        $repos = [];
-        foreach ($promptParts as $prompt) {
-            if (preg_match_all('/^\s*-\s*Repository:\s*(\S.*?)\s*$/m', (string) $prompt, $matches) > 0) {
-                foreach ($matches[1] as $repo) {
-                    $repos[$repo] = true;
-                }
-            }
+        foreach ($rows as &$row) {
+            $decoded = json_decode((string) ($row['evidence_json'] ?? ''), true);
+            $row['evidence'] = is_array($decoded) ? $decoded : [];
         }
-        if ($repos === []) {
-            return "Owner repository is stated per prompt and must be confirmed before changing code.\n"
-                . 'Do not apply changes outside the repository named in the prompt.';
-        }
-        $names = array_keys($repos);
-        sort($names);
-
-        return 'Owner repositories in this run: ' . implode(', ', $names) . ".\n"
-            . 'Each prompt names the repository that owns the change; do not apply changes outside the repository named in the prompt.';
+        unset($row);
+        return $rows;
     }
 
     private function buildScreenshotCards(array $results, string $reportsDir, ReportArtifactResolver $resolver): array
@@ -304,17 +300,6 @@ class SessionReportBuilder
         return trim($s, '-') ?: 'session';
     }
 
-    private function uxScore(array $severityCount, int $denominator): float
-    {
-        $weights = ['critical' => 5, 'high' => 3, 'medium' => 1.5, 'low' => 0.5, 'suggestion' => 0.1];
-        $penalty = 0.0;
-        foreach ($severityCount as $k => $v) {
-            $penalty += ($weights[$k] ?? 0) * (int) $v;
-        }
-        $score = max(0.0, 100.0 - ($penalty * 100.0 / max(1.0, $denominator * 5.0)));
-        return round($score, 2);
-    }
-
     private function insertReport(array $row): int
     {
         $db = Database::connect();
@@ -338,7 +323,7 @@ table{width:100%;border-collapse:collapse;margin-top:8px} th,td{border:1px solid
 <h1>{{run_code}} - Final Consolidated Report</h1>
 <p><strong>Product:</strong> {{product_name}} &nbsp; <strong>Environment:</strong> {{environment}}<br>
 <strong>Sessions:</strong> {{sessions_total}} (done {{sessions_done}}, failed {{sessions_failed}})<br>
-<strong>Maturity Score:</strong> {{maturity_score}}/100 &nbsp; <strong>UX Score:</strong> {{ux_score}}/100</p>
+<strong>Maturity Score:</strong> {{maturity_label}} &nbsp; <strong>UX Score:</strong> {{ux_score}}/100</p>
 
 <h2>Summary cards</h2><div class="grid">
 <div class="card"><div>Screens Observed</div><div class="v">{{totals.screens}}</div></div>
@@ -370,7 +355,8 @@ img{max-width:300px;border:1px solid #e5e7eb;border-radius:6px;margin:6px}pre{wh
 </style></head><body>
 <h1>{{run_code}} - {{session_name}}</h1>
 <p><strong>Product:</strong> {{product_name}} &nbsp; <strong>Env:</strong> {{environment}} &nbsp; <strong>Status:</strong> {{status}}<br>
-<strong>Menu path:</strong> {{menu_path}}</p>
+<strong>Menu path:</strong> {{menu_path}}<br>
+<strong>Maturity Score:</strong> {{maturity_label}} &nbsp; <strong>UX Score:</strong> {{ux_score}}/100</p>
 
 <div class="grid">
 <div class="card"><div>Screens Observed</div><div class="v">{{screens_observed}}</div></div>

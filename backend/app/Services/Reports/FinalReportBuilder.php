@@ -121,6 +121,18 @@ class FinalReportBuilder
             static fn (array $row): bool => trim((string) ($row['developer_prompt'] ?? '')) !== '',
         ));
 
+        // The master prompt covers every finding in the run (not just the quick-wins
+        // subset above), grouped by how much cursorHandoff trusts its own detection.
+        $allUxForMaster = $db->table('smoke_ux_issues')
+            ->where('run_id', $runId)
+            ->orderBy("CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END", 'ASC', false)
+            ->get()->getResultArray();
+        $allGapsForMaster = $db->table('smoke_feature_gaps')->where('run_id', $runId)->get()->getResultArray();
+        $allInventoryLabels = array_values(array_filter(array_column(
+            $db->table('smoke_ui_inventory')->select('DISTINCT label')->where('run_id', $runId)->where("label <> ''")->limit(2000)->get()->getResultArray(),
+            'label',
+        )));
+
         // Per-session metrics
         $perSession = [];
         foreach ($sessions as $s) {
@@ -137,7 +149,8 @@ class FinalReportBuilder
             ];
         }
 
-        $maturity = $this->maturityScore($severityCount, $totals);
+        $gapRows = $db->table('smoke_feature_gaps')->select('severity, mode, observed')->where('run_id', $runId)->get()->getResultArray();
+        $maturity = MaturityScore::forScope($severityCount, $gapRows, (int) $totals['screens']);
         $uxAvg = count($perSession) > 0 ? round(array_sum(array_column($perSession, 'ux_score')) / count($perSession), 2) : 0;
 
         $payload = [
@@ -151,6 +164,7 @@ class FinalReportBuilder
             'totals'           => $totals,
             'severity_summary' => $severityCount,
             'maturity_score'   => $maturity,
+            'maturity_label'   => MaturityScore::label($maturity),
             'ux_score'         => $uxAvg,
             'sessions'         => $perSession,
             'quick_wins'       => $quickWins,
@@ -170,13 +184,19 @@ class FinalReportBuilder
         $dir = $resolver->ensureDir($reportsDir);
         $jsonPath = $dir . '/report.json';
         $htmlPath = $dir . '/index.html';
-        $cursorPromptsPath = $dir . '/cursor-prompts.md';
-        $cursorPrompts = '# Quick wins for Cursor: ' . $run['run_code'] . "\n\n"
-            . implode("\n\n---\n\n", array_map(
-                static fn (array $row): string => (string) $row['developer_prompt'],
-                $cursorQuickWins,
-            )) . "\n";
+        $cursorPromptsPath = $dir . '/cursor-master-prompt.md';
+        $cursorPrompts = CursorHandoff::assembleMasterPrompt(
+            [
+                'run_code'     => $run['run_code'],
+                'product_name' => $run['product_name'],
+                'environment'  => $run['environment'],
+            ],
+            $this->decodeEvidenceRows($allUxForMaster),
+            $this->decodeEvidenceRows($allGapsForMaster),
+            $allInventoryLabels,
+        );
         $payload['cursor_prompts_path'] = $cursorPromptsPath;
+        $payload['cursor_prompts'] = $cursorPrompts;
         file_put_contents($jsonPath, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
         file_put_contents($cursorPromptsPath, $cursorPrompts);
 
@@ -206,17 +226,21 @@ class FinalReportBuilder
         return ['report_id' => $reportId, 'html_path' => $htmlPath, 'json_path' => $jsonPath, 'cursor_prompts_path' => $cursorPromptsPath];
     }
 
-    private function maturityScore(array $severity, array $totals): float
+    /**
+     * CursorHandoff reads a decoded 'evidence' array, not the raw evidence_json
+     * column text every smoke_ux_issues/smoke_feature_gaps row carries.
+     *
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
+    private function decodeEvidenceRows(array $rows): array
     {
-        $screens = max(1, (int) $totals['screens']);
-        $weighted = 5 * (int) $severity['critical']
-                  + 3 * (int) $severity['high']
-                  + 1.5 * (int) $severity['medium']
-                  + 0.5 * (int) $severity['low']
-                  + 0.1 * (int) $severity['suggestion'];
-        $gapPenalty = (int) $totals['gaps'];
-        $score = 100 - ($weighted * 100 / ($screens * 5)) - ($gapPenalty * 0.5);
-        return round(max(0, min(100, $score)), 2);
+        foreach ($rows as &$row) {
+            $decoded = json_decode((string) ($row['evidence_json'] ?? ''), true);
+            $row['evidence'] = is_array($decoded) ? $decoded : [];
+        }
+        unset($row);
+        return $rows;
     }
 
     private function buildScreenshotCards(array $results, string $reportsDir, ReportArtifactResolver $resolver): array

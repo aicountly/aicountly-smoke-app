@@ -617,10 +617,19 @@ class BrainEnsemble
             || trim((string) ($output['reasoning'] ?? '')) === '') {
             return false;
         }
-        $allowed = ['click', 'type', 'select', 'press', 'scroll', 'navigate', 'wait', 'done', 'blocked', 'ask_operator'];
+        $allowed = [
+            'click', 'type', 'select', 'fill_form', 'press', 'scroll',
+            'navigate', 'wait', 'done', 'blocked', 'ask_operator',
+        ];
         $type = (string) ($output['action']['type'] ?? '');
         if (! in_array($type, $allowed, true)) {
             return false;
+        }
+        // fill_form carries a list of fields instead of a single mark; the marks
+        // inside it are validated worker-side, where the screen they refer to is.
+        if ($type === 'fill_form') {
+            $fields = $output['action']['fields'] ?? null;
+            return is_array($fields) && $fields !== [];
         }
         if (in_array($type, ['click', 'type', 'select'], true)
             && (int) ($output['action']['mark'] ?? 0) <= 0) {

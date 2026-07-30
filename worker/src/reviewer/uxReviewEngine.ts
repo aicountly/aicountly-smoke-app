@@ -21,6 +21,16 @@ const severityRank: Record<Severity, number> = {
   suggestion: 0, low: 1, medium: 2, high: 3, critical: 4,
 };
 
+/** Controls that could plausibly resolve a fallback state rather than navigate past it. */
+const EMPTY_STATE_CTA_REGEX =
+  /\b(add|create|new|import|upload|select|choose|switch|invite|connect|get started|browse)\b/i;
+
+/** A shared label that is a form-field placeholder, not distinct visible copy some human chose to repeat. */
+const PLACEHOLDER_LABEL_REGEX = /^(—|-|--)?\s*(select|choose)\s*(—|-|--)?$/i;
+
+/** A console error whose text is a browser-generated "resource failed to load" notice for a 404, not a script exception. */
+const RESOURCE_404_CONSOLE_REGEX = /fail(?:ed)?\s+to\s+load\s+resource.*\b404\b|\b404\b.*\bnot\s+found\b/i;
+
 /** Collapses repeated cross-screen heuristics while preserving screen evidence. */
 export function dedupeUxIssues(issues: UxIssue[]): UxIssue[] {
   const byFinding = new Map<string, UxIssue>();
@@ -97,6 +107,36 @@ export function reviewPage(args: {
         { url: meta.url }));
     }
   }
+  // A fallback state is what the product shows instead of the screen the user
+  // asked for, so it is the moment a run is most likely to lose its way — and
+  // until now nothing consumed meta.empty_state, so those screens reached no
+  // report at all. The state itself is not a defect; one whose way out is absent,
+  // or sitting somewhere other than the message explaining it, is.
+  if (meta.is_authenticated_shell && meta.empty_state) {
+    const copy = (meta.empty_state_text ?? '').trim();
+    const quoted = copy ? ` ("${copy}")` : '';
+    const resolvers = inventory.filter((item) =>
+      (item.kind === 'button' || item.kind === 'menu') && EMPTY_STATE_CTA_REGEX.test(item.label));
+    if (!resolvers.length) {
+      issues.push(mk('empty_state', 'medium', 'Fallback state offers no way forward',
+        `This screen stopped at a fallback state${quoted} and exposes no visible control that would resolve it.`,
+        'Give every empty/fallback state a primary action that resolves it, next to the copy that explains it.',
+        'Add a visible primary call-to-action to the empty state on this screen, beside its explanatory copy.',
+        { url: meta.url, empty_state_text: copy }));
+    } else {
+      issues.push(mk('empty_state', 'low', 'Fallback state resolved only by controls outside it',
+        `This screen stopped at a fallback state${quoted}. The controls that could resolve it `
+        + `(${resolvers.slice(0, 3).map((item) => `"${item.label.slice(0, 60)}"`).join(', ')}) `
+        + 'sit elsewhere on the screen rather than in the message itself.',
+        'Repeat the resolving action inside the empty-state block so the next step is where the user is already looking.',
+        'Render the resolving call-to-action inside the empty-state block on this screen, not only in the shell chrome.',
+        {
+          url: meta.url,
+          empty_state_text: copy,
+          candidate_actions: resolvers.slice(0, 5).map((item) => item.label),
+        }));
+    }
+  }
   if (meta.tables > 0 && !meta.has_export) {
     issues.push(mk('reports', 'medium', 'Export option missing on a screen with a table',
       'Tables present but no Export action visible.',
@@ -134,11 +174,23 @@ export function reviewPage(args: {
   }
   for (const [label, count] of Object.entries(labelCounts)) {
     if (count > 2 && label.length >= 3) {
-      issues.push(mk('layout', 'low', `Duplicate button label "${label}"`,
-        `${count} visible buttons share the label "${label}".`,
-        'Disambiguate via icon + label or context-specific copy.',
-        `Rename the duplicate "${label}" buttons on this screen so each conveys a distinct action.`,
-        { count }));
+      if (PLACEHOLDER_LABEL_REGEX.test(label)) {
+        // A shared placeholder like "— select —" is the visible copy for
+        // several distinct per-field controls by design; renaming the on-screen
+        // text would just make every field say something different for no
+        // reason. The actual ambiguity is for assistive tech, not sighted users.
+        issues.push(mk('layout', 'low', `Duplicate button label "${label}"`,
+          `${count} visible buttons share the placeholder-style label "${label}".`,
+          'Give each field-level control its own accessible name (aria-label / aria-labelledby pointing at the adjacent field label); keep the shared visible placeholder text.',
+          `Add a distinct aria-label (or aria-labelledby referencing the adjacent field label) to each "${label}" control on this screen. Do not change the visible placeholder copy itself.`,
+          { count }));
+      } else {
+        issues.push(mk('layout', 'low', `Duplicate button label "${label}"`,
+          `${count} visible buttons share the label "${label}".`,
+          'Disambiguate via icon + label or context-specific copy.',
+          `Rename the duplicate "${label}" buttons on this screen so each conveys a distinct action.`,
+          { count }));
+      }
     }
   }
   if (meta.old_theme_indicators.length) {
@@ -148,11 +200,22 @@ export function reviewPage(args: {
       'Migrate this page to the modern green-white theme tokens; remove legacy attributes.',
       { indicators: meta.old_theme_indicators, url: meta.url }));
   }
-  if (consoleEvents.some((e) => e.type === 'pageerror' || e.type === 'error')) {
-    issues.push(mk('errors', 'critical', 'JavaScript console errors during navigation',
-      'One or more JavaScript console errors occurred while observing this page.',
-      'Investigate and silence these errors -- they often hide functional regressions.',
-      'Fix the console errors observed on this page; capture stack traces and treat as P1.',
+  const consoleErrors = consoleEvents.filter((e) => e.type === 'pageerror' || e.type === 'error');
+  if (consoleErrors.length) {
+    // A page that fails to load an optional logo/avatar image logs a console
+    // error shaped identically to a script exception; a real JS bug and a
+    // missing asset are not the same severity of problem.
+    const onlyResource404s = consoleErrors.every((e) => e.type !== 'pageerror' && RESOURCE_404_CONSOLE_REGEX.test(e.text));
+    issues.push(mk('errors', onlyResource404s ? 'medium' : 'critical', 'JavaScript console errors during navigation',
+      onlyResource404s
+        ? 'All captured console errors are failed resource loads (404 on an image/asset), not script exceptions.'
+        : 'One or more JavaScript console errors occurred while observing this page.',
+      onlyResource404s
+        ? 'Add a client-side fallback for the missing resource (skip the request, or catch the load error and show a placeholder) instead of treating this as a script bug.'
+        : 'Investigate and silence these errors -- they often hide functional regressions.',
+      onlyResource404s
+        ? 'Add a graceful fallback for the missing resource(s) captured below (e.g. an onerror handler or default image); this is a 404 on an optional asset, not a JavaScript exception.'
+        : 'Fix the console errors observed on this page; capture stack traces and treat as P1.',
       { events: consoleEvents.slice(0, 10) }));
   }
   if (networkEvents.length) {
@@ -162,7 +225,14 @@ export function reviewPage(args: {
       'Investigate the failing API endpoints captured during observation.',
       { sample: networkEvents.slice(0, 10) }));
   }
-  if (!inventory.some((i) => i.kind === 'company_selector') && /book|invoice|gst|hrms|payroll/.test(meta.title.toLowerCase())) {
+  // A pre-login/landing screen has no topbar of its own to carry a company
+  // switcher, so checking for one there is a false positive attributed to the
+  // wrong screen (see is_authenticated_shell above).
+  if (
+    meta.is_authenticated_shell
+    && !inventory.some((i) => i.kind === 'company_selector' || i.kind === 'branch_selector' || i.kind === 'fy_selector')
+    && /book|invoice|gst|hrms|payroll/.test(meta.title.toLowerCase())
+  ) {
     issues.push(mk('multi_tenant', 'low', 'Company / branch / FY selector not detected',
       'For multi-company AICOUNTLY screens we expect a company / branch / FY selector.',
       'Confirm presence in the topbar and add if missing.',

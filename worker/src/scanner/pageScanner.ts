@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { SEARCH_LABEL_PATTERN_SOURCE } from './controlPatterns.js';
 
 export type PageMetadata = {
   url: string;
@@ -23,6 +24,8 @@ export type PageMetadata = {
   file_input_count: number;
   file_accept_mimes: string[];
   empty_state: boolean;
+  /** The fallback/empty-state sentence itself, so a finding can quote the screen. */
+  empty_state_text: string;
   table_overflow: boolean;
   modal_overflow: boolean;
   primary_buttons: number;
@@ -67,6 +70,27 @@ const SCAN_PAGE_JS = `
     }
   }
 
+  // A fallback state is any screen that stops and asks for something before it
+  // can show content. "No records found" was the only shape recognised before,
+  // which missed the commonest one in a multi-company product: a dashboard that
+  // renders nothing because no company, branch or financial year is selected.
+  // Regex literals rather than new RegExp(string): this body is source text sent
+  // to the page, where a string literal would eat the backslashes first.
+  const emptyStatePatterns = [
+    /[^.\\n]{0,60}no\\s+(?:records|data|results|rows|entries)\\b[^.\\n]{0,60}/i,
+    /[^.\\n]{0,60}no\\s+[a-z ]{2,24}\\s+(?:selected|chosen|found|yet|available)\\b[^.\\n]{0,60}/i,
+    /[^.\\n]{0,60}nothing\\s+(?:here|yet|to\\s+show)\\b[^.\\n]{0,60}/i,
+    /[^.\\n]{0,60}select\\s+a\\s+[a-z ]{2,24}\\s+to\\s+[a-z][^.\\n]{0,60}/i,
+  ];
+  let emptyStateText = '';
+  for (const pattern of emptyStatePatterns) {
+    const found = pattern.exec(document.body.innerText || '');
+    if (found) {
+      emptyStateText = found[0].trim().replace(/\\s+/g, ' ').slice(0, 200);
+      break;
+    }
+  }
+
   const moduleEl = document.querySelector('h1, [data-module-name]');
 
   // See PageMetadata.is_authenticated_shell for the rationale: a real app nav
@@ -81,7 +105,15 @@ const SCAN_PAGE_JS = `
   // satisfy (or a stray one falsely fail) the global command-palette check.
   const shellContainer = document.querySelector('header, nav, aside, [role="banner"]');
   const searchScope = shellContainer || document;
-  const hasSearch = Array.from(searchScope.querySelectorAll('input[type="search"], [role="searchbox"], [aria-label*="search" i]')).filter(visible).length > 0;
+  const hasSearchInput = Array.from(searchScope.querySelectorAll('input[type="search"], [role="searchbox"], [aria-label*="search" i]')).filter(visible).length > 0;
+  // A palette/command trigger (e.g. a "Search employees, modules..." button
+  // that opens a modal on click) provides the same capability as a visible
+  // text input but matches none of the selectors above.
+  const searchLabelPattern = /${SEARCH_LABEL_PATTERN_SOURCE}/i;
+  const hasSearchTrigger = Array.from(searchScope.querySelectorAll('button, [role="button"]'))
+    .filter(visible)
+    .some((el) => searchLabelPattern.test((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')));
+  const hasSearch = hasSearchInput || hasSearchTrigger;
 
   return {
     url: location.href,
@@ -98,7 +130,8 @@ const SCAN_PAGE_JS = `
     has_upload: $('input[type="file"]').length > 0 || /\\b(upload|import|attach)\\b/i.test(allText),
     file_input_count: $('input[type="file"]').length,
     file_accept_mimes: $('input[type="file"]').map((el) => el.getAttribute('accept') || '').filter(Boolean),
-    empty_state: /no (records|data|results)|empty|nothing/i.test(allText) && tables.length === 0,
+    empty_state: emptyStateText !== '' && tables.length === 0,
+    empty_state_text: emptyStateText,
     table_overflow: tableOverflow,
     modal_overflow: modalOverflow,
     primary_buttons: $('button, [role="button"]').filter(visible).length,

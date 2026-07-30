@@ -48,7 +48,7 @@
     <strong>Product:</strong> {{product_name}} &nbsp;
     <strong>Environment:</strong> {{environment}} &nbsp;
     <strong>Sessions:</strong> {{sessions_total}} (done {{sessions_done}}, failed {{sessions_failed}})<br>
-    <strong>Maturity Score:</strong> {{maturity_score}}/100 &nbsp;
+    <strong>Maturity Score:</strong> {{maturity_label}} &nbsp;
     <strong>UX Score:</strong> {{ux_score}}/100
   </div>
 
@@ -161,7 +161,9 @@
 
   <details>
     <summary>Implementation prompts (developers)</summary>
-    <p>Critical/high/medium UX findings and in-scope implementation gaps. Artifact: <code>{{cursor_prompts_path}}</code></p>
+    <p>Quick wins shown here are critical/high/medium UX findings and in-scope implementation gaps.
+    The downloadable master prompt covers every finding in the run, grouped by how much it trusts its
+    own detection. Artifact: <code>{{cursor_prompts_path}}</code></p>
     {{#cursor_quick_wins}}<h3>{{title}}{{expected_feature}}</h3><pre>{{developer_prompt}}</pre>{{/cursor_quick_wins}}
     {{^cursor_quick_wins}}<p>No implementation prompts recorded.</p>{{/cursor_quick_wins}}
   </details>

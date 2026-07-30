@@ -114,6 +114,7 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->get('reports/(:num)/html',      'ReportsController::html/$1');
         $routes->get('reports/(:num)/json',      'ReportsController::json/$1');
         $routes->get('reports/(:num)/files',     'ReportsController::files/$1');
+        $routes->get('reports/(:num)/prompt-pack', 'ReportsController::promptPack/$1');
 
         // UI inventory / UX / feature gaps
         $routes->get('runs/(:num)/inventory',    'UiInventoryController::index/$1');

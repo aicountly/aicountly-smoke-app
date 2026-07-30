@@ -1,3 +1,5 @@
+import { api } from './api';
+
 /** Defensive shape for GET /reports/{id}/json — older reports omit many fields. */
 export type ReportJson = {
   severity_summary?: Partial<Record<'critical' | 'high' | 'medium' | 'low' | 'suggestion', number>> | null;
@@ -41,6 +43,19 @@ export type PromptRow = {
   /** Only feature gaps carry a mode; other groups are null. */
   mode: 'validate_first' | 'implement' | null;
 };
+
+/**
+ * A score the backend never computed comes back as null, and rendering that as
+ * 0 makes an unmeasured report look like a failing one. Postgres NUMERIC
+ * arrives as a string, so the value is parsed rather than trusted.
+ */
+export function scoreLabel(value: number | string | null | undefined, digits = 0): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const score = Number(value);
+  return Number.isFinite(score) ? score.toFixed(digits) : '—';
+}
+
+export const UNSCORED_HINT = 'Not scored: this report observed no screens.';
 
 /**
  * The report opens as a normal app route in a new tab rather than a blob URL.
@@ -97,7 +112,19 @@ export function deriveSummary(payload: ReportJson | null): ReportSummary {
   return { critical, high, validateFirst, implement };
 }
 
-/** Session: cursor_prompts string. Final: join cursor_quick_wins developer_prompt rows. */
+/**
+ * The server-rendered master prompt (GET /reports/{id}/prompt-pack): every
+ * finding wrapped in the verify-before-implement contract, grouped by trust,
+ * rebuilt server-side if the stored report predates that format. Prefer this
+ * over extractPromptPack so download/copy/on-disk text cannot diverge; that
+ * function remains only as a client-side fallback when the endpoint fails.
+ */
+export async function fetchMasterPrompt(id: number): Promise<string> {
+  const res = await api.get(`/reports/${id}/prompt-pack`, { responseType: 'text' });
+  return typeof res.data === 'string' ? res.data : String(res.data ?? '');
+}
+
+/** Legacy fallback: session cursor_prompts string, or joined cursor_quick_wins developer_prompt rows. */
 export function extractPromptPack(payload: ReportJson | null): string {
   if (!payload) return '';
   const direct = String(payload.cursor_prompts ?? '').trim();

@@ -13,7 +13,7 @@
     "report": "tsx src/cli/rebuildReport.ts",
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
-    "test": "tsx --test src/agent/*.test.ts src/auth/*.test.ts src/data/*.test.ts src/reporter/*.test.ts src/reviewer/*.test.ts src/fileIo/*.test.ts src/forms/*.test.ts src/nav/*.test.ts src/utils/*.test.ts",
+    "test": "tsx --test src/agent/*.test.ts src/auth/*.test.ts src/data/*.test.ts src/reporter/*.test.ts src/reviewer/*.test.ts src/scanner/*.test.ts src/fileIo/*.test.ts src/forms/*.test.ts src/nav/*.test.ts src/utils/*.test.ts",
     "lint": "eslint src --ext .ts",
     "playwright:install": "playwright install --with-deps chromium"
   },

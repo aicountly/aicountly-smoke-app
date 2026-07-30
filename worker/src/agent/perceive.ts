@@ -82,6 +82,18 @@ export async function signature(page: Page): Promise<PageSignature> {
   };
 }
 
+/**
+ * Rendered text of the page, capped. Used to confirm a value the session typed is
+ * now on screen; deliberately innerText, so a form's own field values (which
+ * innerText does not expose) cannot confirm the save that submitted them.
+ */
+export async function visibleText(page: Page, limit = 30_000): Promise<string> {
+  const text = await page
+    .evaluate<string>(`(() => (document.body && document.body.innerText) || '')()`)
+    .catch(() => '');
+  return text.slice(0, limit);
+}
+
 /** Vertical scroll extent of the page, for deciding whether anything is left to see. */
 export async function scrollExtent(page: Page): Promise<{ y: number; maxY: number; height: number }> {
   return page.evaluate<{ y: number; maxY: number; height: number }>(`(() => {

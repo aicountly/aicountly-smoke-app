@@ -1,6 +1,6 @@
 import type { AgentStepRecord } from './actions.js';
 import type { UxIssue } from '../reviewer/uxReviewEngine.js';
-import { isConstructiveLabel } from '../utils/safeActionGuard.js';
+import { looksLikeSubmitLabel } from './submitLabels.js';
 
 /**
  * Turns evidence the vision agent already gathered (but only ever logged)
@@ -9,12 +9,10 @@ import { isConstructiveLabel } from '../utils/safeActionGuard.js';
  * page-level findings instead of being thrown away.
  */
 
-const SUBMIT_LABEL_REGEX = /\b(create|update|register|generate|insert|post)\b/i;
-
 function isSubmitLikeClick(step: AgentStepRecord): boolean {
   return step.action.type === 'click'
     && step.outcome === 'executed'
-    && (isConstructiveLabel(step.target_label).matched || SUBMIT_LABEL_REGEX.test(step.target_label));
+    && looksLikeSubmitLabel(step.target_label);
 }
 
 function evidenceFor(steps: AgentStepRecord[]): { affected_urls: string[]; screen_titles: string[] } {
@@ -73,7 +71,7 @@ function hasFormatHint(text: string): boolean {
 function detectUnhelpfulValidation(steps: AgentStepRecord[]): UxIssue[] {
   const findings: UxIssue[] = [];
   for (const step of steps) {
-    if (step.action.type !== 'type' && step.action.type !== 'click') continue;
+    if (step.action.type !== 'type' && step.action.type !== 'click' && step.action.type !== 'fill_form') continue;
     const text = step.outcome_observation || '';
     if (!/invalid/i.test(text) || !/format/i.test(text)) continue;
     if (!INVALID_FORMAT_REGEX.test(text)) continue;

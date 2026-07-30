@@ -13,7 +13,7 @@
 import type { Page } from 'playwright';
 import type { UxIssue } from '../reviewer/uxReviewEngine.js';
 import type { MarkDescriptor } from './marks.js';
-import { waitForSettle } from './perceive.js';
+import { captureViewportJpeg, waitForSettle } from './perceive.js';
 
 export type DateProbe = {
   label: string;
@@ -29,6 +29,15 @@ export type DateProbe = {
   read_back: string;
   validation_message: string;
   screenshot?: string;
+};
+
+/**
+ * Lets the agent loop decide which date fields are still worth probing and
+ * collect the results, while the probe itself runs next to the fill it precedes.
+ */
+export type DateProbeSink = {
+  shouldProbe: (key: string) => boolean;
+  record: (probe: DateProbe) => void;
 };
 
 export const DATE_PROBE_CAP = 6;
@@ -114,6 +123,40 @@ export async function probeDateControl(input: {
     probe.accepted_ddmmyyyy = keepsIndianOrder(readout.value);
   }
   return probe;
+}
+
+/**
+ * Runs before the real fill so the field is still untouched, and swallows every
+ * failure: a probe exists to describe the control, never to fail the step.
+ * Shared by the single-field executor and the batch filler, so a form filled ten
+ * fields at a time still raises the same date findings as one filled field by
+ * field.
+ */
+export async function probeDateFieldBeforeFill(input: {
+  page: Page;
+  descriptor: MarkDescriptor;
+  sink: DateProbeSink;
+  screenshotsDir: string;
+  ordinal: number;
+}): Promise<void> {
+  try {
+    if (!isDateishMark(input.descriptor)) return;
+    const key = dateFieldKey(input.page.url(), dateFieldLabel(input.descriptor));
+    if (!input.sink.shouldProbe(key)) return;
+    const probe = await probeDateControl({ page: input.page, mark: input.descriptor });
+    if (!probe) return;
+    // A dedicated file: step screenshots are thinned off disk as the run grows,
+    // and a finding must keep its evidence.
+    const shot = await captureViewportJpeg(
+      input.page,
+      input.screenshotsDir,
+      `date-probe-${String(input.ordinal).padStart(3, '0')}`,
+    ).catch(() => undefined);
+    probe.screenshot = shot?.path;
+    input.sink.record(probe);
+  } catch {
+    // Probing is best-effort.
+  }
 }
 
 /**

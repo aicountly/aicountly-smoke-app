@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildCursorPromptPack,
   buildFeatureGapCursorPrompt,
   buildFeatureGapHumanSummary,
   buildUxCursorPrompt,
@@ -196,4 +197,42 @@ test('human summaries are plain-language checklists distinct from developer prom
   assert.match(buildFeatureGapHumanSummary(gap), /Validate product need/i);
   assert.match(buildFeatureGapHumanSummary(gap), /create a ticket only if approved/i);
   assert.doesNotMatch(buildFeatureGapHumanSummary(gap), /^#/m);
+});
+
+test('a placeholder duplicate-label recommendation asks for an accessible name, not new visible copy', () => {
+  const placeholder = uxIssue(['https://hrms.aicountly.com/employees']);
+  placeholder.title = 'Duplicate button label "— select —"';
+  placeholder.recommendation = 'Give each field-level control its own accessible name (aria-label / aria-labelledby pointing at the adjacent field label); keep the shared visible placeholder text.';
+
+  const prompt = buildUxCursorPrompt(placeholder, context);
+  assert.match(prompt, /accessible name/i);
+  assert.doesNotMatch(prompt, /rename the duplicate/i);
+});
+
+test('master pack: carries the prefix, suffix, and a Detection & disproof block per finding', () => {
+  const pack = buildCursorPromptPack(context, [uxIssue(['https://hrms.aicountly.com/dashboard'])], []);
+  assert.match(pack, /^<!-- smoke:master-prompt v1 -->/);
+  assert.match(pack, /Master Cursor prompt/);
+  assert.match(pack, /## Report back/);
+  assert.match(pack, /## Detection & disproof/);
+});
+
+test('master pack: an errors finding with an /api/manage network failure names both the frontend and the upstream repo', () => {
+  const issue = {
+    category: 'errors',
+    severity: 'high' as const,
+    title: 'Network/API failures detected',
+    description: '1 network failure observed.',
+    recommendation: 'Investigate failing endpoints.',
+    human_summary: '',
+    developer_prompt: '',
+    evidence: {
+      affected_urls: ['https://hrms.aicountly.com/dashboard'],
+      network_events: [{ url: 'https://hrms.aicountly.com/api/manage/user/logo', method: 'GET', status: 404, ok: false }],
+    },
+  };
+  const pack = buildCursorPromptPack(context, [issue], []);
+  assert.match(pack, /- Repository: hrms-react-app/);
+  assert.match(pack, /- Repository: manage-aicountly/);
+  assert.match(pack, /Split the fix/i);
 });
