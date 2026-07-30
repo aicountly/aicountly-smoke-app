@@ -81,9 +81,14 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   // Carry the run's signed-in state (and with it the selected company) into this
   // session, so only the first session of a run pays for a login and a company pick.
   const restoredState = loadStorageState(job);
+  // Indian locale and timezone: a native date input renders in the browser's
+  // locale, so without this a dd/mm/yyyy check would be measuring our own
+  // container rather than the product.
   const context: BrowserContext = await browser.newContext({
     userAgent: config.playwright.userAgent,
     viewport: { width: 1440, height: 900 },
+    locale: 'en-IN',
+    timezoneId: 'Asia/Kolkata',
     acceptDownloads: true,
     ...(restoredState ? { storageState: restoredState } : {}),
   });
@@ -263,6 +268,17 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
           job_id: job.job_id,
           level: 'warn',
           message,
+        }).catch(() => {});
+      },
+      onFinding: (issue) => {
+        allUx.push(issue);
+        void appendLog({
+          run_id: job.run_id,
+          session_id: job.session.id,
+          job_id: job.job_id,
+          level: issue.severity === 'suggestion' ? 'info' : 'warn',
+          message: `Agent finding (${issue.category}, ${issue.severity}): ${issue.title}`,
+          context: { evidence: issue.evidence },
         }).catch(() => {});
       },
     });

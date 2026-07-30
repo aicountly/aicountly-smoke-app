@@ -17,7 +17,9 @@ export type SyntheticDataResult = {
 
 const FORM_SYSTEM = `You generate realistic synthetic QA data for smoke tests of business SaaS apps.
 Prefer industry-standard field values for HRMS/accounting/ERP forms.
-Every free-text value MUST begin with the marker "SMOKE-" (emails may use a smoke. local-part).
+Every free-TEXT value MUST begin with the marker "SMOKE-" (emails may use a smoke. local-part).
+Values a validator reads as a number are given bare, with no marker: phone/mobile/WhatsApp
+numbers, amounts, quantities, PIN codes, dates (dd/mm/yyyy) and times.
 Never invent statutory IDs (GSTIN, PAN, Aadhaar, bank account, IFSC, CIN) — leave those fields out.
 Return JSON only: {"fields":{"Field Label":"SMOKE-value"},"notes":""}`;
 

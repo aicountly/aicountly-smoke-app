@@ -9,8 +9,16 @@ import {
   parseAllowedActions,
   type GuardDecision,
 } from '../utils/safeActionGuard.js';
+import {
+  dateFieldKey,
+  dateFieldLabel,
+  isDateishMark,
+  probeDateControl,
+  type DateProbe,
+} from './dateFieldProbe.js';
 import { markInteractive, unmark, type MarkDescriptor } from './marks.js';
 import { captureViewportJpeg, signature, waitForSettle, type PageSignature } from './perceive.js';
+import { coerceForField } from './valueCoercion.js';
 
 export type AgentAction =
   | { type: 'click'; mark: number }
@@ -54,6 +62,15 @@ export type AgentStepRecord = {
   signature_changed: boolean;
 };
 
+/**
+ * Lets the loop decide which date fields are still worth probing and collect the
+ * results, while the probe itself runs here, next to the fill it precedes.
+ */
+export type DateProbeSink = {
+  shouldProbe: (key: string) => boolean;
+  record: (probe: DateProbe) => void;
+};
+
 export async function executeAction(input: {
   page: Page;
   job: Job;
@@ -61,6 +78,7 @@ export async function executeAction(input: {
   marks: MarkDescriptor[];
   screenshotsDir: string;
   ordinal: number;
+  dateProbe?: DateProbeSink;
 }): Promise<ActionOutcome> {
   const { page, job, action, marks } = input;
   const before = await signature(page);
@@ -80,6 +98,15 @@ export async function executeAction(input: {
       status = 'refused';
       observation = `That control is destructive or disallowed on this tier: ${guard.reason ?? 'blocked by safety guard'}. Choose another action.`;
     } else {
+      if (action.type === 'type' && descriptor && input.dateProbe) {
+        await probeDateField({
+          page,
+          descriptor,
+          sink: input.dateProbe,
+          screenshotsDir: input.screenshotsDir,
+          ordinal: input.ordinal,
+        });
+      }
       try {
         const performed = await perform(page, action, descriptor);
         typedValue = performed.typedValue;
@@ -109,6 +136,37 @@ export async function executeAction(input: {
     target_label: targetLabel,
     typed_value: typedValue,
   };
+}
+
+/**
+ * Runs before the real fill so the field is still untouched, and swallows every
+ * failure: a probe exists to describe the control, never to fail the step.
+ */
+async function probeDateField(input: {
+  page: Page;
+  descriptor: MarkDescriptor;
+  sink: DateProbeSink;
+  screenshotsDir: string;
+  ordinal: number;
+}): Promise<void> {
+  try {
+    if (!isDateishMark(input.descriptor)) return;
+    const key = dateFieldKey(input.page.url(), dateFieldLabel(input.descriptor));
+    if (!input.sink.shouldProbe(key)) return;
+    const probe = await probeDateControl({ page: input.page, mark: input.descriptor });
+    if (!probe) return;
+    // A dedicated file: step screenshots are thinned off disk as the run grows,
+    // and a finding must keep its evidence.
+    const shot = await captureViewportJpeg(
+      input.page,
+      input.screenshotsDir,
+      `date-probe-${String(input.ordinal).padStart(3, '0')}`,
+    ).catch(() => undefined);
+    probe.screenshot = shot?.path;
+    input.sink.record(probe);
+  } catch {
+    // Probing is best-effort.
+  }
 }
 
 function semanticActionName(action: AgentAction, descriptor: MarkDescriptor | undefined): string {
@@ -180,11 +238,8 @@ async function perform(
       break;
     case 'type': {
       const target = page.locator(`[data-smoke-mark="${action.mark}"]`);
-      typedValue = applyMarker(action.text, {
-        type: descriptor?.type,
-        name: descriptor?.name,
-        tag: descriptor?.tag,
-      });
+      const hint = { type: descriptor?.type, name: descriptor?.name, tag: descriptor?.tag };
+      typedValue = applyMarker(coerceForField(action.text, hint), hint);
       await target.fill(typedValue, { timeout: 10_000 });
       if (action.submit) await target.press('Enter');
       break;

@@ -5,9 +5,24 @@ import { BrainUnavailableError, invokeBrain } from '../brain/ensemble.js';
 import { config } from '../config.js';
 import { requestFormValues } from '../data/syntheticData.js';
 import { askOrRecallDecision, type DecisionOption } from '../nav/askDecision.js';
+import type { UxIssue } from '../reviewer/uxReviewEngine.js';
+import { isConstructiveLabel } from '../utils/safeActionGuard.js';
 import { executeAction, type AgentAction, type AgentStepRecord } from './actions.js';
-import { markInteractive, type MarkDescriptor } from './marks.js';
-import { captureViewportJpeg, signature, signatureKey, type PageSignature } from './perceive.js';
+import {
+  buildDateFindings,
+  buildNativeLocaleFinding,
+  dateFieldKey,
+  DATE_PROBE_CAP,
+  type DateProbe,
+} from './dateFieldProbe.js';
+import { countOffscreen, markInteractive, type MarkDescriptor } from './marks.js';
+import {
+  captureViewportJpeg,
+  scrollExtent,
+  signature,
+  signatureKey,
+  type PageSignature,
+} from './perceive.js';
 
 export type AgentLoopResult = {
   status: 'done' | 'blocked' | 'budget' | 'operator';
@@ -31,13 +46,24 @@ Creation mode (required for a successful run):
 - In every module that supports creating records, attempt ONE end-to-end synthetic create:
   open the create/add form, fill every required field (prefer suggested_values when present),
   save/submit, then verify the new record appears in the list before moving on.
-- All free-text values you type MUST begin with "SMOKE-" (emails may use a smoke. local-part).
+- Free-TEXT values you type MUST begin with "SMOKE-" (emails may use a smoke. local-part).
+  Never prefix a value a validator reads as a number: phone/mobile/WhatsApp, amounts,
+  quantities, PIN codes, dates and times are typed bare. Dates may be typed as dd/mm/yyyy.
 - Never fill credential, OTP, captcha, password, GSTIN, PAN, Aadhaar, bank account, IFSC or CIN fields.
 - Prefer not to click irreversible controls (delete, remove, approve, reject, pay, refund, void,
   transfer, send, efile, close period, finalize). If you must use delete or approve, do so ONLY on
   a record this session created itself (identifiable by the SMOKE- marker). Never sign out.
 - Treat safety-guard refusals as expected and route around them — do not retry the same refused control.
 - Bare Cancel / Close / Dismiss / Back may be used freely to clear modals and return from forms.
+
+Reading the elements list:
+- It covers the whole page, not just the visible part. Entries flagged "offscreen":true sit outside
+  the viewport (viewport_offset is pixels above, if negative, or below, if positive) and carry no
+  badge in the screenshot. Clicking one still works: it is scrolled into view first.
+- A control you saw earlier and cannot find now is almost always below the fold, not missing.
+  Scroll to it or click its offscreen mark before concluding the app has no such control.
+- After submitting a form, read the validation messages on screen and fix the named fields rather
+  than resubmitting unchanged.
 
 Explore the requested session scope, create synthetic records where possible, inspect meaningful
 screens (including reports fed by that data), and stop when the goal is covered.
@@ -55,6 +81,7 @@ export async function runAgentLoop(input: {
   screenshotsDir: string;
   onStep?: (step: AgentStepRecord) => Promise<void>;
   onLoopWarning?: (message: string) => Promise<void>;
+  onFinding?: (issue: UxIssue) => void;
 }): Promise<AgentLoopResult> {
   const steps: AgentStepRecord[] = [];
   const recentTriples: string[] = [];
@@ -64,6 +91,26 @@ export async function runAgentLoop(input: {
   let feedback = '';
   const suggestedCache = new Map<string, Record<string, string>>();
   let syntheticDataCalls = 0;
+  const dateProbes: DateProbe[] = [];
+  const probedDateFields = new Set<string>();
+  const dateProbe = {
+    shouldProbe: (key: string) => dateProbes.length < DATE_PROBE_CAP && !probedDateFields.has(key),
+    record: (probe: DateProbe) => {
+      probedDateFields.add(dateFieldKey(probe.url, probe.label));
+      dateProbes.push(probe);
+      for (const issue of buildDateFindings(probe)) input.onFinding?.(issue);
+    },
+  };
+  // The locale note describes the session as a whole, so it is raised once, on
+  // the way out, whichever way the loop ends.
+  const finish = (result: AgentLoopResult): AgentLoopResult => {
+    const nativeNote = buildNativeLocaleFinding(dateProbes);
+    if (nativeNote) input.onFinding?.(nativeNote);
+    return result;
+  };
+  let blockedRefusals = 0;
+  let consecutiveScrolls = 0;
+  let deepestScrollSeen = 0;
   // Retention only thins stored screenshots; it must not cap how many actions the
   // agent may take before the session's own budget is spent.
   const budget = Math.max(1, input.budget);
@@ -95,16 +142,31 @@ export async function runAgentLoop(input: {
       url: step.signature_after.url,
       target: step.target_label,
     }));
+    const scroll = await scrollExtent(input.page);
+    deepestScrollSeen = Math.max(deepestScrollSeen, scroll.y);
+    const submitted = submittedControls(steps);
     const prompt = JSON.stringify({
       goal: input.goal,
       current: { url: current.url, title: current.title },
       elements: marks,
+      viewport: {
+        scroll_y: scroll.y,
+        max_scroll_y: scroll.maxY,
+        height: scroll.height,
+        offscreen_controls: countOffscreen(marks),
+      },
+      // The recent-actions window is short, so successes the agent must not forget
+      // are restated for the whole session.
+      session_facts: submitted.length ? { submit_controls_already_clicked: submitted } : undefined,
       suggested_values: Object.keys(suggestedValues).length ? suggestedValues : undefined,
       recent_actions: history,
       prior_feedback: feedback || undefined,
       budget: { step: ordinal, maximum: budget },
       stuck_warning: stuckWarnings > 0
         ? 'The page/action pattern is repeating without screen change. Choose a materially different action or return blocked.'
+        : undefined,
+      scroll_warning: consecutiveScrolls >= 3
+        ? 'You have scrolled three times in a row without acting. Act on a control now, or say precisely which control is missing.'
         : undefined,
     });
     let response: Awaited<ReturnType<typeof invokeBrain>>;
@@ -132,8 +194,19 @@ export async function runAgentLoop(input: {
       marks,
       screenshotsDir: input.screenshotsDir,
       ordinal,
+      dateProbe: input.onFinding ? dateProbe : undefined,
     });
     const changed = signatureKey(outcome.before) !== signatureKey(outcome.after);
+    // "I cannot find the button" is refutable from what this session already did.
+    // Push back once, then respect the answer so the loop always terminates.
+    const refutation = decision.action.type === 'blocked'
+      ? evaluateBlockedDecision({
+        steps,
+        submitted,
+        scroll: { y: scroll.y, maxY: scroll.maxY, deepestSeen: deepestScrollSeen },
+        refusalsUsed: blockedRefusals,
+      })
+      : null;
     const step: AgentStepRecord = {
       ordinal,
       captured_at: new Date().toISOString(),
@@ -143,8 +216,8 @@ export async function runAgentLoop(input: {
       goal_progress: decision.goal_progress,
       blockers: decision.blockers,
       action: decision.action,
-      outcome: outcome.status,
-      outcome_observation: outcome.observation,
+      outcome: refutation ? 'refused' : outcome.status,
+      outcome_observation: refutation ?? outcome.observation,
       guard: outcome.guard,
       target_label: outcome.target_label,
       typed_value: outcome.typed_value,
@@ -155,7 +228,8 @@ export async function runAgentLoop(input: {
     steps.push(step);
     await thinStepScreenshots(steps, config.stepScreenshotRetention);
     await input.onStep?.(step);
-    feedback = outcome.observation;
+    feedback = step.outcome_observation;
+    consecutiveScrolls = decision.action.type === 'scroll' ? consecutiveScrolls + 1 : 0;
 
     const loop = evaluateLoopDetection({
       action: decision.action,
@@ -175,30 +249,34 @@ export async function runAgentLoop(input: {
         `Loop detection warning ${stuckWarnings}/3: stalled action pattern or unchanged page.`,
       );
       if (stuckWarnings >= 3) {
-        return {
+        return finish({
           status: 'blocked',
           reason: 'Repeated actions or unchanged page after three warnings.',
           steps,
           screenCount: steps.length,
-        };
+        });
       }
     }
 
     if (decision.action.type === 'done') {
-      return { status: 'done', reason: decision.action.reason, steps, screenCount: steps.length };
+      return finish({ status: 'done', reason: decision.action.reason, steps, screenCount: steps.length });
     }
     if (decision.action.type === 'blocked') {
-      return { status: 'blocked', reason: decision.action.reason, steps, screenCount: steps.length };
+      if (!refutation) {
+        return finish({ status: 'blocked', reason: decision.action.reason, steps, screenCount: steps.length });
+      }
+      blockedRefusals += 1;
+      await input.onLoopWarning?.(`Refused a premature blocked: ${refutation}`);
     }
     if (decision.action.type === 'ask_operator') {
       const operator = await escalateToOperator(input, decision.action, outcome.screenshot);
       if (operator === 'abort_session') {
-        return { status: 'operator', reason: decision.action.question, steps, screenCount: steps.length };
+        return finish({ status: 'operator', reason: decision.action.question, steps, screenCount: steps.length });
       }
       feedback = 'Operator requested that the agent continue and try a different route.';
     }
   }
-  return { status: 'budget', reason: `Action budget of ${budget} exhausted.`, steps, screenCount: steps.length };
+  return finish({ status: 'budget', reason: `Action budget of ${budget} exhausted.`, steps, screenCount: steps.length });
 }
 
 /** Exported for unit tests — pure loop-detection state update. */
@@ -241,6 +319,61 @@ export function evaluateLoopDetection(input: {
     priorSignature: input.after,
     warned,
   };
+}
+
+export type SubmittedControl = { mark: number; label: string; step: number };
+
+/**
+ * Labels that commit a form. Wider than the safety guard's constructive
+ * vocabulary, which leaves out create and add on purpose so that an observer
+ * session may still open a create form. Bare "add" stays out here too, because
+ * "Add Employee" opens the form rather than saving it.
+ */
+const COMMITS_FORM = /\b(create|update|register|generate|insert|post)\b/i;
+
+/** Save/create controls this session has already clicked successfully. */
+export function submittedControls(steps: AgentStepRecord[]): SubmittedControl[] {
+  const seen = new Map<string, SubmittedControl>();
+  for (const step of steps) {
+    if (step.action.type !== 'click' || step.outcome !== 'executed') continue;
+    const label = step.target_label;
+    if (!isConstructiveLabel(label).matched && !COMMITS_FORM.test(label)) continue;
+    const key = step.target_label.trim().toLowerCase();
+    if (!seen.has(key)) {
+      seen.set(key, { mark: step.action.mark, label: step.target_label, step: step.ordinal });
+    }
+  }
+  return [...seen.values()];
+}
+
+/**
+ * A reason to send the agent back rather than end the session, or null to accept
+ * the block. Judged on what the session did, never on how the model phrased it:
+ * a model that has already clicked "Create employee master" three times cannot
+ * also be right that no such control exists.
+ */
+export function evaluateBlockedDecision(input: {
+  steps: AgentStepRecord[];
+  submitted: SubmittedControl[];
+  scroll: { y: number; maxY: number; deepestSeen: number };
+  refusalsUsed: number;
+}): string | null {
+  if (input.refusalsUsed >= 1) return null;
+  if (input.submitted.length) {
+    const list = input.submitted
+      .map((control) => `"${control.label}" (mark ${control.mark}, step ${control.step})`)
+      .join(', ');
+    return `This session already clicked ${list} successfully, so that control exists on this screen. `
+      + 'Controls outside the viewport are still listed with offscreen:true and are still clickable. '
+      + 'Scroll to the submit control, read any validation message next to the fields it names, '
+      + 'correct those fields and submit again.';
+  }
+  const unseen = input.scroll.maxY - input.scroll.deepestSeen;
+  if (unseen > 200) {
+    return `About ${unseen}px of this page has never been on screen, and the elements list already `
+      + 'includes what is down there. Scroll down and act on the controls you find before giving up.';
+  }
+  return null;
 }
 
 function isEmptyFillableMark(mark: MarkDescriptor): boolean {

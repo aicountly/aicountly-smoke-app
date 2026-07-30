@@ -1,8 +1,66 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { actionTriple, evaluateLoopDetection, formIdentityKey, parseAgentAction } from './agentLoop.js';
+import {
+  actionTriple,
+  evaluateBlockedDecision,
+  evaluateLoopDetection,
+  formIdentityKey,
+  parseAgentAction,
+  submittedControls,
+} from './agentLoop.js';
+import type { AgentStepRecord } from './actions.js';
 import type { MarkDescriptor } from './marks.js';
 import { signatureKey, type PageSignature } from './perceive.js';
+
+function sig(overrides: Partial<PageSignature> = {}): PageSignature {
+  return {
+    url: 'https://app.test/',
+    title: 'Home',
+    markCount: 2,
+    domHash: 'a',
+    dialogCount: 0,
+    scrollY: 0,
+    ...overrides,
+  };
+}
+
+function mark(overrides: Partial<MarkDescriptor> = {}): MarkDescriptor {
+  return {
+    mark: 1,
+    tag: 'input',
+    role: '',
+    name: 'Field',
+    type: 'text',
+    value: '',
+    checked: null,
+    disabled: false,
+    offscreen: false,
+    viewport_offset: 0,
+    bbox: { x: 0, y: 0, width: 10, height: 10 },
+    ...overrides,
+  };
+}
+
+function step(overrides: Partial<AgentStepRecord> = {}): AgentStepRecord {
+  return {
+    ordinal: 1,
+    captured_at: '2026-07-30T00:00:00.000Z',
+    screenshot: '',
+    observation: '',
+    reasoning: '',
+    goal_progress: '',
+    blockers: [],
+    action: { type: 'click', mark: 28 },
+    outcome: 'executed',
+    outcome_observation: '',
+    guard: { allowed: true },
+    target_label: 'Create employee master',
+    signature_before: sig(),
+    signature_after: sig(),
+    signature_changed: true,
+    ...overrides,
+  };
+}
 
 test('parses Set-of-Marks actions without selectors', () => {
   assert.deepEqual(parseAgentAction({ type: 'click', mark: 7 }), { type: 'click', mark: 7 });
@@ -14,16 +72,19 @@ test('parses Set-of-Marks actions without selectors', () => {
   assert.throws(() => parseAgentAction({ type: 'click', selector: '#save' }), /Invalid Set-of-Marks/);
 });
 
-test('page signature key changes on dialogs and DOM changes', () => {
-  const base = { url: 'https://app.test/', title: 'Home', markCount: 2, domHash: 'a', dialogCount: 0 };
-  assert.notEqual(signatureKey(base), signatureKey({ ...base, dialogCount: 1 }));
-  assert.notEqual(signatureKey(base), signatureKey({ ...base, domHash: 'b' }));
-  assert.equal(signatureKey(base), signatureKey({ ...base }));
+test('page signature key changes on dialogs, DOM changes and scrolling', () => {
+  const base = sig();
+  assert.notEqual(signatureKey(base), signatureKey(sig({ dialogCount: 1 })));
+  assert.notEqual(signatureKey(base), signatureKey(sig({ domHash: 'b' })));
+  // Once offscreen controls are marked, scroll position is the only thing that
+  // moves when the agent scrolls; without it a scroll looks like a no-op.
+  assert.notEqual(signatureKey(base), signatureKey(sig({ scrollY: 800 })));
+  assert.equal(signatureKey(base), signatureKey(sig()));
 });
 
 test('actionTriple keys on DOM signature, not only the URL', () => {
-  const a: PageSignature = { url: 'https://hrms.test/employees', title: 'List', markCount: 4, domHash: 'aaa', dialogCount: 0 };
-  const b: PageSignature = { url: 'https://hrms.test/employees', title: 'Form', markCount: 8, domHash: 'bbb', dialogCount: 0 };
+  const a = sig({ url: 'https://hrms.test/employees', title: 'List', markCount: 4, domHash: 'aaa' });
+  const b = sig({ url: 'https://hrms.test/employees', title: 'Form', markCount: 8, domHash: 'bbb' });
   const action = { type: 'click' as const, mark: 12 };
   assert.notEqual(actionTriple(action, a), actionTriple(action, b));
 });
@@ -31,7 +92,7 @@ test('actionTriple keys on DOM signature, not only the URL', () => {
 test('repeated action that changes the screen is not a loop warning', () => {
   let recentTriples: string[] = [];
   let unchangedCount = 0;
-  let prior: PageSignature = { url: 'https://app.test/', title: 'A', markCount: 1, domHash: '1', dialogCount: 0 };
+  let prior = sig({ title: 'A', markCount: 1, domHash: '1' });
   const action = { type: 'click' as const, mark: 3 };
 
   for (let i = 0; i < 6; i += 1) {
@@ -54,18 +115,12 @@ test('repeated action that changes the screen is not a loop warning', () => {
 });
 
 test('form identity key stays stable as empty fields shrink', () => {
-  const page: PageSignature = {
-    url: 'https://hrms.test/employees/new',
-    title: 'Add Employee',
-    markCount: 5,
-    domHash: 'before',
-    dialogCount: 0,
-  };
+  const page = sig({ url: 'https://hrms.test/employees/new', title: 'Add Employee', markCount: 5, domHash: 'before' });
   const marks = (values: string[]): MarkDescriptor[] => ([
-    { mark: 1, tag: 'input', role: '', name: 'First name', type: 'text', value: values[0] ?? '', checked: null, disabled: false, bbox: { x: 0, y: 0, width: 10, height: 10 } },
-    { mark: 2, tag: 'input', role: '', name: 'Last name', type: 'text', value: values[1] ?? '', checked: null, disabled: false, bbox: { x: 0, y: 0, width: 10, height: 10 } },
-    { mark: 3, tag: 'select', role: '', name: 'Department', type: '', value: values[2] ?? '', checked: null, disabled: false, bbox: { x: 0, y: 0, width: 10, height: 10 } },
-    { mark: 4, tag: 'button', role: 'button', name: 'Save', type: 'submit', value: '', checked: null, disabled: false, bbox: { x: 0, y: 0, width: 10, height: 10 } },
+    mark({ mark: 1, name: 'First name', value: values[0] ?? '' }),
+    mark({ mark: 2, name: 'Last name', value: values[1] ?? '' }),
+    mark({ mark: 3, tag: 'select', name: 'Department', type: '', value: values[2] ?? '' }),
+    mark({ mark: 4, tag: 'button', role: 'button', name: 'Save', type: 'submit' }),
   ]);
   const empty = formIdentityKey(page, marks(['', '', '']));
   const filled = formIdentityKey(
@@ -76,18 +131,18 @@ test('form identity key stays stable as empty fields shrink', () => {
 });
 
 test('five identical stalled actions warn; fewer do not', () => {
-  const sig: PageSignature = { url: 'https://app.test/', title: 'Stuck', markCount: 2, domHash: 'same', dialogCount: 0 };
+  const stuck = sig({ title: 'Stuck', domHash: 'same' });
   const action = { type: 'click' as const, mark: 9 };
   let recentTriples: string[] = [];
   let unchangedCount = 0;
-  let prior = sig;
+  let prior = stuck;
   let warnedAt = 0;
 
   for (let i = 1; i <= 5; i += 1) {
     const next = evaluateLoopDetection({
       action,
-      before: sig,
-      after: sig,
+      before: stuck,
+      after: stuck,
       recentTriples,
       unchangedCount,
       priorSignature: prior,
@@ -99,4 +154,50 @@ test('five identical stalled actions warn; fewer do not', () => {
     if (i < 5) assert.equal(next.warned, false, `should not warn at stall ${i}`);
   }
   assert.equal(warnedAt, 5);
+});
+
+test('only successful clicks on save-style controls count as submitted', () => {
+  const found = submittedControls([
+    step({ ordinal: 19 }),
+    step({ ordinal: 20, target_label: 'Cancel' }),
+    step({ ordinal: 21, outcome: 'refused' }),
+    step({ ordinal: 24 }),
+    step({ ordinal: 25, action: { type: 'type', mark: 21, text: '9876543210' }, target_label: 'Create employee master' }),
+  ]);
+  assert.equal(found.length, 1);
+  assert.deepEqual(found[0], { mark: 28, label: 'Create employee master', step: 19 });
+});
+
+test('blocked is refused once when the session already submitted that control', () => {
+  const steps = [step({ ordinal: 19 })];
+  const submitted = submittedControls(steps);
+  const scroll = { y: 0, maxY: 0, deepestSeen: 0 };
+
+  const first = evaluateBlockedDecision({ steps, submitted, scroll, refusalsUsed: 0 });
+  assert.match(String(first), /Create employee master/);
+  assert.match(String(first), /offscreen/);
+  // Second time the agent insists, the run has to let it go or it never ends.
+  assert.equal(evaluateBlockedDecision({ steps, submitted, scroll, refusalsUsed: 1 }), null);
+});
+
+test('blocked is refused when part of the page was never scrolled into view', () => {
+  const refutation = evaluateBlockedDecision({
+    steps: [],
+    submitted: [],
+    scroll: { y: 0, maxY: 1400, deepestSeen: 0 },
+    refusalsUsed: 0,
+  });
+  assert.match(String(refutation), /1400px/);
+});
+
+test('blocked is accepted when nothing was submitted and the page was fully seen', () => {
+  assert.equal(
+    evaluateBlockedDecision({
+      steps: [],
+      submitted: [],
+      scroll: { y: 900, maxY: 900, deepestSeen: 900 },
+      refusalsUsed: 0,
+    }),
+    null,
+  );
 });
