@@ -2,6 +2,7 @@ import type { Page } from 'playwright';
 import { appendLog, backend, heartbeat, type Job } from '../backend.js';
 import { invokeBrain } from '../brain/ensemble.js';
 import { config } from '../config.js';
+import { autonomousOption } from './autonomousChoice.js';
 
 export const NAV_ACTIONS = [
   'open_company',
@@ -108,12 +109,18 @@ export async function askOrRecallDecision(input: AskDecisionInput): Promise<Deci
   // we take the recommended route and record it, so the run keeps moving and the
   // audit trail still says exactly what was chosen and why.
   if (config.autonomous) {
-    const auto = autonomousOption(proposed);
+    const auto = autonomousOption(input.job.profile.environment, proposed.options, proposed.recommended);
     if (auto) {
+      const passedOver = proposed.recommended && auto.id !== proposed.recommended
+        ? ` (${proposed.recommended} is not permitted on ${input.job.profile.environment})`
+        : '';
       await persistPreAnsweredDecision(input, auto, 'auto').catch(async (error: unknown) => {
         await log(input.job, `Could not audit autonomous decision: ${errorMessage(error)}`, 'warn');
       });
-      await log(input.job, `Decided "${auto.label}" without asking (autonomous mode) for ${input.situationKey}`);
+      await log(
+        input.job,
+        `Decided "${auto.label}" without asking (autonomous mode) for ${input.situationKey}${passedOver}`,
+      );
       return { option: auto, source: 'auto', explicitApproval: true };
     }
     await log(
@@ -215,17 +222,6 @@ async function persistPreAnsweredDecision(
   });
 }
 
-/**
- * The option to take without an operator. Aborting a session is never something
- * the run decides for itself, and neither is anything the safety guard would have
- * asked a human to approve on a live target.
- */
-function autonomousOption(proposed: BrainDecision): DecisionOption | null {
-  const usable = proposed.options.filter((option) => option.action !== 'abort_session');
-  if (usable.length === 0) return null;
-  const recommended = usable.find((option) => option.id === proposed.recommended);
-  return recommended ?? usable[0];
-}
 
 async function recallDecision(job: Job, situationKey: string): Promise<DecisionMemory | null> {
   const response = await backend.get<{ data: DecisionMemory | null }>('/worker/decision-memory', {
@@ -264,6 +260,10 @@ async function proposeDecision(input: AskDecisionInput): Promise<BrainDecision> 
         situation_key: input.situationKey,
         url: input.page.url(),
         options: input.options,
+        // The tier decides which options are even open to us, so a recommendation
+        // made without it tends to name one this target will refuse.
+        product: input.job.run.product_name,
+        environment: input.job.profile.environment,
         ...(input.context ?? {}),
       },
     );

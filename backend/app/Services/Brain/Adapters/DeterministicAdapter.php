@@ -2,6 +2,8 @@
 
 namespace App\Services\Brain\Adapters;
 
+use Config\Environments;
+
 /**
  * Always-available no-AI fallback. Returns a stable, rules-based plan/review
  * so the portal works end-to-end even when no API keys are configured. The
@@ -121,6 +123,7 @@ class DeterministicAdapter extends AbstractAdapter
     private function fallbackDecision(string $task, string $userPrompt, array $options): array
     {
         $context = is_array($options['context'] ?? null) ? $options['context'] : [];
+        $env = (string) ($options['environment'] ?? 'sandbox');
         $hints = strtolower($userPrompt . ' ' . (string) json_encode($context));
         $situationKey = strtolower((string) ($context['situation_key'] ?? ''));
         $questionHint = trim((string) ($context['question'] ?? ''));
@@ -154,8 +157,12 @@ class DeterministicAdapter extends AbstractAdapter
                     ],
                 ],
                 // Prefer creating the smoke company — skipping leaves every later
-                // session on an empty picker and looks like a false green run.
-                'recommended' => 'create_company',
+                // session on an empty picker and looks like a false green run. An
+                // observer-only tier may not create anything, so there recommending
+                // it would only send the run at an action it is about to refuse.
+                'recommended' => Environments::isObserverOnly($env)
+                    ? 'skip_company_scoped_menus'
+                    : 'create_company',
             ];
         }
 

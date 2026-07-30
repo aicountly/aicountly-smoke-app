@@ -290,10 +290,16 @@ own validation text, then screenshotted and reported.
 
 When the run meets a situation it cannot resolve — an empty company picker, a
 click it cannot land — it takes the recommended option and records it in
-`smoke_run_decisions` with `source=auto`, shown as **Decided by the run**. It
-never chooses to abort a session, and it may only create a company on its own in
-`sandbox`, `gh_staging` or `production_full_access`; elsewhere that still needs a
-human or a remembered human choice.
+`smoke_run_decisions` with `source=auto`, shown as **Decided by the run**.
+
+It only ever chooses an option this target permits. Ending a session is always a
+human call, and creating a company on its own needs `sandbox`, `gh_staging` or
+`production_full_access`. Where an option is closed to it, the run falls back
+through dismiss → navigate → open → skip → rescan rather than attempting it: on
+an observer-only tier an empty picker therefore skips company-scoped navigation
+and the session still completes, instead of failing on a guard it was never
+going to pass. A human, or a remembered human choice, may still create a company
+on any tier.
 
 Set `SMOKE_AUTONOMOUS=false` to go back to parking the job and waiting up to 30
 minutes for an operator on every unexpected screen.
