@@ -1,4 +1,4 @@
-import { invokeBrain } from '../brain/ensemble.js';
+import { BrainUnavailableError, invokeBrain } from '../brain/ensemble.js';
 import type { FeatureGap } from './featureGapEngine.js';
 
 /**
@@ -34,6 +34,7 @@ JSON in the same schema you receive.`;
     if (final && Array.isArray(final.feature_gaps) && final.feature_gaps.length > 0) return final.feature_gaps;
     return gaps;
   } catch (e) {
+    if (e instanceof BrainUnavailableError) throw e;
     console.warn('[smoke-worker] competitor enrichment skipped:', (e as Error).message);
     return gaps;
   }

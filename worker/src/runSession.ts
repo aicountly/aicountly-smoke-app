@@ -6,8 +6,8 @@ import {
   appendLog,
   type Job,
 } from './backend.js';
-import { login } from './auth/login.js';
-import { scanMenus, type MenuItem } from './scanner/menuScanner.js';
+import { isSignedIn, login } from './auth/login.js';
+import { loadStorageState, saveStorageState } from './auth/sessionState.js';
 import { scanPage } from './scanner/pageScanner.js';
 import { collectInventory } from './scanner/uiInventory.js';
 import { captureScreenshot } from './scanner/screenshotCapture.js';
@@ -26,19 +26,17 @@ import {
   buildUxHumanSummary,
   type CursorPromptContext,
 } from './reporter/cursorPromptBuilder.js';
-import { evaluateClick, isRestrictedLabel, parseAllowedActions } from './utils/safeActionGuard.js';
+import { parseAllowedActions } from './utils/safeActionGuard.js';
 import { evaluateHostGuard } from './utils/hostGuard.js';
-import { dismissOverlays } from './utils/dismissOverlays.js';
-import { askOrRecallDecision, type DecisionOption } from './nav/askDecision.js';
-import { performNavAction } from './nav/performNavAction.js';
-import { isEmptyCompanyPicker, resolveAppContext } from './nav/resolveAppContext.js';
-import { hasBlockingForm, resolveBlockingForm } from './forms/formEngine.js';
+import { isOnCompanyPicker } from './nav/companyCards.js';
 import type { ConsoleEvent } from './scanner/consoleCapture.js';
 import type { NetworkEvent } from './scanner/networkCapture.js';
 import { runFileIoScenarios, shouldRunFileIoSession } from './fileIo/fileIoEngine.js';
 import type { FileIoTestResult } from './fileIo/types.js';
-import { computeVisitBudget } from './utils/visitBudget.js';
 import { evaluateSessionCoverage } from './utils/sessionCoverage.js';
+import { BrainUnavailableError, brainHealth } from './brain/ensemble.js';
+import { runAgentLoop } from './agent/agentLoop.js';
+import type { AgentStepRecord } from './agent/actions.js';
 
 const browserMap = { chromium, firefox, webkit } as const;
 
@@ -68,15 +66,25 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     : path.resolve(config.repoRoot, job.run.reports_dir);
   const screenshotsDir = path.join(reportsDir, 'screenshots');
   const allowedActions = parseAllowedActions(job.session.allowed_actions_json);
+  const health = await brainHealth().catch((error: unknown) => {
+    throw new BrainUnavailableError('health', error instanceof Error ? error.message : String(error));
+  });
+  if (!health.vision_available) {
+    throw new BrainUnavailableError('none', 'No configured vision-capable provider.');
+  }
 
   const browser: Browser = await browserMap[config.playwright.browser].launch({
     headless: config.playwright.headless,
     slowMo: config.playwright.slowMo,
   });
+  // Carry the run's signed-in state (and with it the selected company) into this
+  // session, so only the first session of a run pays for a login and a company pick.
+  const restoredState = loadStorageState(job);
   const context: BrowserContext = await browser.newContext({
     userAgent: config.playwright.userAgent,
     viewport: { width: 1440, height: 900 },
     acceptDownloads: true,
+    ...(restoredState ? { storageState: restoredState } : {}),
   });
   // tsx/esbuild keepNames injects __name() into serialized page.evaluate fns;
   // polyfill it in the browser so any remaining function-form evaluates don't crash.
@@ -99,6 +107,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
   let inventoryCount = 0;
   let fileIoResults: FileIoTestResult[] = [];
   let estimatedScreens = 0;
+  let agentSteps: AgentStepRecord[] = [];
 
   const ctx: ObserveCtx = {
     job,
@@ -127,38 +136,56 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       message: `Launching browser (${config.playwright.browser}, headless=${config.playwright.headless})`,
     }).catch(() => {});
 
-    // Action 1: open login page and capture it
-    await page.goto(job.profile.login_url, { waitUntil: 'domcontentloaded' });
-    await observeAndPersist(ctx, '01-login-form');
+    // Action 1: enter the app. With restored state that is the product itself;
+    // otherwise it is the login page, captured as the session's first screen.
+    const entryUrl = restoredState
+      ? (job.profile.base_url?.trim() || job.profile.login_url)
+      : job.profile.login_url;
+    await page.goto(entryUrl, { waitUntil: 'domcontentloaded' });
+    const reusedSignIn = restoredState ? await isSignedIn(page) : false;
+    await observeAndPersist(ctx, reusedSignIn ? '01-restored-session' : '01-login-form');
     await appendLog({
       run_id: job.run_id,
       session_id: job.session.id,
       job_id: job.job_id,
-      message: `Action screenshot: login form at ${page.url()}`,
+      message: reusedSignIn
+        ? `Reusing the signed-in session from earlier in this run (no re-login) — at ${page.url()}`
+        : `Action screenshot: login form at ${page.url()}`,
     }).catch(() => {});
 
-    try {
-      await login(page, job.profile);
-    } catch (err) {
-      const errMsg = (err as Error).message;
+    if (!reusedSignIn) {
+      if (restoredState) {
+        await appendLog({
+          run_id: job.run_id,
+          session_id: job.session.id,
+          job_id: job.job_id,
+          level: 'warn',
+          message: 'The signed-in state saved earlier in this run is no longer valid — signing in again.',
+        }).catch(() => {});
+      }
       try {
-        await observeAndPersist(ctx, '01b-login-failed');
-      } catch { /* ignore */ }
+        await login(page, job.profile);
+      } catch (err) {
+        const errMsg = (err as Error).message;
+        try {
+          await observeAndPersist(ctx, '01b-login-failed');
+        } catch { /* ignore */ }
+        await appendLog({
+          run_id: job.run_id,
+          session_id: job.session.id,
+          job_id: job.job_id,
+          level: 'error',
+          message: `Login failed: ${errMsg}`,
+        }).catch(() => {});
+        throw err;
+      }
       await appendLog({
         run_id: job.run_id,
         session_id: job.session.id,
         job_id: job.job_id,
-        level: 'error',
-        message: `Login failed: ${errMsg}`,
+        message: `Login successful — now at ${page.url()}`,
       }).catch(() => {});
-      throw err;
     }
-    await appendLog({
-      run_id: job.run_id,
-      session_id: job.session.id,
-      job_id: job.job_id,
-      message: `Login successful — now at ${page.url()}`,
-    }).catch(() => {});
 
     try {
       await enforceProductHost(page, job);
@@ -185,198 +212,56 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
       message: `Action screenshot: landing page "${(await page.title().catch(() => ''))}" @ ${page.url()}`,
     }).catch(() => {});
 
-    const appContext = await resolveAppContext(page, job, { screenshotsDir });
-    if (appContext.navigated || appContext.rescan) {
-      await sleep(500);
-      await observeAndPersist(ctx, '02b-app-context-resolved');
-    }
-    // Do not walk menus on an empty company workspace — that produces a false
-    // "session completed successfully" with only picker/empty-state screenshots.
-    if (appContext.detected && !appContext.skipped && await isEmptyCompanyPicker(page)) {
-      throw new Error(
-        'Company workspace is still unresolved after app-context resolution; '
-        + 'refusing to walk menus with no company selected.',
-      );
-    }
-
-    // Discover menus and visit session-relevant ones
-    workspaceSkipped = appContext.skipped;
-    let menus = await scanMenus(page);
-    let targets = appContext.skipped ? [] : selectMenuTargets(menus, job);
-    if (!appContext.skipped && targets.length === 0 && menus.length > 0 && isSpecificMenuPath(job.session.menu_path)) {
-      await appendLog({
-        run_id: job.run_id,
-        session_id: job.session.id,
-        job_id: job.job_id,
-        level: 'warn',
-        message: `Menu path "${job.session.menu_path}" matched none of the ${menus.length} menu item(s) at ${page.url()} `
-          + '— not falling back to unrelated menus; trying direct navigation instead.',
-      }).catch(() => {});
-    }
-
-    // If still no menus, try direct URL from menu_path + capture each page
-    let actionOrdinal = 3;
-    if (targets.length === 0 && !appContext.skipped) {
-      const direct = buildDirectUrls(job);
-      for (const url of direct) {
-        try {
-          await appendLog({
-            run_id: job.run_id,
-            session_id: job.session.id,
-            job_id: job.job_id,
-            message: `Action: direct-nav ${url}`,
-          }).catch(() => {});
-          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
-          await sleep(800);
-          const label = `${String(actionOrdinal).padStart(2, '0')}-direct-${slug(url)}`;
-          actionOrdinal++;
-          await observeAndPersist(ctx, label);
-          scopeScreens++;
-          await appendLog({
-            run_id: job.run_id,
-            session_id: job.session.id,
-            job_id: job.job_id,
-            message: `Observed screen after direct-nav @ ${page.url()}`,
-          }).catch(() => {});
-
-          menus = await scanMenus(page);
-          targets = selectMenuTargets(menus, job);
-          await appendLog({
-            run_id: job.run_id,
-            session_id: job.session.id,
-            job_id: job.job_id,
-            message: `After direct-nav rediscovered ${menus.length} menu item(s)`,
-          }).catch(() => {});
-          if (targets.length > 0) break;
-        } catch (err) {
-          await appendLog({
-            run_id: job.run_id,
-            session_id: job.session.id,
-            job_id: job.job_id,
-            level: 'warn',
-            message: `Direct-nav failed (${url}): ${(err as Error).message}`,
-          }).catch(() => {});
-        }
-      }
-    }
-
-    const visitBudget = computeVisitBudget({
-      expectedScreens: job.session.expected_screens,
-      matchedCount: targets.length,
-      safetyMax: config.maxScreensPerSession,
+    estimatedScreens = Math.max(1, job.session.expected_screens);
+    const goal = `Smoke-test session "${job.session.name}". `
+      + `Scope: ${job.session.menu_path || 'whole application'}. `
+      + `${job.session.description || ''}`.trim();
+    const loop = await runAgentLoop({
+      page,
+      job,
+      goal,
+      budget: config.maxScreensPerSession,
+      screenshotsDir,
+      onStep: async (step) => {
+        await observeAndPersist(
+          ctx,
+          `agent-${String(step.ordinal).padStart(3, '0')}-${step.action.type}`,
+          step.screenshot,
+        );
+      },
     });
-    const { visitLimit } = visitBudget;
-    estimatedScreens = visitBudget.estimated;
+    agentSteps = loop.steps;
+    scopeScreens = loop.steps.filter((step) => step.outcome === 'executed').length;
+    workspaceSkipped = loop.status === 'blocked' || loop.status === 'operator';
     await appendLog({
       run_id: job.run_id,
       session_id: job.session.id,
       job_id: job.job_id,
-      message: `Visit budget: estimated_screens=${estimatedScreens}, matched_menus=${targets.length}, visit_limit=${visitLimit} (safety_max=${config.maxScreensPerSession})`,
+      level: loop.status === 'done' ? 'info' : 'warn',
+      message: `Vision agent finished with ${loop.status}: ${loop.reason}`,
+      context: { steps: loop.steps.length, goal },
     }).catch(() => {});
-    if (visitBudget.truncated) {
+
+    if (await isOnCompanyPicker(page)) {
+      workspaceSkipped = true;
+      scopeScreens = 0;
       await appendLog({
         run_id: job.run_id,
         session_id: job.session.id,
         job_id: job.job_id,
         level: 'warn',
-        message: `Matched menus truncated by safety max: matched_menus=${targets.length}, visit_limit=${visitLimit}, safety_max=${config.maxScreensPerSession}`,
+        message: `Vision agent ended while still on the company picker (${page.url()}); reporting no scope coverage.`,
       }).catch(() => {});
-    }
-
-    const attemptedLabels = new Set<string>();
-    while (attemptedLabels.size < visitLimit && !appContext.skipped) {
-      // Every iteration starts from current DOM state; selectors captured before
-      // navigation or overlay changes are intentionally never reused.
-      menus = await scanMenus(page);
-      targets = selectMenuTargets(menus, job);
-      const m = targets.find((item) => !attemptedLabels.has(normalizeLabel(item.label)));
-      if (!m) break;
-      attemptedLabels.add(normalizeLabel(m.label));
-
-      const decision = evaluateClick(m.label, {
-        destructiveAllowed: !!job.session.destructive_allowed,
-        environment: job.profile.environment,
-        allowSafeDemo: !!job.profile.allow_safe_demo,
-        allowedActions,
+    } else {
+      await saveStorageState(context, job).catch(async (err: unknown) => {
+        await appendLog({
+          run_id: job.run_id,
+          session_id: job.session.id,
+          job_id: job.job_id,
+          level: 'warn',
+          message: `Could not save the signed-in state for later sessions: ${(err as Error).message}`,
+        }).catch(() => {});
       });
-      if (!decision.allowed) {
-        await appendLog({
-          run_id: job.run_id,
-          session_id: job.session.id,
-          job_id: job.job_id,
-          level: 'warn',
-          message: `Skipped restricted action "${m.label}" (${decision.reason})`,
-        }).catch(() => {});
-        continue;
-      }
-      try {
-        await appendLog({
-          run_id: job.run_id,
-          session_id: job.session.id,
-          job_id: job.job_id,
-          message: `Action: open menu "${m.label}"`,
-        }).catch(() => {});
-
-        const opened = await openMenuWithRecovery(page, job, m, screenshotsDir);
-        if (!opened) continue;
-        await sleep(500);
-
-        // A screen that greets the run with a dialog cannot be observed until the
-        // dialog is dealt with, so fill it or close it before capturing anything.
-        if (await hasBlockingForm(page)) {
-          await resolveBlockingForm(page, job, {
-            label: m.label,
-            screenshotsDir,
-            entityName: process.env.SMOKE_COMPANY_NAME?.trim() || undefined,
-          });
-          await sleep(500);
-        }
-
-        const label = `${String(actionOrdinal).padStart(2, '0')}-menu-${slug(m.label)}`;
-        actionOrdinal++;
-        await observeAndPersist(ctx, label);
-        scopeScreens++;
-        await appendLog({
-          run_id: job.run_id,
-          session_id: job.session.id,
-          job_id: job.job_id,
-          message: `Observed screen: ${m.label} @ ${page.url()}`,
-        }).catch(() => {});
-      } catch (err) {
-        const errMsg = (err as Error).message;
-        console.warn(`[smoke-worker] menu visit failed (${m.label}):`, errMsg);
-        // Still capture whatever is on screen after a failed click.
-        try {
-          await observeAndPersist(ctx, `${String(actionOrdinal).padStart(2, '0')}-failed-${slug(m.label)}`);
-          actionOrdinal++;
-        } catch { /* ignore */ }
-        await appendLog({
-          run_id: job.run_id,
-          session_id: job.session.id,
-          job_id: job.job_id,
-          level: 'warn',
-          message: `Menu visit failed (${m.label}): ${errMsg}`,
-        }).catch(() => {});
-      }
-    }
-
-    if (targets.length === 0 && isSpecificMenuPath(job.session.menu_path)) {
-      await appendLog({
-        run_id: job.run_id,
-        session_id: job.session.id,
-        job_id: job.job_id,
-        level: 'warn',
-        message: `Session scope "${job.session.menu_path}" was never reached (no matching menu and no working direct URL) `
-          + `on ${page.url()} — reporting no coverage for it instead of substituting unrelated menus.`,
-      }).catch(() => {});
-    } else if (screensObserved <= 2 && targets.length === 0) {
-      await appendLog({
-        run_id: job.run_id,
-        session_id: job.session.id,
-        job_id: job.job_id,
-        level: 'warn',
-        message: 'No navigable menu actions found after login — only login/landing screenshots were captured.',
-      }).catch(() => {});
     }
     if (shouldRunFileIoSession(job.session.name, allowedActions)) {
       fileIoResults = await runFileIoScenarios({
@@ -576,6 +461,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     completedAt,
     fileIoTests: fileIoResults,
     coverage,
+    agentSteps,
   });
 
   await finalizeIfLast(job.run.id);
@@ -591,6 +477,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     ux_issues: uxIssues.length,
     feature_gaps: enriched.length,
     file_io_tests: fileIoResults.length,
+    agent_steps: agentSteps,
   };
 }
 
@@ -647,11 +534,12 @@ async function enforceProductHost(page: Page, job: Job): Promise<void> {
   );
 }
 
-async function observeAndPersist(ctx: ObserveCtx, label: string): Promise<void> {
+async function observeAndPersist(ctx: ObserveCtx, label: string, existingScreenshot?: string): Promise<void> {
   const { job, page, reportsDir, screenshotsDir, allUx, allInventory, screenshots } = ctx;
   const meta = await scanPage(page);
   const inventory = await collectInventory(page);
-  const shotPath = await captureScreenshot(page, screenshotsDir, label || meta.title || 'screen');
+  const shotPath = existingScreenshot
+    || await captureScreenshot(page, screenshotsDir, label || meta.title || 'screen');
   screenshots.push(shotPath);
   ctx.screenUrls.push(meta.url);
   ctx.screenTitles.push(meta.module_name || meta.title || label || 'Untitled screen');
@@ -704,219 +592,6 @@ async function observeAndPersist(ctx: ObserveCtx, label: string): Promise<void> 
   ctx.onScreenObserved();
   ctx.onInventoryRecorded(inventory.length);
   void reportsDir;
-}
-
-function filterMenusForSession(menus: MenuItem[], job: Job): MenuItem[] {
-  const raw = (job.session.menu_path || '').toLowerCase().trim();
-  if (!raw || raw === '/' || raw === '/menu/*' || raw === '*') return menus;
-
-  const token = raw.replace(/\*/g, '').replace(/^\//, '').replace(/\/$/, '');
-  const parts = token.split(/[/_-]+/).filter((p) => p.length > 1);
-
-  const matched = menus.filter((m) => {
-    const hay = `${m.label} ${m.href}`.toLowerCase();
-    if (token && hay.includes(token.replace(/\//g, ''))) return true;
-    return parts.some((p) => hay.includes(p));
-  });
-  return matched;
-}
-
-/** Match menus using session name words (e.g. "Settings & Configuration"). */
-function keywordMenusForSession(menus: MenuItem[], job: Job): MenuItem[] {
-  const words = `${job.session.name} ${job.session.menu_path || ''}`
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((w) => w.length > 2 && !['and', 'the', 'for', 'with', 'menu'].includes(w));
-  if (words.length === 0) return [];
-  return menus.filter((m) => {
-    const hay = `${m.label} ${m.href}`.toLowerCase();
-    return words.some((w) => hay.includes(w));
-  });
-}
-
-/** A session scoped to a concrete area (e.g. "/leave"), not a whole-app sweep. */
-function isSpecificMenuPath(menuPath: string | null | undefined): boolean {
-  const raw = (menuPath || '').trim().toLowerCase();
-  if (!raw) return false;
-  return raw !== '/' && raw !== '*' && raw !== '/menu/*';
-}
-
-function selectMenuTargets(menus: MenuItem[], job: Job): MenuItem[] {
-  let targets = filterMenusForSession(menus, job);
-  if (menus.length > 0 && targets.length === 0) targets = keywordMenusForSession(menus, job);
-  if (menus.length > 0 && targets.length === 0) {
-    // A specific menu_path that matches nothing usually means we are in the
-    // wrong app; visiting every menu would report unrelated coverage as if the
-    // session had succeeded. Leave it empty so direct navigation runs instead.
-    if (isSpecificMenuPath(job.session.menu_path)) return [];
-    targets = menus;
-  }
-
-  const rawPath = (job.session.menu_path || '').trim().toLowerCase();
-  const broadLandingSession = !rawPath || rawPath === '/' || rawPath === '*' || rawPath === '/menu/*'
-    || /login\s*\+?\s*dashboard/i.test(job.session.name);
-  if (!broadLandingSession) return targets;
-
-  return targets.filter((menu) => {
-    const text = `${menu.label} ${menu.href}`;
-    return !/\b(help|support|chat|live\s*chat|logout|log\s*out|sign\s*out)\b/i.test(text);
-  });
-}
-
-async function openMenuWithRecovery(
-  page: Page,
-  job: Job,
-  menu: MenuItem,
-  screenshotsDir: string,
-): Promise<boolean> {
-  try {
-    await clickCurrentMenu(page, menu);
-    return true;
-  } catch (firstError) {
-    const overlayChanged = await dismissOverlays(page);
-    const retried = await findMenuByLabel(page, menu.label);
-    if (retried) {
-      try {
-        await clickCurrentMenu(page, retried);
-        return true;
-      } catch {
-        // Continue to the single guarded force-click below.
-      }
-    }
-
-    const forceTarget = await findMenuByLabel(page, menu.label);
-    if (forceTarget && !forceTarget.href && !isRestrictedLabel(forceTarget.label).matched) {
-      try {
-        await page.locator(forceTarget.selector).first().click({ timeout: 8_000, force: true });
-        await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
-        return true;
-      } catch {
-        // A form in the way is the next thing to try, then a decision.
-      }
-    }
-
-    // Escape only closes a dialog that wants nothing; one that wants data has to be
-    // answered. Doing that here is what keeps an unexpected form from costing the
-    // run an operator round trip.
-    if (await hasBlockingForm(page)) {
-      const attempt = await resolveBlockingForm(page, job, {
-        label: menu.label,
-        screenshotsDir,
-        entityName: process.env.SMOKE_COMPANY_NAME?.trim() || undefined,
-      });
-      if (attempt.cleared) {
-        const afterForm = await findMenuByLabel(page, menu.label);
-        if (afterForm) {
-          try {
-            await clickCurrentMenu(page, afterForm);
-            return true;
-          } catch {
-            // Fall through to the decision below.
-          }
-        }
-      }
-    }
-
-    const situationKey = `click_intercepted:${menu.label}`.slice(0, 191);
-    const decisionOptions: DecisionOption[] = [
-      { id: 'dismiss_and_retry', label: 'Dismiss the overlay and rescan menus', action: 'dismiss_overlay' },
-      { id: 'skip_control', label: `Skip "${menu.label}"`, action: 'skip_target' },
-      { id: 'rescan_menus', label: 'Rescan menus without clicking this target', action: 'rescan_menus' },
-      ...(menu.href
-        ? [{ id: 'navigate_href', label: `Navigate directly to "${menu.label}"`, action: 'navigate_href' as const, href: menu.href }]
-        : []),
-      { id: 'abort_session', label: 'Abort this session', action: 'abort_session' },
-    ];
-    const screenshotPath = await captureScreenshot(
-      page,
-      screenshotsDir,
-      `decision-click-${slug(menu.label)}`,
-    ).catch(() => undefined);
-    const choice = await askOrRecallDecision({
-      job,
-      page,
-      situationKey,
-      question: `"${menu.label}" is still blocked after dismissing overlays and retrying. How should the smoke run proceed?`,
-      options: decisionOptions,
-      context: {
-        target_label: menu.label,
-        target_href: menu.href,
-        click_error: (firstError as Error).message,
-        overlay_changed: overlayChanged,
-      },
-      screenshotPath,
-    });
-    const action = await performNavAction(page, job, choice, { href: menu.href });
-    if (action.skipped) return false;
-    if (action.navigated) return true;
-
-    if (action.rescan) {
-      const finalTarget = await findMenuByLabel(page, menu.label);
-      if (finalTarget) {
-        try {
-          await clickCurrentMenu(page, finalTarget);
-          return true;
-        } catch {
-          return false;
-        }
-      }
-    }
-    return false;
-  }
-}
-
-async function clickCurrentMenu(page: Page, menu: MenuItem): Promise<void> {
-  if (menu.href && /^https?:/i.test(menu.href)) {
-    await page.goto(menu.href, { waitUntil: 'domcontentloaded', timeout: 20_000 });
-  } else {
-    await page.locator(menu.selector).first().click({ timeout: 10_000 });
-    await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
-  }
-}
-
-async function findMenuByLabel(page: Page, label: string): Promise<MenuItem | undefined> {
-  const normalized = normalizeLabel(label);
-  return (await scanMenus(page)).find((item) => normalizeLabel(item.label) === normalized);
-}
-
-function normalizeLabel(value: string): string {
-  return value.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
-function buildDirectUrls(job: Job): string[] {
-  const base = (job.profile.base_url || '').replace(/\/$/, '');
-  if (!base) return [];
-  const raw = (job.session.menu_path || '').trim();
-  const urls: string[] = [];
-  if (raw && raw !== '/' && !raw.includes('*')) {
-    urls.push(base + (raw.startsWith('/') ? raw : `/${raw}`));
-  }
-  const slugName = slug(job.session.name).replace(/-/g, '');
-  const guesses = [
-    job.session.name.toLowerCase().includes('setting') ? '/settings' : '',
-    job.session.name.toLowerCase().includes('sales') ? '/sales' : '',
-    job.session.name.toLowerCase().includes('invoice') ? '/invoices' : '',
-    job.session.name.toLowerCase().includes('purchase') || job.session.name.toLowerCase().includes('bill') ? '/purchase' : '',
-    job.session.name.toLowerCase().includes('bank') ? '/banking' : '',
-    job.session.name.toLowerCase().includes('inventory') ? '/inventory' : '',
-    job.session.name.toLowerCase().includes('gst') ? '/gst' : '',
-    job.session.name.toLowerCase().includes('gst') ? '/gstr' : '',
-    job.session.name.toLowerCase().includes('gst') ? '/returns' : '',
-    job.session.name.toLowerCase().includes('report') ? '/reports' : '',
-    job.session.name.toLowerCase().includes('account') || job.session.name.toLowerCase().includes('journal') ? '/accounts' : '',
-    job.session.name.toLowerCase().includes('dashboard') ? '/dashboard' : '',
-    job.session.name.toLowerCase().includes('dashboard') ? '/home' : '',
-    slugName ? `/${slugName}` : '',
-  ].filter(Boolean);
-  for (const g of guesses) {
-    const u = base + g;
-    if (!urls.includes(u)) urls.push(u);
-  }
-  return urls.slice(0, 6);
-}
-
-function slug(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'screen';
 }
 
 function sleep(ms: number): Promise<void> {

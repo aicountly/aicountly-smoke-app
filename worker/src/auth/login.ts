@@ -308,6 +308,23 @@ async function throwIfOtpOrError(page: Page, prefix = ''): Promise<void> {
   }
 }
 
+/**
+ * Whether a browser context restored from earlier in the run is still signed in.
+ * Deliberately does not require an app shell: the company picker is a legitimate
+ * signed-in landing screen and has no sidebar of its own.
+ */
+export async function isSignedIn(page: Page): Promise<boolean> {
+  if (isLoginUrl(page.url())) return false;
+  const hasPassword = await page.locator('input[type="password"]:visible').first().isVisible().catch(() => false);
+  if (hasPassword) return false;
+  const hasIdentity = await page
+    .locator('input[placeholder*="Email" i]:visible, input[type="email"]:visible')
+    .first()
+    .isVisible()
+    .catch(() => false);
+  return !hasIdentity;
+}
+
 async function assertLoggedIn(page: Page, profile: ProfileRow): Promise<void> {
   await throwIfOtpOrError(page);
 

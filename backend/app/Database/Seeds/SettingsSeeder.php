@@ -42,6 +42,12 @@ class SettingsSeeder extends Seeder
                 'is_secret'   => false,
             ],
             [
+                'key'         => 'brain.vision_providers',
+                'value_json'  => json_encode(['gemini', 'openai']),
+                'description' => 'Ordered vision providers for the Set-of-Marks browser agent.',
+                'is_secret'   => false,
+            ],
+            [
                 'key'         => 'search.provider',
                 'value_json'  => json_encode('perplexity'),
                 'description' => 'Configured market-research search provider.',

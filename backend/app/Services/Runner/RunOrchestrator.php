@@ -191,6 +191,9 @@ class RunOrchestrator
             'status'        => $blocked ? 'blocked' : 'done',
             'completed_at'  => $now,
             'error_message' => $blocked ? mb_substr($reason, 0, 4000) : null,
+            'agent_steps_json' => json_encode(
+                is_array($payload['agent_steps'] ?? null) ? $payload['agent_steps'] : [],
+            ),
             'updated_at'    => $now,
         ]);
         Services::runLog()->append(

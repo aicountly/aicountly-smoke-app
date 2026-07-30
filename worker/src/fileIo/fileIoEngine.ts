@@ -14,6 +14,7 @@ import { compareArtifacts, inspectExportArtifact } from './compareArtifacts.js';
 import { downloadArtifact } from './downloadHelper.js';
 import { materializeFixture, scenariosForProduct } from './fixtureFactory.js';
 import { reviewFileQuality } from './fileQualityBrain.js';
+import { BrainUnavailableError } from '../brain/ensemble.js';
 import type {
   ArtifactComparison,
   FileIoExecutionContext,
@@ -138,7 +139,10 @@ export async function runFileIoScenarios(input: {
         scenario,
         artifactPath: downloadedPath,
         comparison,
-      }).catch(() => undefined);
+      }).catch((error: unknown) => {
+        if (error instanceof BrainUnavailableError) throw error;
+        return undefined;
+      });
       if (quality) {
         result.ai_scores = quality.scores;
         result.ai_verdict = quality.verdict;

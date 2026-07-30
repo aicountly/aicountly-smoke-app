@@ -18,6 +18,11 @@ class PerplexityAdapter extends AbstractAdapter
         return (string) env('PERPLEXITY_API_KEY', '') !== '';
     }
 
+    public function supportsVision(): bool
+    {
+        return false;
+    }
+
     public function complete(string $systemPrompt, string $userPrompt, array $options = []): array
     {
         $key   = (string) env('PERPLEXITY_API_KEY', '');

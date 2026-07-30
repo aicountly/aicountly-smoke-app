@@ -37,6 +37,7 @@ import {
   type PlannedField,
 } from './formFillPlan.js';
 import { proposeFormValues } from './formFillBrain.js';
+import { BrainUnavailableError } from '../brain/ensemble.js';
 
 export type FormAttemptStatus =
   /** No editable form was on screen. */
@@ -91,6 +92,7 @@ export async function resolveBlockingForm(
   try {
     return await attempt(page, job, options);
   } catch (error) {
+    if (error instanceof BrainUnavailableError) throw error;
     const detail = `Form handling failed on "${options.label}": ${errorMessage(error)}`;
     await log(job, detail, 'warn');
     return {
@@ -262,6 +264,7 @@ async function planValues(
     }
     return { plan: applyLastResort(merged), brainAssisted: fromBrain.length > 0 };
   } catch (error) {
+    if (error instanceof BrainUnavailableError) throw error;
     await log(job, `Brain form-fill proposal failed; keeping heuristic values: ${errorMessage(error)}`, 'warn');
     return { plan: applyLastResort(plan), brainAssisted: false };
   }

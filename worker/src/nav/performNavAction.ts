@@ -5,7 +5,7 @@ import { evaluateClick } from '../utils/safeActionGuard.js';
 import { allowsFullAccess } from '../utils/environments.js';
 import { dismissOverlays } from '../utils/dismissOverlays.js';
 import type { DecisionChoice } from './askDecision.js';
-import { findCompanyCards, pickCompany } from './companyCards.js';
+import { findCompanyCards, openCompanyCard, pickCompany, waitUntilOffPicker } from './companyCards.js';
 import {
   bodyMentionsCompany,
   hasEmptyCompanyCopy,
@@ -142,7 +142,9 @@ async function openCompany(page: Page, preferred?: string): Promise<void> {
     if (await exact.count() && await exact.isVisible().catch(() => false)) {
       await exact.click({ timeout: 8_000 });
       await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => {});
-      return;
+      // A click the picker accepts without opening anything is the failure mode here,
+      // so keep going through the row strategies below rather than declaring success.
+      if (await waitUntilOffPicker(page, 8_000)) return;
     }
   }
   const cards = await findCompanyCards(page);
@@ -152,8 +154,13 @@ async function openCompany(page: Page, preferred?: string): Promise<void> {
       : 'No visible company could be opened.');
   }
   const card = pickCompany(cards, preferred);
-  await card.locator.click({ timeout: 8_000 });
-  await page.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => {});
+  const opened = await openCompanyCard(page, card);
+  if (!opened.opened) {
+    throw new Error(
+      `Company "${card.label || preferred || 'first available'}" would not open — every click was accepted `
+      + `and left the picker on screen. Tried: ${opened.attempts.join('; ')}. url=${page.url()}`,
+    );
+  }
 }
 
 const NAME_FIELD_TEXT = /compan|organi[sz]ation|business|firm|entity|name/i;

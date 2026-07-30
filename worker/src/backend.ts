@@ -119,6 +119,10 @@ export async function finalizeRun(runId: number): Promise<void> {
   await backend.post(`/worker/runs/${runId}/finalize`, {});
 }
 
+export async function abortRun(runId: number, reason: string, detail: string): Promise<void> {
+  await backend.post(`/worker/runs/${runId}/abort`, { reason, detail });
+}
+
 export async function appendLog(payload: {
   run_id?: number;
   session_id?: number;

@@ -42,8 +42,10 @@ $routes->group('v1', static function (RouteCollection $routes): void {
         $routes->post('feature-gaps',          'WorkerController::recordFeatureGap');
         $routes->post('reports',               'WorkerController::recordReport');
         $routes->post('runs/(:num)/finalize',  'WorkerController::finalizeRun/$1');
+        $routes->post('runs/(:num)/abort',     'WorkerController::abortRun/$1');
         $routes->post('logs',                 'WorkerController::appendLog');
         $routes->post('brain/invoke',          'WorkerController::brainInvoke');
+        $routes->get('brain/health',            'WorkerController::brainHealth');
         $routes->get('competitors',            'WorkerController::listCompetitors');
         $routes->post('enqueue',               'WorkerController::enqueue');
     });

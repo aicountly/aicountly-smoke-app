@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Services\Brain\BrainUnavailableException;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Database;
 use Config\Services;
@@ -595,6 +596,43 @@ class WorkerController extends BaseController
         return $this->jsonOk(['ok' => true]);
     }
 
+    public function abortRun(int $runId): ResponseInterface
+    {
+        $body = $this->jsonBody();
+        $reason = trim((string) ($body['reason'] ?? 'worker_abort')) ?: 'worker_abort';
+        $detail = trim((string) ($body['detail'] ?? ''));
+        $db = Database::connect();
+        $run = $db->table('smoke_observation_runs')->where('id', $runId)->get()->getRow();
+        if (! $run) {
+            return $this->jsonError('not_found', 'Run not found.', 404);
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $db->transStart();
+        $db->table('smoke_session_jobs')->where('run_id', $runId)
+            ->whereIn('status', ['queued', 'leased', 'awaiting_decision'])
+            ->update(['status' => 'cancelled', 'updated_at' => $now]);
+        $db->table('smoke_run_decisions')->where('run_id', $runId)->where('status', 'pending')
+            ->update(['status' => 'cancelled', 'updated_at' => $now]);
+        $db->table('smoke_observation_runs')->where('id', $runId)->update([
+            'status' => 'cancelled',
+            'completed_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $db->transComplete();
+
+        Services::runLog()->append(
+            $runId,
+            null,
+            null,
+            'worker',
+            'error',
+            'Run aborted by worker: ' . $reason . ($detail !== '' ? ' — ' . mb_substr($detail, 0, 1000) : ''),
+            ['reason' => $reason, 'detail' => mb_substr($detail, 0, 4000)],
+        );
+        return $this->jsonOk(['ok' => true]);
+    }
+
     public function appendLog(): ResponseInterface
     {
         $body = $this->jsonBody();
@@ -624,13 +662,42 @@ class WorkerController extends BaseController
         $sys  = (string) ($body['system_prompt'] ?? '');
         $usr  = (string) ($body['user_prompt']   ?? '');
         $ctx  = (array)  ($body['context']       ?? []);
+        $images = is_array($body['images'] ?? null) ? array_values($body['images']) : [];
 
         if ($sys === '' || $usr === '') {
             return $this->jsonError('invalid_request', 'system_prompt and user_prompt are required.', 400);
         }
 
-        $result = Services::brain()->invoke($task, $sys, $usr, $ctx);
-        return $this->jsonOk(['data' => $result]);
+        try {
+            $result = $images !== []
+                ? Services::brain()->invokeVision($task, $sys, $usr, $images, $ctx)
+                : Services::brain()->invoke($task, $sys, $usr, $ctx);
+            return $this->jsonOk(['data' => $result]);
+        } catch (BrainUnavailableException $error) {
+            return $this->response->setStatusCode(503)->setJSON([
+                'error' => 'brain_unavailable',
+                'provider' => $error->provider,
+                'detail' => $error->responseSnippet ?: $error->getMessage(),
+            ]);
+        }
+    }
+
+    public function brainHealth(): ResponseInterface
+    {
+        $providers = Services::brain()->providerHealth();
+        $available = array_values(array_filter(
+            $providers,
+            static fn (array $provider): bool => $provider['configured']
+                && $provider['vision_capable']
+                && $provider['enabled_for_vision'],
+        ));
+        return $this->jsonOk([
+            'data' => [
+                'providers' => $providers,
+                'vision_available' => $available !== [],
+                'vision_providers' => array_column($available, 'name'),
+            ],
+        ]);
     }
 
     /**

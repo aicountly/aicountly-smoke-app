@@ -20,11 +20,26 @@ class OpenAIAdapter extends AbstractAdapter
         $base  = rtrim((string) env('OPENAI_BASE_URL', 'https://api.openai.com/v1'), '/');
         $model = (string) ($options['model'] ?? env('OPENAI_MODEL', 'gpt-4o-mini'));
 
+        $userContent = $userPrompt;
+        if (! empty($options['images']) && is_array($options['images'])) {
+            $userContent = [['type' => 'text', 'text' => $userPrompt]];
+            foreach ($options['images'] as $image) {
+                if (! is_array($image) || trim((string) ($image['data'] ?? '')) === '') {
+                    continue;
+                }
+                $mime = trim((string) ($image['mime_type'] ?? 'image/jpeg')) ?: 'image/jpeg';
+                $userContent[] = [
+                    'type' => 'image_url',
+                    'image_url' => ['url' => 'data:' . $mime . ';base64,' . $image['data']],
+                ];
+            }
+        }
+
         $payload = [
             'model'    => $model,
             'messages' => [
                 ['role' => 'system', 'content' => $systemPrompt],
-                ['role' => 'user',   'content' => $userPrompt],
+                ['role' => 'user',   'content' => $userContent],
             ],
             'temperature' => $options['temperature'] ?? 0.2,
         ];

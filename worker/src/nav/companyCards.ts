@@ -9,7 +9,12 @@
  */
 
 import type { Locator, Page } from 'playwright';
-import { isCompanyRowText } from './companyPicker.js';
+import {
+  hasEmptyCompanyCopy,
+  isCompanyRowText,
+  looksLikeCompanyPicker,
+  readCompanyCount,
+} from './companyPicker.js';
 
 export type CompanyCard = {
   label: string;
@@ -107,4 +112,104 @@ export function pickCompany(cards: CompanyCard[], preferred?: string): CompanyCa
 export function describeCards(cards: CompanyCard[]): string {
   if (cards.length === 0) return 'none';
   return `${cards.length} via ${cards[0].source} [${cards.map((card) => card.label).join(' | ')}]`;
+}
+
+/**
+ * Whether we are still standing on the company picker.
+ *
+ * A company-scoped route can carry /company in its path, so the URL alone is not
+ * enough: require the screen to be listing or counting companies as well.
+ */
+export async function isOnCompanyPicker(page: Page): Promise<boolean> {
+  const bodyText = await readBodyText(page);
+  if (!looksLikeCompanyPicker(page.url(), bodyText)) return false;
+  if (readCompanyCount(bodyText) !== null) return true;
+  if (hasEmptyCompanyCopy(bodyText)) return true;
+  return (await findCompanyCards(page)).length > 0;
+}
+
+/**
+ * Waits for the app to actually leave the picker, then confirms it stays gone.
+ * A single-page app can accept a click, change nothing, and route straight back.
+ */
+export async function waitUntilOffPicker(page: Page, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!await isOnCompanyPicker(page)) {
+      // Guard against a bounce: no company selected means the app sends us back.
+      await page.waitForTimeout(800);
+      return !await isOnCompanyPicker(page);
+    }
+    if (Date.now() >= deadline) return false;
+    await page.waitForTimeout(400);
+  }
+}
+
+/** Controls that open a company row, deliberately excluding its star toggle. */
+const OPEN_CONTROL_SELECTOR = [
+  'a[href]',
+  'button:not([aria-label*="star" i]):not([title*="star" i]):not([class*="star" i])',
+  '[role="button"]:not([aria-label*="star" i]):not([class*="star" i])',
+].join(', ');
+
+export type OpenCompanyResult = {
+  opened: boolean;
+  strategy?: string;
+  attempts: string[];
+};
+
+/**
+ * Opens a company and proves it happened.
+ *
+ * A picker row is often a focusable div whose handler sits on an inner link, so a
+ * centre click on the row can land on dead space, report success, and leave the
+ * run walking the picker's own chrome for the rest of the session. Every route is
+ * therefore verified, and the next one is tried until the app really moves on.
+ */
+export async function openCompanyCard(
+  page: Page,
+  card: CompanyCard,
+  verifyMs = 8_000,
+): Promise<OpenCompanyResult> {
+  const row = card.locator;
+  const strategies: Array<[string, () => Promise<void>]> = [
+    ['inner link', async () => {
+      await row.locator('a[href]').first().click({ timeout: 5_000 });
+    }],
+    // Aim at the name rather than the row's centre: the star toggle and overflow
+    // menu live at the right edge, and the centre is often padding.
+    ['company name', async () => {
+      await row.click({ timeout: 5_000, position: { x: 90, y: 24 } });
+    }],
+    ['row', async () => {
+      await row.click({ timeout: 5_000 });
+    }],
+    // These pickers tell you so themselves: "Use up/down to navigate, Enter to open".
+    ['focus and Enter', async () => {
+      await row.focus({ timeout: 3_000 });
+      await page.keyboard.press('Enter');
+    }],
+    ['open control', async () => {
+      await row.locator(OPEN_CONTROL_SELECTOR).last().click({ timeout: 5_000 });
+    }],
+  ];
+
+  const attempts: string[] = [];
+  for (const [strategy, attempt] of strategies) {
+    try {
+      await attempt();
+    } catch (error) {
+      attempts.push(`${strategy}: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`);
+      continue;
+    }
+    await page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
+    if (await waitUntilOffPicker(page, verifyMs)) return { opened: true, strategy, attempts };
+    attempts.push(`${strategy}: accepted the click but the picker is still showing`);
+  }
+  return { opened: false, attempts };
+}
+
+async function readBodyText(page: Page): Promise<string> {
+  const text = await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '');
+  return text.slice(0, 30_000);
 }

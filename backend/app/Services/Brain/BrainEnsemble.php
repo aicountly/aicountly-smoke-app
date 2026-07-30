@@ -20,8 +20,8 @@ use Throwable;
  *                asked to deliver the final decision (with its own analysis on
  *                top). Gemini's output is the single source of truth.
  *
- * If no provider is configured, the DeterministicAdapter is used so the rest of
- * the portal stays functional. Provider selection is driven by smoke_settings
+ * Provider failures are hard failures: callers must never silently substitute
+ * deterministic rules for an unavailable or malformed model response.
  * keys `brain.parallel_providers`, `brain.default_arbiter`, and `brain.plan_mode`.
  */
 class BrainEnsemble
@@ -78,17 +78,22 @@ class BrainEnsemble
         }
 
         if ($arbiterResult === null || ($arbiterResult['error'] ?? null)) {
-            $contextOptions['parallel_outputs'] = $parallelResults;
-            $arbiterResult = $this->deterministic->complete($systemPrompt, $userPrompt, $contextOptions);
+            throw $this->unavailableFromResults($parallelResults, $arbiterResult);
         }
         if (in_array($task, ['navigation_wisdom', 'ask_user'], true)
             && ! $this->looksLikeDecision($arbiterResult['output'] ?? null)) {
-            $contextOptions['parallel_outputs'] = $parallelResults;
-            $arbiterResult = $this->deterministic->complete($systemPrompt, $userPrompt, $contextOptions);
+            throw new BrainUnavailableException(
+                (string) ($arbiterResult['provider'] ?? 'unknown'),
+                0,
+                'Provider returned a malformed navigation decision.',
+            );
         }
         if ($task === 'file_quality' && ! $this->looksLikeFileQuality($arbiterResult['output'] ?? null)) {
-            $contextOptions['parallel_outputs'] = $parallelResults;
-            $arbiterResult = $this->deterministic->complete($systemPrompt, $userPrompt, $contextOptions);
+            throw new BrainUnavailableException(
+                (string) ($arbiterResult['provider'] ?? 'unknown'),
+                0,
+                'Provider returned a malformed file-quality response.',
+            );
         }
         if ($task === 'form_fill') {
             $arbiterResult['output'] = $this->sanitizeFormFill($arbiterResult['output'] ?? null, $contextOptions);
@@ -97,7 +102,7 @@ class BrainEnsemble
         return [
             'task'       => $task,
             'final'      => $arbiterResult['output'] ?? $arbiterResult,
-            'arbiter'    => $arbiterResult['provider'] ?? 'deterministic',
+            'arbiter'    => $arbiterResult['provider'] ?? 'unknown',
             'parallel'   => $parallelResults,
             'context'    => $contextOptions,
             'created_at' => date(DATE_ATOM),
@@ -105,7 +110,7 @@ class BrainEnsemble
     }
 
     /**
-     * Single-provider plan path: first configured planner wins, then deterministic.
+     * Single-provider plan path: first configured planner wins.
      * Avoids OpenAI + Perplexity + Gemini serial latency (often 90–180s).
      *
      * @param array<string,mixed> $contextOptions
@@ -143,20 +148,13 @@ class BrainEnsemble
         }
 
         if ($winner === null) {
-            $contextOptions['parallel_outputs'] = $parallelResults;
-            $winner = $this->deterministic->complete($systemPrompt, $userPrompt, $contextOptions);
-            $parallelResults['deterministic'] = [
-                'provider'   => 'deterministic',
-                'model'      => $winner['model'] ?? 'rules-v1',
-                'latency_ms' => $winner['latency_ms'] ?? 0,
-                'error'      => null,
-            ];
+            throw $this->unavailableFromResults($parallelResults);
         }
 
         return [
             'task'       => 'plan',
             'final'      => $winner['output'] ?? $winner,
-            'arbiter'    => $winner['provider'] ?? 'deterministic',
+            'arbiter'    => $winner['provider'] ?? 'unknown',
             'parallel'   => $parallelResults,
             'context'    => $contextOptions + ['plan_mode' => 'fast'],
             'created_at' => date(DATE_ATOM),
@@ -308,13 +306,11 @@ class BrainEnsemble
             if (! $adapter) {
                 continue;
             }
-            if ($adapter instanceof DeterministicAdapter || (method_exists($adapter, 'isConfigured') && $adapter->isConfigured())) {
+            if (! $adapter instanceof DeterministicAdapter
+                && method_exists($adapter, 'isConfigured')
+                && $adapter->isConfigured()) {
                 $configured[] = $adapter;
             }
-        }
-
-        if ($configured === []) {
-            $configured[] = $this->deterministic;
         }
         return $configured;
     }
@@ -368,5 +364,141 @@ class BrainEnsemble
             }
         }
         return ['provider' => 'none', 'error' => 'all parallel members failed', 'output' => null];
+    }
+
+    /**
+     * Vision uses one provider to keep per-step latency bounded. Exactly one
+     * repair request is permitted when the provider returns malformed JSON.
+     *
+     * @param array<int,array{mime_type?:string,data:string}> $images
+     * @param array<string,mixed> $context
+     * @return array<string,mixed>
+     */
+    public function invokeVision(
+        string $task,
+        string $systemPrompt,
+        string $userPrompt,
+        array $images,
+        array $context = [],
+    ): array {
+        $members = $this->resolveMembers(
+            $this->settings->getStringList('brain.vision_providers', ['gemini', 'openai']),
+        );
+        $member = null;
+        foreach ($members as $candidate) {
+            if ($candidate instanceof GeminiAdapter || $candidate instanceof OpenAIAdapter) {
+                $member = $candidate;
+                break;
+            }
+        }
+        if ($member === null) {
+            throw new BrainUnavailableException('none', 0, 'No configured vision-capable provider.');
+        }
+
+        $options = [
+            'expect_json' => true,
+            'temperature' => $context['temperature'] ?? 0.1,
+            'timeout' => min($this->settings->getInt('brain.timeout_seconds', 60), 25),
+            'images' => $images,
+            'context' => $context,
+        ];
+        try {
+            $result = $member->complete($systemPrompt, $userPrompt, $options);
+            if (! $this->looksLikeVisionDecision($result['output'] ?? null)) {
+                $repair = $member->complete(
+                    $systemPrompt,
+                    $userPrompt . "\n\nYour previous response was malformed. Return the required JSON object only.",
+                    $options,
+                );
+                if (! $this->looksLikeVisionDecision($repair['output'] ?? null)) {
+                    throw new BrainUnavailableException(
+                        $member->name(),
+                        0,
+                        'Provider returned malformed JSON after one repair attempt.',
+                    );
+                }
+                $result = $repair;
+            }
+        } catch (BrainUnavailableException $error) {
+            throw $error;
+        } catch (Throwable $error) {
+            throw BrainUnavailableException::fromThrowable($member->name(), $error);
+        }
+
+        return [
+            'task' => $task,
+            'final' => $result['output'],
+            'arbiter' => $member->name(),
+            'parallel' => [$member->name() => $result],
+            'context' => $context,
+            'created_at' => date(DATE_ATOM),
+        ];
+    }
+
+    /** @return array<int,array{name:string,configured:bool,vision_capable:bool,enabled_for_vision:bool}> */
+    public function providerHealth(): array
+    {
+        $enabled = array_map(
+            'strtolower',
+            $this->settings->getStringList('brain.vision_providers', ['gemini', 'openai']),
+        );
+        return [
+            [
+                'name' => 'gemini',
+                'configured' => $this->gemini->isConfigured(),
+                'vision_capable' => true,
+                'enabled_for_vision' => in_array('gemini', $enabled, true),
+            ],
+            [
+                'name' => 'openai',
+                'configured' => $this->openai->isConfigured(),
+                'vision_capable' => true,
+                'enabled_for_vision' => in_array('openai', $enabled, true),
+            ],
+            [
+                'name' => 'perplexity',
+                'configured' => $this->perplexity->isConfigured(),
+                'vision_capable' => false,
+                'enabled_for_vision' => false,
+            ],
+        ];
+    }
+
+    private function unavailableFromResults(array $results, ?array $arbiter = null): BrainUnavailableException
+    {
+        $all = $results;
+        if ($arbiter !== null) {
+            $all[(string) ($arbiter['provider'] ?? 'arbiter')] = $arbiter;
+        }
+        foreach ($all as $provider => $result) {
+            if (! empty($result['error'])) {
+                return BrainUnavailableException::fromThrowable(
+                    (string) $provider,
+                    new \RuntimeException((string) $result['error']),
+                );
+            }
+        }
+        return new BrainUnavailableException('none', 0, 'No configured provider produced a usable response.');
+    }
+
+    /** @param mixed $output */
+    private function looksLikeVisionDecision($output): bool
+    {
+        if (! is_array($output)
+            || ! is_array($output['action'] ?? null)
+            || trim((string) ($output['observation'] ?? '')) === ''
+            || trim((string) ($output['reasoning'] ?? '')) === '') {
+            return false;
+        }
+        $allowed = ['click', 'type', 'select', 'press', 'scroll', 'navigate', 'wait', 'done', 'blocked', 'ask_operator'];
+        $type = (string) ($output['action']['type'] ?? '');
+        if (! in_array($type, $allowed, true)) {
+            return false;
+        }
+        if (in_array($type, ['click', 'type', 'select'], true)
+            && (int) ($output['action']['mark'] ?? 0) <= 0) {
+            return false;
+        }
+        return true;
     }
 }

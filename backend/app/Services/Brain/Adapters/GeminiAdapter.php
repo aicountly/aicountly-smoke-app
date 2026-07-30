@@ -25,6 +25,19 @@ class GeminiAdapter extends AbstractAdapter
 
         $url = $base . '/models/' . urlencode($model) . ':generateContent?key=' . urlencode($key);
 
+        $parts = [['text' => $userPrompt]];
+        foreach ((array) ($options['images'] ?? []) as $image) {
+            if (! is_array($image) || trim((string) ($image['data'] ?? '')) === '') {
+                continue;
+            }
+            $parts[] = [
+                'inline_data' => [
+                    'mime_type' => trim((string) ($image['mime_type'] ?? 'image/jpeg')) ?: 'image/jpeg',
+                    'data' => (string) $image['data'],
+                ],
+            ];
+        }
+
         $payload = [
             'systemInstruction' => [
                 'role'  => 'system',
@@ -32,7 +45,7 @@ class GeminiAdapter extends AbstractAdapter
             ],
             'contents' => [[
                 'role'  => 'user',
-                'parts' => [['text' => $userPrompt]],
+                'parts' => $parts,
             ]],
             'generationConfig' => [
                 'temperature' => $options['temperature'] ?? 0.2,

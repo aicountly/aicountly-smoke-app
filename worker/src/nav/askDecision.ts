@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 import { appendLog, backend, heartbeat, type Job } from '../backend.js';
-import { invokeBrain } from '../brain/ensemble.js';
+import { BrainUnavailableError, invokeBrain } from '../brain/ensemble.js';
 import { config } from '../config.js';
 import { autonomousOption, humanCouldDoMore } from './autonomousChoice.js';
 
@@ -299,6 +299,7 @@ async function proposeDecision(input: AskDecisionInput): Promise<BrainDecision> 
     );
     return normalizeBrainDecision(result.final, fallback);
   } catch (error) {
+    if (error instanceof BrainUnavailableError) throw error;
     await log(input.job, `Brain decision proposal failed; using deterministic options: ${errorMessage(error)}`, 'warn');
     return fallback;
   }

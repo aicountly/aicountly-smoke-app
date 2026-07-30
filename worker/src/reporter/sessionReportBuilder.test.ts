@@ -58,6 +58,7 @@ test('session HTML keeps recommendations readable and links visual evidence', ()
   });
 
   assert.match(html, /Decisions taken/);
+  assert.match(html, /Agent step timeline/);
   assert.match(html, /What to fix now/);
   assert.match(html, /People cannot read the full table/);
   assert.match(html, /<details><summary>Developer prompt<\/summary>/);

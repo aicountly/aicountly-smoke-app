@@ -42,6 +42,7 @@ export const config = {
   pollIntervalMs: int('WORKER_POLL_INTERVAL_MS', 2500),
   leaseSeconds: int('WORKER_LEASE_SECONDS', 600),
   maxScreensPerSession: Math.max(1, int('SMOKE_MAX_SCREENS_PER_SESSION', 40)),
+  stepScreenshotRetention: Math.max(1, int('SMOKE_STEP_SCREENSHOT_RETENTION', 120)),
   /**
    * Decide mid-run situations from the brain's recommendation instead of parking
    * the job and waiting for an operator. Set SMOKE_AUTONOMOUS=false to go back to

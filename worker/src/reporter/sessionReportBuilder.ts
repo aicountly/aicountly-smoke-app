@@ -7,6 +7,7 @@ import type { FeatureGap } from '../reviewer/featureGapEngine.js';
 import { buildCursorPromptPack, type CursorPromptContext } from './cursorPromptBuilder.js';
 import type { FileIoTestResult } from '../fileIo/types.js';
 import type { SessionCoverage } from '../utils/sessionCoverage.js';
+import type { AgentStepRecord } from '../agent/actions.js';
 
 export type SessionDecision = {
   id?: number;
@@ -43,6 +44,7 @@ export type SessionReportInput = {
   startedAt: string;
   completedAt: string;
   coverage?: SessionCoverage;
+  agentSteps?: AgentStepRecord[];
 };
 
 export type ScreenshotCard = {
@@ -104,6 +106,7 @@ export async function buildSessionReport(input: SessionReportInput): Promise<{ h
     feature_gaps: input.featureGaps,
     file_io_tests: input.fileIoTests ?? [],
     decisions: decisionCards,
+    agent_steps: input.agentSteps ?? [],
     severity_summary: sevSummary,
     screenshots: input.screenshots,
     screenshot_data_uris: shotDataUris,
@@ -195,6 +198,7 @@ export function renderSessionHtml(p: {
   feature_gaps: FeatureGap[];
   file_io_tests: FileIoTestResult[];
   decisions?: ReturnType<typeof formatDecisionCard>[];
+  agent_steps?: AgentStepRecord[];
   screenshot_data_uris: string[];
   screenshot_cards?: ScreenshotCard[];
   cursor_prompts: string;
@@ -237,6 +241,8 @@ export function renderSessionHtml(p: {
   const shots = cards.length
     ? cards.map(screenshotCard).join('')
     : `<p style="color:#64748b">No screenshots available (files missing on disk or capture failed).</p>`;
+  const timeline = (p.agent_steps ?? []).map(agentStepCard).join('')
+    || emptyCard('No vision-agent steps were recorded.');
   const uxPrompts = p.ux_issues.map((issue) => `<h4>${esc(issue.title)}</h4><pre><code>${esc(issue.developer_prompt || 'No developer prompt available.')}</code></pre>`).join('')
     || '<p>No UX issue prompts recorded.</p>';
   const gapPrompts = p.feature_gaps.map((gap) => `<h4>${esc(gap.expected_feature)}</h4><pre><code>${esc(gap.developer_prompt || 'No developer prompt available.')}</code></pre>`).join('')
@@ -254,6 +260,9 @@ details{margin-top:14px}summary{cursor:pointer;font-weight:650}pre{white-space:p
 .shot{margin:0;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#fff}
 .shot img{display:block;width:100%;border:1px solid #cbd5e1;border-radius:7px}
 .shot figcaption{margin-top:8px;overflow-wrap:anywhere;font-size:13px}
+.timeline{display:grid;gap:14px}.step{display:grid;grid-template-columns:52px minmax(220px,360px) 1fr;gap:14px;align-items:start}
+.step-no{width:38px;height:38px;border-radius:999px;background:#059669;color:white;display:grid;place-items:center;font-weight:700}
+.step img{width:100%;border:1px solid #cbd5e1;border-radius:7px}.step p{margin:3px 0}
 .blocked{border:1px solid #f0c36d;background:#fdf6e3;border-radius:8px;padding:10px 12px}
 @media(max-width:760px){.grid{grid-template-columns:repeat(2,1fr)}.visual{grid-template-columns:1fr}}</style></head><body><main>
 <h1>${esc(p.run_code)} - ${esc(p.session_name)}</h1>
@@ -272,6 +281,8 @@ ${p.status === 'blocked'
 </div>
 <h2>Decisions taken</h2><p class="muted">Choices made while the worker was blocked, including remembered answers applied automatically.</p>
 <div class="findings">${decisionCards}</div>
+<h2>Agent step timeline</h2><p class="muted">Every action, safety verdict, model rationale, and resulting screen.</p>
+<div class="timeline">${timeline}</div>
 <h2>What to fix now</h2><p class="muted">Start with the plain-language recommendation in each card. Technical prompts are collapsed until needed.</p>
 <h2>UX issues</h2><div class="findings">${issueCards}</div>
 <h2>Feature gaps</h2><div class="findings">${gapCards}</div>
@@ -409,6 +420,25 @@ function screenshotCard(card: ScreenshotCard): string {
 ${card.image_data_uri ? `<img src="${card.image_data_uri}" alt="${esc(card.screen_title)}">` : '<div class="muted">Screenshot file unavailable.</div>'}
 <figcaption><strong>${esc(card.screen_title)}</strong>${card.screen_url ? `<br><code>${esc(card.screen_url)}</code>` : ''}${card.captured_at ? `<br><span class="muted">Captured ${esc(card.captured_at)}</span>` : ''}</figcaption>
 </figure>`;
+}
+
+function agentStepCard(step: AgentStepRecord): string {
+  const image = toDataUri(step.screenshot) ?? '';
+  return `<article class="card step"><div class="step-no">${step.ordinal}</div>
+<div>${image ? `<img src="${image}" alt="Agent step ${step.ordinal}">` : '<div class="muted">Screenshot unavailable.</div>'}</div>
+<div><span class="badge">${esc(step.outcome)}</span><h3>${esc(actionLabel(step.action))}</h3>
+<p><strong>Observed:</strong> ${esc(step.observation)}</p>
+<p><strong>Reasoning:</strong> ${esc(step.reasoning)}</p>
+<p><strong>Outcome:</strong> ${esc(step.outcome_observation)}</p>
+<p><strong>Guard:</strong> ${esc(step.guard.allowed ? 'allowed' : step.guard.reason || 'refused')}</p>
+<p><strong>Goal progress:</strong> ${esc(step.goal_progress)}</p>
+<p class="muted">Signature ${step.signature_changed ? 'changed' : 'unchanged'} · ${esc(step.signature_after.url)}</p></div></article>`;
+}
+
+function actionLabel(action: AgentStepRecord['action']): string {
+  if ('mark' in action) return `${action.type} mark ${action.mark}`;
+  if (action.type === 'navigate') return `${action.type} ${action.url}`;
+  return action.type;
 }
 
 function stringList(value: unknown): string[] {
