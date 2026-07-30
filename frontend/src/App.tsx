@@ -10,6 +10,7 @@ import { RunsPage } from '@/pages/RunsPage';
 import { RunDetailPage } from '@/pages/RunDetailPage';
 import { SessionLogPage } from '@/pages/SessionLogPage';
 import { ReportsPage } from '@/pages/ReportsPage';
+import { ReportViewPage } from '@/pages/ReportViewPage';
 import { FeatureGapMatrixPage } from '@/pages/FeatureGapMatrixPage';
 import { CompetitorBenchmarksPage } from '@/pages/CompetitorBenchmarksPage';
 import { SettingsPage } from '@/pages/SettingsPage';
@@ -55,6 +56,7 @@ export default function App() {
         <Route path="runs/:id" element={<RunDetailPage />} />
         <Route path="runs/:id/sessions/:sessionId" element={<SessionLogPage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="reports/:id/view" element={<ReportViewPage />} />
         <Route path="feature-gap-matrix" element={<FeatureGapMatrixPage />} />
         <Route path="competitor-benchmarks" element={<CompetitorBenchmarksPage />} />
         <Route path="settings" element={<SettingsPage />} />

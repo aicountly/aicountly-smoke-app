@@ -1,9 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { copyText } from '@/lib/clipboard';
-import { openReport } from '@/lib/reports';
+import { CopyButton } from '@/components/CopyButton';
+import { ReportPrompts } from '@/components/ReportPrompts';
+import {
+  asReportJson,
+  deriveSummary,
+  extractPromptPack,
+  openReportTab,
+  reportViewPath,
+} from '@/lib/reports';
 
 type Report = {
   id: number;
@@ -19,95 +26,24 @@ type Report = {
   created_at: string;
 };
 
-/** Defensive shape for GET /reports/{id}/json — older reports omit many fields. */
-type ReportJson = {
-  severity_summary?: Partial<Record<'critical' | 'high' | 'medium' | 'low' | 'suggestion', number>> | null;
-  ux_issues?: Array<{ severity?: string | null }> | null;
-  feature_gaps?: Array<{ mode?: string | null }> | null;
-  missing_features?: Array<{ mode?: string | null }> | null;
-  cursor_prompts?: string | null;
-  cursor_prompts_path?: string | null;
-  cursor_quick_wins?: Array<{ developer_prompt?: string | null }> | null;
-  [key: string]: unknown;
-};
-
-type ReportSummary = {
-  critical: number;
-  high: number;
-  validateFirst: number;
-  implement: number;
-};
-
 function activeFilters(filters: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(filters).filter(([, v]) => v.trim() !== ''));
 }
 
-function asRecord(value: unknown): ReportJson | null {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as ReportJson;
-  }
-  return null;
-}
-
-function countBySeverity(issues: Array<{ severity?: string | null }> | null | undefined, severity: string): number {
-  if (!Array.isArray(issues)) return 0;
-  const needle = severity.toLowerCase();
-  return issues.filter((i) => String(i?.severity ?? '').toLowerCase() === needle).length;
-}
-
-function gapRows(payload: ReportJson | null): Array<{ mode?: string | null }> {
-  if (!payload) return [];
-  if (Array.isArray(payload.feature_gaps)) return payload.feature_gaps;
-  if (Array.isArray(payload.missing_features)) return payload.missing_features;
-  return [];
-}
-
-function deriveSummary(payload: ReportJson | null): ReportSummary {
-  const sev = payload?.severity_summary ?? null;
-  const critical =
-    typeof sev?.critical === 'number' ? sev.critical : countBySeverity(payload?.ux_issues, 'critical');
-  const high =
-    typeof sev?.high === 'number' ? sev.high : countBySeverity(payload?.ux_issues, 'high');
-
-  const gaps = gapRows(payload);
-  let validateFirst = 0;
-  let implement = 0;
-  for (const g of gaps) {
-    const mode = String(g?.mode ?? '').toLowerCase();
-    if (mode === 'validate_first') validateFirst += 1;
-    else if (mode === 'implement') implement += 1;
-  }
-
-  return { critical, high, validateFirst, implement };
-}
-
-/** Session: cursor_prompts string. Final: join cursor_quick_wins developer_prompt rows. */
-function extractPromptPack(payload: ReportJson | null): string {
-  if (!payload) return '';
-  const direct = String(payload.cursor_prompts ?? '').trim();
-  if (direct) return direct;
-
-  const wins = Array.isArray(payload.cursor_quick_wins) ? payload.cursor_quick_wins : [];
-  const parts = wins
-    .map((row) => String(row?.developer_prompt ?? '').trim())
-    .filter(Boolean);
-  return parts.join('\n\n---\n\n');
-}
-
-function openTextBlob(content: string, mime: string, filename: string): void {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const opened = window.open(url, '_blank', 'noopener,noreferrer');
-  if (!opened) {
-    // Popup blocked — fall back to download
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  }
+/**
+ * Saves the text as a file. These used to open a blob URL in a new tab, which
+ * lands on an empty page whenever the browser declines to navigate one; a
+ * download either arrives or reports a failure.
+ */
+function downloadText(content: string, mime: string, filename: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type: mime }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
@@ -118,10 +54,8 @@ export function ReportsPage() {
     const id = searchParams.get('id');
     return id ? Number(id) : null;
   });
-  const [copied, setCopied] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
-  const [openingId, setOpeningId] = useState<number | null>(null);
-  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [paneTab, setPaneTab] = useState<'preview' | 'prompts'>('preview');
 
   const { data, isLoading, isError, error } = useQuery<{ data: Report[] }>({
     queryKey: ['reports', filters],
@@ -143,25 +77,15 @@ export function ReportsPage() {
     setActive(reports[0]?.id ?? null);
   }, [reports, active, searchParams]);
 
-  useEffect(() => {
-    return () => {
-      if (copyResetRef.current) clearTimeout(copyResetRef.current);
-    };
-  }, []);
-
   const selectReport = (id: number) => {
     setActive(id);
     setSearchParams({ id: String(id) }, { replace: true });
-    setCopied(false);
     setActionMsg(null);
   };
 
   const { data: reportJson, isLoading: jsonLoading, isError: jsonError } = useQuery({
     queryKey: ['report-json', active],
-    queryFn: async () => {
-      const res = await api.get(`/reports/${active}/json`);
-      return asRecord(res.data);
-    },
+    queryFn: async () => asReportJson((await api.get(`/reports/${active}/json`)).data),
     enabled: active != null,
   });
 
@@ -176,53 +100,26 @@ export function ReportsPage() {
   const hasPromptPack = promptPack.length > 0;
   const hasJson = reportJson != null;
 
-  async function handleCopyQuickWins() {
-    if (!hasPromptPack) {
-      setActionMsg('No quick-win prompts in this report.');
-      return;
-    }
-    const ok = await copyText(promptPack);
-    if (!ok) {
-      setActionMsg('Could not copy to clipboard.');
-      return;
-    }
-    setCopied(true);
-    setActionMsg(null);
-    if (copyResetRef.current) clearTimeout(copyResetRef.current);
-    copyResetRef.current = setTimeout(() => setCopied(false), 2000);
+  function reportSlug(): string {
+    return String(activeReport?.run_code ?? active ?? 'report').replace(/[^\w.-]+/g, '-');
   }
 
-  function handleOpenPromptPack() {
+  function handleDownloadPromptPack() {
     if (!hasPromptPack) {
       setActionMsg('No prompt pack in this report.');
       return;
     }
-    const slug = String(activeReport?.run_code ?? active ?? 'report').replace(/[^\w.-]+/g, '-');
-    openTextBlob(promptPack, 'text/markdown;charset=utf-8', `${slug}.cursor-prompts.md`);
+    downloadText(promptPack, 'text/markdown;charset=utf-8', `${reportSlug()}.cursor-prompts.md`);
     setActionMsg(null);
   }
 
-  function handleOpenJsonEvidence() {
+  function handleDownloadJsonEvidence() {
     if (!hasJson) {
       setActionMsg('JSON evidence is unavailable for this report.');
       return;
     }
-    const pretty = JSON.stringify(reportJson, null, 2);
-    const slug = String(activeReport?.run_code ?? active ?? 'report').replace(/[^\w.-]+/g, '-');
-    openTextBlob(pretty, 'application/json;charset=utf-8', `${slug}.report.json`);
+    downloadText(JSON.stringify(reportJson, null, 2), 'application/json;charset=utf-8', `${reportSlug()}.report.json`);
     setActionMsg(null);
-  }
-
-  async function handleOpenReport(id: number) {
-    setOpeningId(id);
-    setActionMsg(null);
-    try {
-      await openReport(id, 'html');
-    } catch {
-      setActionMsg('Could not open the full report. The file may be missing on the server.');
-    } finally {
-      setOpeningId(null);
-    }
   }
 
   function sessionLogPath(r: Report): string | null {
@@ -277,14 +174,14 @@ export function ReportsPage() {
                   <span className="badge-info">Maturity {Number(r.maturity_score ?? 0).toFixed(0)}</span>
                 </div>
                 <div className="flex flex-wrap gap-2 mt-2" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="btn-secondary text-xs py-0.5 px-2"
-                    disabled={openingId === r.id}
-                    onClick={() => void handleOpenReport(r.id)}
+                  <Link
+                    to={reportViewPath(r.id)}
+                    target="_blank"
+                    rel="noopener"
+                    className="btn-secondary text-xs py-0.5 px-2 inline-block"
                   >
-                    {openingId === r.id ? 'Opening…' : 'Open report'}
-                  </button>
+                    Open report
+                  </Link>
                   {logPath && (
                     <Link to={logPath} className="btn-secondary text-xs py-0.5 px-2 inline-block">
                       Related session log
@@ -320,10 +217,9 @@ export function ReportsPage() {
                     <button
                       type="button"
                       className="btn-secondary text-xs py-1 px-2"
-                      disabled={openingId === active}
-                      onClick={() => active != null && void handleOpenReport(active)}
+                      onClick={() => active != null && openReportTab(active)}
                     >
-                      {openingId === active ? 'Opening…' : 'Open report'}
+                      Open report
                     </button>
                     {activeSessionLog && (
                       <Link to={activeSessionLog} className="btn-secondary text-xs py-1 px-2 inline-block">
@@ -333,29 +229,28 @@ export function ReportsPage() {
                     <button
                       type="button"
                       className="btn-secondary text-xs py-1 px-2"
-                      onClick={handleOpenPromptPack}
+                      onClick={handleDownloadPromptPack}
                       disabled={jsonLoading || !hasPromptPack}
-                      title={hasPromptPack ? 'Open Cursor prompt pack' : 'No prompt pack available'}
+                      title={hasPromptPack ? 'Download the Cursor prompt pack as Markdown' : 'No prompt pack available'}
                     >
-                      Open prompt pack
+                      Download prompt pack
                     </button>
+                    <CopyButton
+                      text={promptPack}
+                      label="Copy all for Cursor"
+                      copiedLabel="Copied all"
+                      className="btn-secondary text-xs py-1 px-2"
+                      disabled={jsonLoading || !hasPromptPack}
+                      title={hasPromptPack ? 'Copy every prompt in this report' : 'No prompts available'}
+                    />
                     <button
                       type="button"
                       className="btn-secondary text-xs py-1 px-2"
-                      onClick={() => void handleCopyQuickWins()}
-                      disabled={jsonLoading || !hasPromptPack}
-                      title={hasPromptPack ? 'Copy quick-win prompts' : 'No quick wins available'}
-                    >
-                      {copied ? 'Copied' : 'Copy quick wins'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary text-xs py-1 px-2"
-                      onClick={handleOpenJsonEvidence}
+                      onClick={handleDownloadJsonEvidence}
                       disabled={jsonLoading || !hasJson}
-                      title={hasJson ? 'Open raw JSON evidence' : 'JSON unavailable'}
+                      title={hasJson ? 'Download the raw JSON evidence' : 'JSON unavailable'}
                     >
-                      Open JSON evidence
+                      Download JSON evidence
                     </button>
                   </div>
                 </div>
@@ -393,18 +288,40 @@ export function ReportsPage() {
               </div>
 
               <div className="flex-1 min-h-0 flex flex-col">
-                <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-ink-500 border-b border-ink-100 shrink-0">
-                  HTML preview
+                <div className="flex gap-1 px-3 pt-1.5 border-b border-ink-100 shrink-0">
+                  {([
+                    ['preview', 'HTML preview'],
+                    ['prompts', 'Cursor prompts'],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={
+                        'text-[11px] uppercase tracking-wide px-2 py-1 border-b-2 ' +
+                        (paneTab === key
+                          ? 'border-brand-500 text-brand-700 font-semibold'
+                          : 'border-transparent text-ink-500 hover:text-ink-800')
+                      }
+                      onClick={() => setPaneTab(key)}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
-                {htmlLoading && (
+                {paneTab === 'prompts' && (
+                  <div className="flex-1 min-h-0 overflow-auto">
+                    <ReportPrompts report={reportJson ?? null} loading={jsonLoading} />
+                  </div>
+                )}
+                {paneTab === 'preview' && htmlLoading && (
                   <div className="grid place-items-center flex-1 text-ink-500 text-sm">Loading preview...</div>
                 )}
-                {htmlError && (
+                {paneTab === 'preview' && htmlError && (
                   <div className="grid place-items-center flex-1 text-red-700 text-sm px-4 text-center">
                     Could not load report preview. The report file may be missing on the server.
                   </div>
                 )}
-                {html && (
+                {paneTab === 'preview' && html && (
                   <iframe
                     title="report"
                     className="flex-1 w-full min-h-[12rem]"

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { DeveloperPromptBlock } from '@/components/DeveloperPromptBlock';
 import { PendingDecisionCard, type RunDecision } from '@/components/PendingDecisionCard';
 import { api } from '@/lib/api';
 import { copyText } from '@/lib/clipboard';
@@ -155,43 +156,6 @@ function jobStatusBadgeClass(status: string | null): string {
   if (status === 'failed') return 'badge-danger';
   if (status === 'succeeded' || status === 'done') return 'badge-brand';
   return 'badge-neutral';
-}
-
-function DeveloperPromptBlock({
-  prompt,
-  copyKey,
-  copiedKey,
-  onCopy,
-}: {
-  prompt: string;
-  copyKey: string;
-  copiedKey: string | null;
-  onCopy: (key: string, text: string) => void;
-}) {
-  if (!prompt) return null;
-  const copied = copiedKey === copyKey;
-  return (
-    <div className="mt-2">
-      <details>
-        <summary className="cursor-pointer text-xs text-ink-500 hover:text-ink-800 select-none">
-          Technical details
-        </summary>
-        <div className="mt-1 flex items-center gap-2 mb-1">
-          <span className="text-xs font-medium text-ink-500">Developer prompt</span>
-          <button
-            type="button"
-            className="btn-secondary text-xs py-0.5 px-2"
-            onClick={() => onCopy(copyKey, prompt)}
-          >
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-        </div>
-        <pre className="max-h-48 overflow-auto rounded bg-ink-50 border border-ink-100 p-2 text-xs font-mono text-ink-800 whitespace-pre-wrap break-words">
-          {prompt}
-        </pre>
-      </details>
-    </div>
-  );
 }
 
 export function RunDetailPage() {
@@ -664,12 +628,7 @@ pm2 logs aicountly-smoke-worker --lines 40`}
                     {description && description !== summary && description !== technical ? (
                       <p className="text-xs text-ink-500 mt-1">{description}</p>
                     ) : null}
-                    <DeveloperPromptBlock
-                      prompt={prompt}
-                      copyKey={copyKey}
-                      copiedKey={copiedKey}
-                      onCopy={handleCopy}
-                    />
+                    <DeveloperPromptBlock prompt={prompt} />
                   </li>
                 );
               })}
@@ -725,12 +684,7 @@ pm2 logs aicountly-smoke-worker --lines 40`}
                         </>
                       );
                     })()}
-                    <DeveloperPromptBlock
-                      prompt={prompt}
-                      copyKey={copyKey}
-                      copiedKey={copiedKey}
-                      onCopy={handleCopy}
-                    />
+                    <DeveloperPromptBlock prompt={prompt} />
                   </li>
                 );
               })}
