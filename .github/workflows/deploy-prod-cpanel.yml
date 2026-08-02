@@ -244,9 +244,13 @@ jobs:
             echo "restarted=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          set +e
           set -o pipefail
           # timeout: every pm2 call below is detached from this pipe, but a wedged
           # SSH must fail in seconds rather than idling until the job timeout.
+          # Exit 124 (timeout) is treated as success when the remote printed
+          # SMOKE_WORKER_RESTART_OK — PM2's God daemon can still hold the SSH
+          # session open even after the remote script finishes.
           timeout 180 ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-restart.log
           set -u
           WORKER_DIR="${1%/}/worker"
@@ -261,7 +265,7 @@ jobs:
           done
           export PATH
           if command -v npm >/dev/null 2>&1; then
-            NPM_PREFIX="$(npm prefix -g 2>/dev/null || true)"
+            NPM_PREFIX="$(npm prefix -g </dev/null 2>/dev/null || true)"
             if [ -n "$NPM_PREFIX" ] && [ -d "$NPM_PREFIX/bin" ]; then
               PATH="$NPM_PREFIX/bin:$PATH"
               export PATH
@@ -272,7 +276,6 @@ jobs:
             echo "::warning::pm2 not found on the server PATH — the worker/dist just deployed is NOT live. One-time fix over SSH: npm install -g pm2 && cd $WORKER_DIR && pm2 startOrRestart ecosystem.config.cjs --update-env && pm2 save && pm2 startup"
             exit 0
           fi
-          echo "pm2: $(command -v pm2) ($(pm2 --version 2>/dev/null))"
 
           cd "$WORKER_DIR"
 
@@ -280,9 +283,14 @@ jobs:
           # daemon is running yet, pm2 spawns one, and a daemon that inherits the
           # SSH pipe holds it open forever — the connection then never returns.
           # Spawning it here against a regular file is what keeps SSH closable.
+          # IMPORTANT: never run pm2 (including --version) against SSH stdout
+          # before this ping — that is what used to leave the daemon attached
+          # to the deploy pipe and force timeout exit 124 after SUCCESS.
           PM2_LOG="$(mktemp)"
           pm2 ping </dev/null >>"$PM2_LOG" 2>&1 \
             || echo "::warning::pm2 ping failed — pm2 daemon may not be usable for this account."
+          PM2_VER="$(pm2 --version </dev/null 2>/dev/null || true)"
+          echo "pm2: $(command -v pm2) (${PM2_VER:-unknown})"
 
           # startOrRestart (not startOrReload): this is a fork-mode queue worker with
           # no listening socket, so PM2's rolling reload buys nothing and reload in
@@ -296,11 +304,21 @@ jobs:
           rm -f "$PM2_LOG"
           pm2 list --no-color </dev/null 2>&1 || true
           echo "SMOKE_WORKER_RESTART_OK"
+          exit 0
           EOS
+          ssh_rc=${PIPESTATUS[0]}
+          set -e
           if grep -q '^SMOKE_WORKER_RESTART_OK$' /tmp/worker-restart.log; then
             echo "restarted=true" >> "$GITHUB_OUTPUT"
+            if [ "$ssh_rc" -eq 124 ]; then
+              echo "::warning::SSH timed out after SMOKE_WORKER_RESTART_OK (PM2 daemon held the session). Treating restart as successful."
+            fi
           else
             echo "restarted=false" >> "$GITHUB_OUTPUT"
+            if [ "$ssh_rc" -ne 0 ]; then
+              echo "::error::Worker restart SSH failed (exit $ssh_rc) without SMOKE_WORKER_RESTART_OK."
+              exit 1
+            fi
           fi
 
       # A crash-looping worker reporting a green deploy is the exact failure this
@@ -313,7 +331,9 @@ jobs:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
           REMOTE_ROOT="${REMOTE_ROOT%/}"
+          set +e
           set -o pipefail
+          # Same as restart: tolerate timeout 124 when SMOKE_WORKER_HEALTHY was printed.
           timeout 180 ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-health.log
           set -u
           WORKER_DIR="${1%/}/worker"
@@ -324,7 +344,7 @@ jobs:
           done
           export PATH
           if command -v npm >/dev/null 2>&1; then
-            NPM_PREFIX="$(npm prefix -g 2>/dev/null || true)"
+            NPM_PREFIX="$(npm prefix -g </dev/null 2>/dev/null || true)"
             if [ -n "$NPM_PREFIX" ] && [ -d "$NPM_PREFIX/bin" ]; then
               PATH="$NPM_PREFIX/bin:$PATH"
               export PATH
@@ -385,10 +405,16 @@ jobs:
           echo "--- tail worker-out.log ---"
           tail -40 "$WORKER_DIR/logs/worker-out.log" 2>/dev/null || echo "(no out log yet)"
           echo "--- pm2 list ---"
-          pm2 list 2>/dev/null || true
+          pm2 list --no-color </dev/null 2>&1 || true
+          exit 1
           EOS
+          ssh_rc=${PIPESTATUS[0]}
+          set -e
           if grep -q '^SMOKE_WORKER_HEALTHY$' /tmp/worker-health.log; then
             echo "healthy=true" >> "$GITHUB_OUTPUT"
+            if [ "$ssh_rc" -eq 124 ]; then
+              echo "::warning::SSH timed out after SMOKE_WORKER_HEALTHY (PM2 daemon held the session). Treating health check as successful."
+            fi
           else
             echo "healthy=false" >> "$GITHUB_OUTPUT"
           fi
