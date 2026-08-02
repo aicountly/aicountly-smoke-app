@@ -47,6 +47,12 @@ class CursorHandoff
     /** Matches a search/command-palette trigger by label text alone, independent of DOM kind. */
     private const SEARCH_LABEL_PATTERN = '/search|\bcmd\s*\+?\s*k\b|\bctrl\s*\+?\s*k\b/i';
 
+    /** Matches repeated CRUD / row-action labels that should not become rename-visible-copy build orders. */
+    private const ROW_ACTION_LABEL_PATTERN = '/^(edit|delete|deactivate|activate|view|all|remove|approve|reject)$/i';
+
+    /** Matches tabular export / Download CSV|Excel|PDF labels used as export evidence. */
+    private const EXPORT_OR_DOWNLOAD_LABEL_PATTERN = '/download\b.*\b(csv|excel|xlsx|xls|pdf)|\bexport\b/i';
+
     private const FALLBACK_PREFIX = "# Master Cursor prompt: {{run_code}}\n\n"
         . "Every finding below is a machine-generated hypothesis, not a work order.\n"
         . "Locate the owning code, verify each finding against it, and implement only\n"
@@ -120,6 +126,58 @@ class CursorHandoff
             && self::anyLabelMatches($labels, self::SEARCH_LABEL_PATTERN)
         ) {
             return 'likely_artifact';
+        }
+        if (($finding['category'] ?? '') === 'filters') {
+            $evidence = is_array($finding['evidence'] ?? null) ? $finding['evidence'] : [];
+            $samples = $evidence['inventory_samples'] ?? [];
+            $hasSearchOrFilterKind = false;
+            if (is_array($samples)) {
+                foreach ($samples as $item) {
+                    if (! is_array($item)) {
+                        continue;
+                    }
+                    $kind = (string) ($item['kind'] ?? '');
+                    if ($kind === 'search' || $kind === 'filter') {
+                        $hasSearchOrFilterKind = true;
+                        break;
+                    }
+                }
+            }
+            if ($hasSearchOrFilterKind || self::anyLabelMatches($labels, self::SEARCH_LABEL_PATTERN)) {
+                return 'likely_artifact';
+            }
+        }
+        // "Download CSV/Excel/PDF" is export evidence; demote leftover export findings.
+        if (
+            ($finding['category'] ?? '') === 'reports'
+            && preg_match('/export/i', (string) ($finding['title'] ?? '')) === 1
+            && self::anyLabelMatches($labels, self::EXPORT_OR_DOWNLOAD_LABEL_PATTERN)
+        ) {
+            return 'likely_artifact';
+        }
+        // Repeated CRUD row actions already emit accessible-name recommendations
+        // at the scanner/reviewer layer; demote high-count duplicates so prompt
+        // packs do not promote them as build orders (Group B, not Group A).
+        if (
+            ($finding['category'] ?? '') === 'layout'
+            && preg_match('/duplicate button label/i', (string) ($finding['title'] ?? '')) === 1
+        ) {
+            $title = (string) ($finding['title'] ?? '');
+            $titleLabel = '';
+            if (preg_match('/\bduplicate button label\s+"([^"]+)"/i', $title, $m) === 1) {
+                $titleLabel = (string) ($m[1] ?? '');
+            }
+            $evidence = is_array($finding['evidence'] ?? null) ? $finding['evidence'] : [];
+            $count = is_numeric($evidence['count'] ?? null) ? (int) $evidence['count'] : 0;
+            $promptBlob = (string) ($finding['recommendation'] ?? '') . ' ' . (string) ($finding['developer_prompt'] ?? '');
+            $accessibleNameStyle = preg_match('/accessible name|aria-label/i', $promptBlob) === 1;
+            if (
+                $count > 2
+                && $accessibleNameStyle
+                && preg_match(self::ROW_ACTION_LABEL_PATTERN, $titleLabel) === 1
+            ) {
+                return 'likely_artifact';
+            }
         }
         return 'verify_then_fix';
     }

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FeatureGap } from '../reviewer/featureGapEngine.js';
 import type { UxIssue } from '../reviewer/uxReviewEngine.js';
+import { ANALYTICS_NOISE_REGEX } from '../scanner/networkNoise.js';
 import { assembleMasterPrompt } from './cursorHandoff.js';
 import {
   DEFAULT_REPO_RULES,
@@ -8,6 +9,8 @@ import {
   type RepoOwnership,
   type RepoRule,
 } from './repoAttribution.js';
+
+const MAX_SCREENSHOT_LINES = 5;
 
 export type CursorPromptContext = {
   product_name: string;
@@ -55,14 +58,20 @@ export function buildUxCursorPrompt(issue: UxIssue, context: CursorPromptContext
   const evidence = issue.evidence ?? {};
   const urls = stringList(evidence.affected_urls ?? evidence.url);
   const screenTitles = stringList(evidence.screen_titles);
-  const screenshots = stringList(evidence.screenshot_paths).map((value) => path.basename(value));
+  const screenshots = stringList(evidence.screenshot_paths)
+    .map((value) => path.basename(value))
+    .slice(0, MAX_SCREENSHOT_LINES);
   const inventory = inventoryLines(evidence.inventory_samples);
-  const runtime = [
-    ...sampleLines('Console', evidence.console_events ?? evidence.events),
-    ...sampleLines('Network', evidence.network_events ?? evidence.sample),
-  ];
-  const fileIo = issue.category === 'file_io';
   const isErrors = issue.category === 'errors';
+  // Console/network blobs belong on error findings only; attaching them to
+  // navigation/filters/layout noise pads the prompt without aiding the fix.
+  const runtime = isErrors
+    ? [
+        ...sampleLines('Console', evidence.console_events ?? evidence.events),
+        ...sampleLines('Network', evidence.network_events ?? evidence.sample),
+      ]
+    : [];
+  const fileIo = issue.category === 'file_io';
   // A page can render cleanly while a failing request underneath it (a logo,
   // an /api/manage proxy call) belongs to a different repository than the one
   // that owns the page itself; ownership must follow the failing request, not
@@ -284,8 +293,6 @@ function inventoryLines(value: unknown): string[] {
     return `- Inventory: ${String(item.kind ?? 'item')} "${String(item.label ?? '')}"${item.selector ? ` at \`${String(item.selector)}\`` : ''}`;
   });
 }
-
-const ANALYTICS_NOISE_REGEX = /google-analytics\.com|\/g\/collect|gtm\.js|gtm=/i;
 
 /**
  * Pulls the failing request's own URL out of network/console evidence, so

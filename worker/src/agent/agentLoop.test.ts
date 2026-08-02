@@ -9,10 +9,15 @@ import {
   formIdentityKey,
   isAwaitingVerification,
   markVerifiedByPageText,
+  navPathname,
   parseAgentAction,
   parseFillEntries,
   recentFieldValues,
+  REVISIT_NAV_EXIT_AT,
+  REVISIT_NAV_WARN_AT,
+  screenKey,
   submittedControls,
+  updateConsecutiveRevisitNav,
   visitedScreens,
   type CreatedRecord,
 } from './agentLoop.js';
@@ -372,6 +377,62 @@ test('re-walking a menu already covered is circling, even though every click cha
   assert.equal(verdict.circling, true);
   assert.deepEqual(verdict.revisited, sweep);
   assert.equal(second.length, CIRCLING_WINDOW);
+});
+
+test('screenKey ignores query and hash so SPA noise does not defeat revisit detection', () => {
+  const a = sig({ url: 'https://hrms.test/salary?tab=1#top', title: 'Salary' });
+  const b = sig({ url: 'https://hrms.test/salary?tab=2', title: 'Salary' });
+  assert.equal(navPathname(a.url), 'https://hrms.test/salary');
+  assert.equal(screenKey(a), screenKey(b));
+});
+
+test('consecutive revisit-only nav increments and productive type resets', () => {
+  const seen = new Set<string>([screenKey(sig({ title: 'Dashboard', url: 'https://hrms.test/dashboard' }))]);
+  let consecutive = 0;
+
+  consecutive = updateConsecutiveRevisitNav({
+    consecutive,
+    seenKeys: seen,
+    action: { type: 'click', mark: 1 },
+    outcome: 'executed',
+    after: sig({ title: 'Salary', url: 'https://hrms.test/salary' }),
+    targetLabel: 'Salary',
+  }).consecutive;
+  assert.equal(consecutive, 0);
+
+  consecutive = updateConsecutiveRevisitNav({
+    consecutive,
+    seenKeys: seen,
+    action: { type: 'click', mark: 2 },
+    outcome: 'executed',
+    after: sig({ title: 'Dashboard', url: 'https://hrms.test/dashboard?x=1' }),
+    targetLabel: 'Dashboard',
+  }).consecutive;
+  assert.equal(consecutive, 1);
+
+  for (let i = 0; i < REVISIT_NAV_WARN_AT - 1; i += 1) {
+    consecutive = updateConsecutiveRevisitNav({
+      consecutive,
+      seenKeys: seen,
+      action: { type: 'click', mark: 3 },
+      outcome: 'executed',
+      after: sig({ title: 'Salary', url: 'https://hrms.test/salary' }),
+      targetLabel: 'Salary',
+    }).consecutive;
+  }
+  assert.equal(consecutive, REVISIT_NAV_WARN_AT);
+
+  consecutive = updateConsecutiveRevisitNav({
+    consecutive,
+    seenKeys: seen,
+    action: { type: 'type', mark: 4, text: 'SMOKE-State' },
+    outcome: 'executed',
+    after: sig({ title: 'Bonus', url: 'https://hrms.test/bonus' }),
+    targetLabel: 'State',
+  }).consecutive;
+  assert.equal(consecutive, 0);
+
+  assert.ok(REVISIT_NAV_EXIT_AT > REVISIT_NAV_WARN_AT);
 });
 
 test('a sweep that opens a screen never seen before is not circling', () => {

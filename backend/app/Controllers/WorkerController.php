@@ -513,20 +513,22 @@ class WorkerController extends BaseController
     public function recordUxIssue(): ResponseInterface
     {
         $body = $this->jsonBody();
-        Database::connect()->table('smoke_ux_issues')->insert([
-            'run_id'          => (int) ($body['run_id']    ?? 0),
-            'session_id'      => (int) ($body['session_id']?? 0),
-            'result_id'       => (int) ($body['result_id'] ?? 0) ?: null,
-            'category'        => (string) ($body['category'] ?? 'general'),
-            'severity'        => (string) ($body['severity'] ?? 'low'),
-            'title'           => (string) ($body['title']    ?? ''),
-            'description'     => (string) ($body['description']    ?? ''),
-            'recommendation'  => (string) ($body['recommendation'] ?? ''),
-            'human_summary'   => (string) ($body['human_summary'] ?? ''),
-            'developer_prompt'=> (string) ($body['developer_prompt']?? ''),
-            'evidence_json'   => json_encode($body['evidence'] ?? []),
-        ]);
-        return $this->jsonOk(['ok' => true]);
+        $resultId = (int) ($body['result_id'] ?? 0);
+        $row = [
+            'run_id'           => (int) ($body['run_id'] ?? 0),
+            'session_id'       => (int) ($body['session_id'] ?? 0),
+            'result_id'        => $resultId > 0 ? $resultId : null,
+            'category'         => mb_substr((string) ($body['category'] ?? 'general'), 0, 64),
+            'severity'         => mb_substr((string) ($body['severity'] ?? 'low'), 0, 16),
+            'title'            => mb_substr((string) ($body['title'] ?? ''), 0, 512),
+            'description'      => (string) ($body['description'] ?? ''),
+            'recommendation'   => (string) ($body['recommendation'] ?? ''),
+            'human_summary'    => (string) ($body['human_summary'] ?? ''),
+            'developer_prompt' => (string) ($body['developer_prompt'] ?? ''),
+            'evidence_json'    => $this->encodeJsonColumn($body['evidence'] ?? []),
+        ];
+
+        return $this->insertFindingRow('smoke_ux_issues', $row, true);
     }
 
     public function recordFeatureGap(): ResponseInterface
@@ -538,25 +540,91 @@ class WorkerController extends BaseController
         $mode = in_array(($body['mode'] ?? ''), ['implement', 'validate_first'], true)
             ? (string) $body['mode']
             : 'validate_first';
-        Database::connect()->table('smoke_feature_gaps')->insert([
-            'run_id'          => (int) ($body['run_id'] ?? 0),
-            'session_id'      => (int) ($body['session_id'] ?? 0) ?: null,
-            'product_name'    => (string) ($body['product_name']     ?? ''),
-            'expected_feature'=> (string) ($body['expected_feature'] ?? ''),
-            'observed'        => (bool) ($body['observed'] ?? false),
-            'partial'         => (bool) ($body['partial']  ?? false),
-            'competitor_ref'  => (string) ($body['competitor_ref'] ?? ''),
-            'severity'        => (string) ($body['severity']       ?? 'medium'),
-            'confidence'      => $confidence,
-            'mode'            => $mode,
-            'recommendation'  => (string) ($body['recommendation'] ?? ''),
-            'human_summary'   => (string) ($body['human_summary'] ?? ''),
-            'developer_prompt'=> (string) ($body['developer_prompt']?? ''),
-            'notes'           => (string) ($body['notes'] ?? ''),
-            'sources_json'    => json_encode($body['sources'] ?? []),
-            'evidence_json'   => json_encode($body['evidence'] ?? []),
-        ]);
-        return $this->jsonOk(['ok' => true]);
+        $row = [
+            'run_id'           => (int) ($body['run_id'] ?? 0),
+            'session_id'       => (int) ($body['session_id'] ?? 0) ?: null,
+            'product_name'     => mb_substr((string) ($body['product_name'] ?? ''), 0, 64),
+            'expected_feature' => mb_substr((string) ($body['expected_feature'] ?? ''), 0, 512),
+            'observed'         => (bool) ($body['observed'] ?? false),
+            'partial'          => (bool) ($body['partial'] ?? false),
+            'competitor_ref'   => mb_substr((string) ($body['competitor_ref'] ?? ''), 0, 191),
+            'severity'         => mb_substr((string) ($body['severity'] ?? 'medium'), 0, 16),
+            'confidence'       => $confidence,
+            'mode'             => $mode,
+            'recommendation'   => (string) ($body['recommendation'] ?? ''),
+            'human_summary'    => (string) ($body['human_summary'] ?? ''),
+            'developer_prompt' => (string) ($body['developer_prompt'] ?? ''),
+            'notes'            => (string) ($body['notes'] ?? ''),
+            'sources_json'     => $this->encodeJsonColumn($body['sources'] ?? []),
+            'evidence_json'    => $this->encodeJsonColumn($body['evidence'] ?? []),
+        ];
+
+        return $this->insertFindingRow('smoke_feature_gaps', $row, false);
+    }
+
+    /**
+     * Insert a UX/gap finding. On foreign-key failure for result_id, retry once
+     * without it. Any other DB error becomes a structured JSON response.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function insertFindingRow(string $table, array $row, bool $mayDropResultId): ResponseInterface
+    {
+        $db = Database::connect();
+        try {
+            if ($db->table($table)->insert($row) === false) {
+                throw new \RuntimeException($this->dbErrorMessage($db) ?: 'insert returned false');
+            }
+            return $this->jsonOk(['ok' => true]);
+        } catch (\Throwable $error) {
+            if ($mayDropResultId && ! empty($row['result_id']) && $this->isForeignKeyFailure($error)) {
+                try {
+                    $row['result_id'] = null;
+                    if ($db->table($table)->insert($row) === false) {
+                        throw new \RuntimeException($this->dbErrorMessage($db) ?: 'insert returned false');
+                    }
+                    return $this->jsonOk(['ok' => true, 'result_id_cleared' => true]);
+                } catch (\Throwable $retryError) {
+                    $error = $retryError;
+                }
+            }
+            log_message('error', 'Finding insert failed on {table}: {message}', [
+                'table'   => $table,
+                'message' => $error->getMessage(),
+            ]);
+            return $this->jsonError(
+                'persist_failed',
+                mb_substr($error->getMessage(), 0, 500),
+                422,
+            );
+        }
+    }
+
+    private function dbErrorMessage(object $db): string
+    {
+        if (! method_exists($db, 'error')) {
+            return '';
+        }
+        $error = $db->error();
+        if (! is_array($error)) {
+            return '';
+        }
+        return trim((string) ($error['message'] ?? ''));
+    }
+
+    private function encodeJsonColumn(mixed $value): string
+    {
+        $encoded = json_encode($value ?? []);
+        return $encoded === false ? '[]' : $encoded;
+    }
+
+    private function isForeignKeyFailure(\Throwable $error): bool
+    {
+        $message = strtolower($error->getMessage());
+        return str_contains($message, 'foreign key')
+            || str_contains($message, 'violates foreign key')
+            || str_contains($message, '1452')
+            || str_contains($message, '23503');
     }
 
     public function recordReport(): ResponseInterface

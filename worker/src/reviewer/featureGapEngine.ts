@@ -34,14 +34,44 @@ export type CompetitorBenchmark = {
 };
 
 /**
+ * Product-agnostic token synonyms. When every expected-feature token is covered
+ * either directly or via a synonym present in inventory/title/module context,
+ * the capability is treated as observed (no gap row).
+ */
+const TOKEN_SYNONYMS: Record<string, string[]> = {
+  directory: ['employees', 'staff', 'people', 'hris', 'workforce'],
+  profile: ['details', 'detail'],
+  tracker: ['leave', 'absence', 'time'],
+  workflow: ['approvals', 'approval'],
+  approvals: ['approval'],
+  leave: ['absence', 'time'],
+};
+
+/** Whole-phrase alternatives checked before token-level matching. */
+const PHRASE_SYNONYMS: Record<string, string[]> = {
+  'employee directory': ['employees', 'staff', 'people', 'hris', 'workforce'],
+  'employee profile': ['employee details', 'view details', 'employee detail'],
+  'leave tracker': ['leave', 'time off', 'absence'],
+  'approvals workflow': ['approvals', 'portal approvals', 'approval'],
+};
+
+/**
  * Compares an inventory of observed labels against the expected feature list
- * derived from configured competitors. The match is fuzzy: tokens / substring.
+ * derived from configured competitors. The match is fuzzy: tokens / substring /
+ * product-agnostic synonyms, plus page title / module context.
  */
 export function detectGaps(
   productName: string,
   inventory: InventoryEntry[],
   benchmarks: CompetitorBenchmark[],
-  scope: { sessionName?: string; menuPath?: string; screensChecked?: string[] } = {},
+  scope: {
+    sessionName?: string;
+    menuPath?: string;
+    screensChecked?: string[];
+    pageTitles?: string[];
+    moduleNames?: string[];
+    headingSamples?: string[];
+  } = {},
 ): FeatureGap[] {
   const contexts = inventory.map((item) => ({
     item,
@@ -49,6 +79,11 @@ export function detectGaps(
     url: normalizeFeature(item.url ?? ''),
     href: normalizeFeature(typeof item.payload?.href === 'string' ? item.payload.href : ''),
   }));
+  const extraTexts = [
+    ...(scope.pageTitles ?? []),
+    ...(scope.moduleNames ?? []),
+    ...(scope.headingSamples ?? []),
+  ].map(normalizeFeature).filter(Boolean);
   const screensChecked = [...new Set([
     ...(scope.screensChecked ?? []),
     ...inventory.map((item) => item.url).filter(Boolean),
@@ -60,11 +95,13 @@ export function detectGaps(
 
   const gaps: FeatureGap[] = [];
   for (const [feat, { refs, displayFeature }] of expected.entries()) {
+    if (isObservedViaPhraseSynonym(feat, contexts, extraTexts)) continue;
+
     const tokens = feat.split(/\s+/).filter(Boolean);
-    const matches = tokens.filter((tok) => contexts.some((context) => tokenMatches(tok, context)));
-    const observed = matches.length === tokens.length;
-    // Fully observed features are confirmed present; they generate no gap row
-    // at all rather than a "validate_first" note nobody needs to act on.
+    const matchResults = tokens.map((tok) => matchToken(tok, contexts, extraTexts));
+    const matches = matchResults.filter((r) => r.matched).map((r) => r.token);
+    const observed = matchResults.every((r) => r.matched);
+    // Fully observed features (direct or synonym) generate no gap row.
     if (observed) continue;
     const featureTokens = meaningfulTokens(feat);
     const inScope = featureTokens.some((token) => sessionTokens.some((sessionToken) =>
@@ -75,15 +112,28 @@ export function detectGaps(
     // unrelated inventory (e.g. login-page items) as evidence.
     if (matches.length === 0 && !inScope) continue;
     const partial = matches.length / Math.max(1, tokens.length) >= 0.5;
-    const mode: FeatureGap['mode'] = inScope ? 'implement' : 'validate_first';
-    const confidence: FeatureGap['confidence'] = inScope
-      ? (partial || matches.length > 0 ? 'high' : 'medium')
-      : (partial ? 'medium' : 'low');
+    // Session-family expansion can pull features into scope with no inventory
+    // hits (e.g. Attendance → shift/timesheet). That is a scope question, not
+    // a build order. Same for partials that only matched a generic family
+    // anchor (attendance/leave/payroll/employee) while distinctive tokens miss.
+    const zeroEvidenceInScope = matches.length === 0 && inScope;
+    const genericOnlyPartial = partial && onlyGenericSessionAnchorsMatched(matches, tokens);
+    const mode: FeatureGap['mode'] = (zeroEvidenceInScope || genericOnlyPartial || !inScope)
+      ? 'validate_first'
+      : 'implement';
+    const confidence: FeatureGap['confidence'] = mode === 'validate_first'
+      ? (partial && matches.length > 0 ? 'medium' : 'low')
+      : (partial || matches.length > 0 ? 'high' : 'medium');
     const nearby = contexts
       .filter(({ item }) => isRelatedUrl(item.url, relatedScope))
       .slice(0, 12)
       .map(({ item }) => ({ kind: item.kind, label: item.label, selector: item.selector, url: item.url }));
     const sampleLabels = [...new Set(nearby.map((item) => item.label).filter(Boolean))].slice(0, 12);
+    const validateFirstNote = zeroEvidenceInScope
+      ? 'In session scope via family expansion but zero inventory evidence; confirm product scope before implementation.'
+      : genericOnlyPartial
+      ? 'Only a generic session-family token matched; distinctive capability tokens were never found. Confirm product scope before implementation.'
+      : 'Outside the current session module; validate product scope before implementation.';
     gaps.push({
       product_name: productName,
       expected_feature: displayFeature,
@@ -101,7 +151,7 @@ export function detectGaps(
       human_summary: '',
       developer_prompt: '',
       notes: mode === 'validate_first'
-        ? 'Outside the current session module; validate product scope before implementation.'
+        ? validateFirstNote
         : partial ? 'Some keywords matched in UI; manual verification recommended.' : '',
       sources: [],
       evidence: {
@@ -171,9 +221,24 @@ function expandSessionScope(tokens: string[]): string[] {
   return [...expanded];
 }
 
+/** Generic family anchors that alone do not prove a distinctive capability exists. */
+const GENERIC_SESSION_ANCHORS = new Set(['attendance', 'leave', 'payroll', 'employee', 'employees']);
+
+/**
+ * True when every matched token is a generic session-family anchor and at least
+ * one distinctive (non-anchor) expected token was never found.
+ */
+function onlyGenericSessionAnchorsMatched(matched: string[], allTokens: string[]): boolean {
+  if (!matched.length) return false;
+  if (!matched.every((token) => GENERIC_SESSION_ANCHORS.has(token))) return false;
+  return allTokens.some((token) => !GENERIC_SESSION_ANCHORS.has(token) && !matched.includes(token));
+}
+
+type MatchContext = { item: InventoryEntry; label: string; url: string; href: string };
+
 function tokenMatches(
   token: string,
-  context: { item: InventoryEntry; label: string; url: string; href: string },
+  context: MatchContext,
 ): boolean {
   if (shortTokens.has(token) || token.length <= 2) {
     const exact = (value: string) => value.split(' ').includes(token);
@@ -181,6 +246,51 @@ function tokenMatches(
     return exact(context.label) || exact(context.url) || exact(context.href);
   }
   return context.label.includes(token) || context.url.includes(token) || context.href.includes(token);
+}
+
+function textHasToken(text: string, token: string): boolean {
+  if (!text) return false;
+  if (shortTokens.has(token) || token.length <= 2) {
+    return text.split(' ').includes(token);
+  }
+  return text.includes(token);
+}
+
+function matchToken(
+  token: string,
+  contexts: MatchContext[],
+  extraTexts: string[],
+): { token: string; matched: boolean; viaSynonym: boolean } {
+  if (contexts.some((context) => tokenMatches(token, context)) || extraTexts.some((t) => textHasToken(t, token))) {
+    return { token, matched: true, viaSynonym: false };
+  }
+  for (const synonym of TOKEN_SYNONYMS[token] ?? []) {
+    const syn = normalizeFeature(synonym);
+    if (!syn) continue;
+    if (contexts.some((context) => tokenMatches(syn, context)) || extraTexts.some((t) => textHasToken(t, syn))) {
+      return { token, matched: true, viaSynonym: true };
+    }
+  }
+  return { token, matched: false, viaSynonym: false };
+}
+
+function isObservedViaPhraseSynonym(
+  feat: string,
+  contexts: MatchContext[],
+  extraTexts: string[],
+): boolean {
+  const phrases = PHRASE_SYNONYMS[feat];
+  if (!phrases?.length) return false;
+  // Every listed alternative is an acceptable stand-in for the whole capability;
+  // if any one is present in inventory/title context, treat the feature as observed.
+  return phrases.some((phrase) => {
+    const normalized = normalizeFeature(phrase);
+    if (!normalized) return false;
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    return tokens.every((tok) =>
+      contexts.some((context) => tokenMatches(tok, context)) || extraTexts.some((t) => textHasToken(t, tok)),
+    );
+  });
 }
 
 function isRelatedUrl(url: string, scope: string): boolean {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dedupeUxIssues, reviewPage, type UxIssue } from './uxReviewEngine.js';
+import { dedupeUxIssues, dropProvenShellUxIssues, reviewPage, type UxIssue } from './uxReviewEngine.js';
 import type { PageMetadata } from '../scanner/pageScanner.js';
 import type { InventoryEntry } from '../scanner/uiInventory.js';
 
@@ -137,7 +137,7 @@ test('a company/branch/FY inventory entry of any selector kind suppresses the mu
   assert.equal(withoutSelector.length, 1);
 });
 
-test('console errors that are only resource-load 404s are downgraded to medium and not treated as a JS bug hunt', () => {
+test('logo/resource 404 console + soft-asset network emit no error-category UX issues', () => {
   const findings = reviewPage({
     meta: meta(),
     inventory: [],
@@ -145,13 +145,12 @@ test('console errors that are only resource-load 404s are downgraded to medium a
       { type: 'error', text: 'Failed to load resource: the server responded with a status of 404 ()' },
       { type: 'error', text: 'Failed to load resource: the server responded with a status of 404 ()' },
     ],
-    networkEvents: [],
+    networkEvents: [
+      { url: 'https://product.test/logo.png', method: 'GET', status: 404, ok: false },
+    ],
   }).filter((issue) => issue.category === 'errors');
 
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0]?.severity, 'medium');
-  assert.match(findings[0]?.recommendation ?? '', /fallback/i);
-  assert.doesNotMatch(findings[0]?.recommendation ?? '', /treat as P1/i);
+  assert.equal(findings.length, 0);
 });
 
 test('a real script exception still reports critical even alongside a resource 404', () => {
@@ -169,25 +168,216 @@ test('a real script exception still reports critical even alongside a resource 4
   assert.equal(findings[0]?.severity, 'critical');
 });
 
-test('a duplicate placeholder-style label recommends a per-field accessible name instead of renaming visible copy', () => {
+test('search inventory suppresses the filters finding on a table screen', () => {
+  const withSearch = reviewPage({
+    meta: meta({ tables: 1, filters: 0, has_export: true, has_print: true }),
+    inventory: [{ kind: 'search', label: 'Search employees', selector: 'input', url: 'https://hrms.test/employees', payload: {} }],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'filters');
+  assert.equal(withSearch.length, 0);
+
+  const without = reviewPage({
+    meta: meta({ tables: 1, filters: 0, has_export: true, has_print: true }),
+    inventory: [],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'filters');
+  assert.equal(without.length, 1);
+});
+
+test('meta.filters > 0 suppresses the filters finding even without inventory kinds', () => {
+  const findings = reviewPage({
+    meta: meta({ tables: 1, filters: 2, has_export: true, has_print: true }),
+    inventory: [],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'filters');
+  assert.equal(findings.length, 0);
+});
+
+test('analytics and logo 404s do not yield a high network finding', () => {
+  const findings = reviewPage({
+    meta: meta(),
+    inventory: [],
+    consoleEvents: [
+      { type: 'error', text: 'Failed to load resource: the server responded with a status of 404 ()' },
+    ],
+    networkEvents: [
+      { url: 'https://www.google-analytics.com/g/collect?v=2', method: 'GET', status: 0, ok: false },
+      { url: 'https://product.test/logo.png', method: 'GET', status: 404, ok: false },
+    ],
+  }).filter((issue) => issue.category === 'errors' && /network|api|asset/i.test(issue.title));
+
+  assert.ok(findings.every((f) => f.severity !== 'high'));
+  assert.ok(!findings.some((f) => /Network\/API failures/i.test(f.title)));
+});
+
+test('POST 409 create conflicts are low, not high', () => {
+  const findings = reviewPage({
+    meta: meta(),
+    inventory: [],
+    consoleEvents: [],
+    networkEvents: [
+      { url: 'https://product.test/api/employees', method: 'POST', status: 409, ok: false },
+    ],
+  }).filter((issue) => issue.category === 'errors');
+
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]?.severity, 'low');
+  assert.match(findings[0]?.title ?? '', /409/i);
+});
+
+test('multi_tenant fires on any authenticated shell without selectors, not only HRMS-titled pages', () => {
+  const findings = reviewPage({
+    meta: meta({ title: 'Portal Home' }),
+    inventory: [],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'multi_tenant');
+  assert.equal(findings.length, 1);
+});
+
+test('placeholder and CRUD row-action duplicate labels are not emitted as UX issues', () => {
   const placeholderFindings = reviewPage({
     meta: meta(),
     inventory: [button('— select —'), button('— select —'), button('— select —')],
     consoleEvents: [],
     networkEvents: [],
   }).filter((issue) => issue.category === 'layout' && issue.title.includes('select'));
+  assert.equal(placeholderFindings.length, 0);
 
-  assert.equal(placeholderFindings.length, 1);
-  assert.match(placeholderFindings[0]?.recommendation ?? '', /accessible name/i);
-  assert.doesNotMatch(placeholderFindings[0]?.recommendation ?? '', /disambiguate via icon/i);
-
-  const ordinaryFindings = reviewPage({
+  const editButtons = Array.from({ length: 17 }, () => button('Edit'));
+  const deactivateButtons = Array.from({ length: 17 }, () => button('Deactivate'));
+  const rowActionFindings = reviewPage({
     meta: meta(),
-    inventory: [button('Delete'), button('Delete'), button('Delete')],
+    inventory: [...editButtons, ...deactivateButtons],
     consoleEvents: [],
     networkEvents: [],
-  }).filter((issue) => issue.category === 'layout' && issue.title.toLowerCase().includes('delete'));
+  }).filter((issue) => issue.category === 'layout' && /duplicate button label/i.test(issue.title));
+  assert.equal(rowActionFindings.length, 0);
+});
 
-  assert.equal(ordinaryFindings.length, 1);
-  assert.match(ordinaryFindings[0]?.recommendation ?? '', /disambiguate via icon/i);
+test('thrice-repeated custom labels still fire a duplicate finding', () => {
+  const findings = reviewPage({
+    meta: meta(),
+    inventory: [button('Save draft'), button('Save draft'), button('Save draft')],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'layout' && /save draft/i.test(issue.title));
+
+  assert.equal(findings.length, 1);
+  assert.match(findings[0]?.recommendation ?? '', /disambiguate via icon/i);
+});
+
+test('Download/export inventory suppresses the export finding on a table screen', () => {
+  const withDownload = reviewPage({
+    meta: meta({ tables: 1, has_export: false, has_download: true, has_print: false }),
+    inventory: [{ kind: 'download', label: 'Download CSV', selector: 'button', url: 'https://hrms.test/reports', payload: {} }],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'reports' && /export/i.test(issue.title));
+  assert.equal(withDownload.length, 0);
+
+  const withMetaExport = reviewPage({
+    meta: meta({ tables: 1, has_export: true, has_download: true }),
+    inventory: [],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'reports' && /export/i.test(issue.title));
+  assert.equal(withMetaExport.length, 0);
+
+  const missing = reviewPage({
+    meta: meta({ tables: 1, has_export: false, has_download: false, has_print: false }),
+    inventory: [],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'reports' && /export/i.test(issue.title));
+  assert.equal(missing.length, 1);
+});
+
+test('search inventory suppresses Command/search missing even when meta.has_search is false', () => {
+  const findings = reviewPage({
+    meta: meta({ has_search: false }),
+    inventory: [{ kind: 'search', label: 'Open search', selector: 'button', url: 'https://hrms.test/app', payload: {} }],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'navigation' && /search|command/i.test(issue.title));
+  assert.equal(findings.length, 0);
+
+  const without = reviewPage({
+    meta: meta({ has_search: false }),
+    inventory: [],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'navigation' && /search|command/i.test(issue.title));
+  assert.equal(without.length, 1);
+});
+
+test('dropProvenShellUxIssues removes multi_tenant and search when run labels prove them', () => {
+  const issues: UxIssue[] = [
+    {
+      category: 'multi_tenant',
+      severity: 'low',
+      title: 'Company / branch / FY selector not detected',
+      description: '',
+      recommendation: '',
+      human_summary: '',
+      developer_prompt: 'x',
+      evidence: {},
+    },
+    {
+      category: 'navigation',
+      severity: 'low',
+      title: 'Command/search box missing',
+      description: '',
+      recommendation: '',
+      human_summary: '',
+      developer_prompt: 'x',
+      evidence: {},
+    },
+    {
+      category: 'navigation',
+      severity: 'low',
+      title: 'Breadcrumb missing',
+      description: '',
+      recommendation: '',
+      human_summary: '',
+      developer_prompt: 'x',
+      evidence: {},
+    },
+  ];
+  const kept = dropProvenShellUxIssues(issues, ['2026 - 27 | HO', 'Search employees…']);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0]?.title, 'Breadcrumb missing');
+});
+
+test('listbox/date filter inventory shapes suppress the filters finding on a table screen', () => {
+  const listbox = reviewPage({
+    meta: meta({ tables: 1, filters: 0, has_export: true, has_print: true }),
+    inventory: [{
+      kind: 'filter',
+      label: 'Department',
+      selector: 'button',
+      url: 'https://hrms.test/leave',
+      payload: { role: 'listbox_popup' },
+    }],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'filters');
+  assert.equal(listbox.length, 0);
+
+  const dateFilter = reviewPage({
+    meta: meta({ tables: 1, filters: 0, has_export: true, has_print: true }),
+    inventory: [{
+      kind: 'filter',
+      label: 'From',
+      selector: 'input',
+      url: 'https://hrms.test/leave',
+      payload: { role: 'date_filter', type: 'date' },
+    }],
+    consoleEvents: [],
+    networkEvents: [],
+  }).filter((issue) => issue.category === 'filters');
+  assert.equal(dateFilter.length, 0);
 });

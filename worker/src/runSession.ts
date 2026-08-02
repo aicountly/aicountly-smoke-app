@@ -13,7 +13,7 @@ import { collectInventory } from './scanner/uiInventory.js';
 import { captureScreenshot } from './scanner/screenshotCapture.js';
 import { attachConsoleCapture } from './scanner/consoleCapture.js';
 import { attachNetworkCapture } from './scanner/networkCapture.js';
-import { dedupeUxIssues, reviewPage, type UxIssue } from './reviewer/uxReviewEngine.js';
+import { dedupeUxIssues, dropProvenShellUxIssues, reviewPage, type UxIssue } from './reviewer/uxReviewEngine.js';
 import { countExpectedFeatures, detectGaps, type CompetitorBenchmark, type FeatureGap } from './reviewer/featureGapEngine.js';
 import { enrichGaps } from './reviewer/competitorComparison.js';
 import { fallbackCompetitorCatalogs } from './reviewer/fallbackCompetitorCatalogs.js';
@@ -472,6 +472,8 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     sessionName: job.session.name,
     menuPath: job.session.menu_path,
     screensChecked: screenUrls,
+    pageTitles: screenTitles,
+    moduleNames: screenTitles,
   });
   // detectGaps now drops fully-observed rows entirely, so heuristicGaps.length
   // already equals the not-observed count; report both it and the total expected
@@ -506,7 +508,8 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     menu_path: job.session.menu_path,
     repo_rules: loadRepoRules(),
   };
-  const uxIssues = dedupeUxIssues(allUx);
+  const allInventoryLabels = allInventory.map((item) => item.label);
+  const uxIssues = dropProvenShellUxIssues(dedupeUxIssues(allUx), allInventoryLabels);
   for (const issue of uxIssues) {
     issue.human_summary = buildUxHumanSummary(issue);
     issue.developer_prompt = buildUxCursorPrompt(issue, promptContext);
@@ -516,7 +519,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     gap.developer_prompt = buildFeatureGapCursorPrompt(gap, promptContext);
   }
 
-  await recordUxIssues(uxIssues.map((i) => ({
+  const uxPersist = await recordUxIssues(uxIssues.map((i) => ({
     run_id:      job.run.id,
     session_id:  job.session.id,
     result_id:   i.result_id,
@@ -529,7 +532,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     developer_prompt: i.developer_prompt,
     evidence:    i.evidence,
   })));
-  await recordFeatureGaps(enriched.map((g) => ({
+  const gapPersist = await recordFeatureGaps(enriched.map((g) => ({
     run_id:           job.run.id,
     session_id:       job.session.id,
     product_name:     g.product_name,
@@ -548,6 +551,28 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     evidence:         g.evidence,
   })));
 
+  const persistFailures = [
+    ...uxPersist.failures.map((f) => `ux-issues[${f.index}] ${f.status ?? '?'}: ${f.message}`),
+    ...gapPersist.failures.map((f) => `feature-gaps[${f.index}] ${f.status ?? '?'}: ${f.message}`),
+  ];
+  if (persistFailures.length) {
+    await appendLog({
+      run_id: job.run_id,
+      session_id: job.session.id,
+      job_id: job.job_id,
+      level: 'warn',
+      message: `Finding persist soft-failed (${persistFailures.length} row(s)); session will still complete. `
+        + persistFailures.slice(0, 3).join(' | '),
+      context: {
+        ux_saved: uxPersist.saved,
+        ux_attempted: uxPersist.attempted,
+        gaps_saved: gapPersist.saved,
+        gaps_attempted: gapPersist.attempted,
+        sample: persistFailures.slice(0, 5),
+      },
+    }).catch(() => {});
+  }
+
   const completedAt = new Date().toISOString();
   await buildSessionReport({
     run: job.run,
@@ -557,7 +582,7 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     inventoryCount,
     uxIssues,
     featureGaps: enriched,
-    allInventoryLabels: allInventory.map((item) => item.label),
+    allInventoryLabels,
     screenshots,
     screenshotUrls: screenUrls,
     screenshotTitles: screenTitles,
@@ -587,6 +612,14 @@ export async function runSession(job: Job): Promise<Record<string, unknown>> {
     agent_steps: agentSteps,
     creates_verified: createsVerified,
     loop_status: loopStatus,
+    persist_warnings: {
+      count: persistFailures.length,
+      ux_saved: uxPersist.saved,
+      ux_attempted: uxPersist.attempted,
+      gaps_saved: gapPersist.saved,
+      gaps_attempted: gapPersist.attempted,
+      sample: persistFailures.slice(0, 5),
+    },
   };
 }
 
@@ -692,8 +725,9 @@ async function observeAndPersist(ctx: ObserveCtx, label: string, existingScreens
       screen_titles: [meta.module_name || meta.title || label],
       screenshot_paths: [shotPath],
       inventory_samples: relevantInventory(i, inventory),
-      ...(consoleEvents.length ? { console_events: consoleEvents.slice(0, 10) } : {}),
-      ...(networkEvents.length ? { network_events: networkEvents.slice(0, 10) } : {}),
+      // Runtime blobs only aid error findings; keep UX categories lean.
+      ...(i.category === 'errors' && consoleEvents.length ? { console_events: consoleEvents.slice(0, 10) } : {}),
+      ...(i.category === 'errors' && networkEvents.length ? { network_events: networkEvents.slice(0, 10) } : {}),
     };
     allUx.push(i);
   }
@@ -744,7 +778,7 @@ function relevantInventory(issue: UxIssue, inventory: import('./scanner/uiInvent
       : issue.category === 'reports'
         ? ['table', 'export', 'print', 'download']
         : issue.category === 'filters'
-          ? ['table', 'filter']
+          ? ['table', 'filter', 'search']
           : ['button', 'form', 'table'];
   const preferred = inventory.filter((item) => preferredKinds.includes(item.kind));
   return (preferred.length ? preferred : inventory).slice(0, 10).map(({ kind, label, selector, url }) => ({

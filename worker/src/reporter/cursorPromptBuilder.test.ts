@@ -217,6 +217,68 @@ test('master pack: carries the prefix, suffix, and a Detection & disproof block 
   assert.match(pack, /## Detection & disproof/);
 });
 
+test('UX prompt caps screenshot lines at 5', () => {
+  const issue = uxIssue(['https://hrms.aicountly.com/dashboard']);
+  issue.evidence.screenshot_paths = [
+    '/tmp/1.png', '/tmp/2.png', '/tmp/3.png', '/tmp/4.png', '/tmp/5.png', '/tmp/6.png', '/tmp/7.png',
+  ];
+  const prompt = buildUxCursorPrompt(issue, context);
+  const shotLines = prompt.split('\n').filter((line) => line.startsWith('- Screenshot:'));
+  assert.equal(shotLines.length, 5);
+});
+
+test('master pack with inventory labels demotes multi_tenant and search into Group B', () => {
+  const pack = buildCursorPromptPack(
+    context,
+    [
+      {
+        category: 'multi_tenant',
+        severity: 'low' as const,
+        title: 'Company / branch / FY selector not detected',
+        description: 'Missing selector.',
+        recommendation: 'Add selector.',
+        human_summary: '',
+        developer_prompt: '',
+        evidence: { affected_urls: ['https://hrms.aicountly.com/dashboard'] },
+      },
+      {
+        category: 'navigation',
+        severity: 'low' as const,
+        title: 'Command/search box missing',
+        description: 'No search.',
+        recommendation: 'Add search.',
+        human_summary: '',
+        developer_prompt: '',
+        evidence: { affected_urls: ['https://hrms.aicountly.com/dashboard'] },
+      },
+    ],
+    [{
+      product_name: 'HRMS',
+      expected_feature: 'form 16',
+      observed: false,
+      partial: false,
+      competitor_ref: '',
+      severity: 'suggestion' as const,
+      confidence: 'low' as const,
+      mode: 'validate_first' as const,
+      recommendation: 'Confirm scope.',
+      human_summary: '',
+      developer_prompt: '',
+      notes: '',
+      sources: [],
+      evidence: { sample_labels: [], screens_checked: ['https://hrms.aicountly.com/dashboard'] },
+    }],
+    ['2026 - 27 | HO', 'Search employees', 'FY 2026-27'],
+  );
+  assert.match(pack, /Group B — Likely detector artifact/);
+  assert.match(pack, /Group C — Do not build/);
+  const groupB = pack.indexOf('Group B');
+  const groupC = pack.indexOf('Group C');
+  assert.ok(pack.indexOf('Company / branch / FY selector not detected') > groupB);
+  assert.ok(pack.indexOf('Command/search box missing') > groupB);
+  assert.ok(pack.indexOf('form 16') > groupC);
+});
+
 test('master pack: an errors finding with an /api/manage network failure names both the frontend and the upstream repo', () => {
   const issue = {
     category: 'errors',

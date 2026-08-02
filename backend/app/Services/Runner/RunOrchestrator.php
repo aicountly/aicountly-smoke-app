@@ -230,7 +230,10 @@ class RunOrchestrator
         }
         $now = date('Y-m-d H:i:s');
         $this->cancelPendingDecisionsForJob($jobId, $now);
-        $shouldRetry = (int) $job->attempts < (int) $job->max_attempts;
+        // Post-browse finding writes must not burn full session retries — the
+        // browse already finished; re-queue only wastes the action budget.
+        $persistFailure = $this->isPersistWriteFailure($error);
+        $shouldRetry = ! $persistFailure && (int) $job->attempts < (int) $job->max_attempts;
         if ($shouldRetry) {
             $db->table('smoke_session_jobs')->where('id', $jobId)->update([
                 'status'     => 'queued',
@@ -260,17 +263,41 @@ class RunOrchestrator
                 'error_message'=> mb_substr($error, 0, 4000),
                 'updated_at'   => $now,
             ]);
+            $failMessage = $persistFailure
+                ? 'Session failed (persist write; not re-queued): ' . mb_substr($error, 0, 500)
+                : 'Session failed: ' . mb_substr($error, 0, 500);
             Services::runLog()->append(
                 (int) $job->run_id,
                 (int) $job->session_id,
                 $jobId,
                 'worker',
                 'error',
-                'Session failed: ' . mb_substr($error, 0, 500),
+                $failMessage,
             );
             $db->query('UPDATE smoke_observation_runs SET sessions_failed = sessions_failed + 1, updated_at = NOW() WHERE id = ?', [$job->run_id]);
             $this->finalizeRunIfDone((int) $job->run_id);
         }
+    }
+
+    /**
+     * Failures from writing UX issues / feature gaps after the agent finished.
+     * Retrying re-runs the whole browse and does not fix a schema/API problem.
+     */
+    private function isPersistWriteFailure(string $error): bool
+    {
+        $haystack = strtolower($error);
+        foreach ([
+            '/worker/ux-issues',
+            '/worker/feature-gaps',
+            'recorduxissues',
+            'recordfeaturegaps',
+            'persist_failed',
+        ] as $needle) {
+            if (str_contains($haystack, $needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function requeueExpiredLeases(): void

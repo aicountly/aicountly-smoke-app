@@ -115,6 +115,70 @@ test('classifyTrust: a validate_first feature gap is never a build order', () =>
   assert.equal(classifyTrust(finding), 'do_not_build');
 });
 
+test('classifyTrust: a filters finding is a likely artifact when search labels or filter/search kinds are present', () => {
+  const finding = ux({
+    category: 'filters',
+    title: 'Data screen without filters',
+    evidence: {
+      inventory_samples: [{ kind: 'search', label: 'Search employees', selector: 'input' }],
+    },
+  });
+  assert.equal(classifyTrust(finding), 'likely_artifact');
+  assert.equal(classifyTrust(ux({ category: 'filters', title: 'Data screen without filters' }), ['Search employees']), 'likely_artifact');
+  assert.equal(classifyTrust(ux({ category: 'filters', title: 'Data screen without filters' }), ['Save']), 'verify_then_fix');
+});
+
+test('classifyTrust: export findings demote when run labels show Download CSV/Excel/PDF', () => {
+  const finding = ux({
+    category: 'reports',
+    title: 'Export option missing on a screen with a table',
+  });
+  assert.equal(classifyTrust(finding, ['Download CSV']), 'likely_artifact');
+  assert.equal(classifyTrust(finding, ['Download Excel']), 'likely_artifact');
+  assert.equal(classifyTrust(finding, ['Export to PDF']), 'likely_artifact');
+  assert.equal(classifyTrust(finding, ['Save changes']), 'verify_then_fix');
+});
+
+test('classifyTrust: zero-evidence validate_first shift scheduler is do_not_build', () => {
+  const finding = gap({
+    mode: 'validate_first',
+    expected_feature: 'shift scheduler',
+    partial: false,
+    evidence: { sample_labels: [], screens_checked: [], matched_context: [] },
+  });
+  assert.equal(classifyTrust(finding), 'do_not_build');
+});
+
+test('classifyTrust: high-count CRUD row-action duplicates with accessible-name prompts are likely artifacts', () => {
+  const editDup = ux({
+    category: 'layout',
+    title: 'Duplicate button label "Edit"',
+    recommendation: 'Give each control its own accessible name (aria-label / aria-labelledby); keep the shared visible copy.',
+    developer_prompt: 'Add a distinct aria-label to each "Edit" control. Do not change the visible row-action copy itself.',
+    evidence: { count: 17 },
+  });
+  assert.equal(classifyTrust(editDup), 'likely_artifact');
+
+  const deactivateDup = ux({
+    category: 'layout',
+    title: 'Duplicate button label "Deactivate"',
+    recommendation: 'Give each control its own accessible name (aria-label).',
+    developer_prompt: 'Add a distinct aria-label to each "Deactivate" control.',
+    evidence: { count: 17 },
+  });
+  assert.equal(classifyTrust(deactivateDup), 'likely_artifact');
+
+  // Non-row-action duplicates that still ask for a rename stay in Group A.
+  const confirmDup = ux({
+    category: 'layout',
+    title: 'Duplicate button label "Confirm"',
+    recommendation: 'Disambiguate via icon + label or context-specific copy.',
+    developer_prompt: 'Rename the duplicate "Confirm" buttons on this screen so each conveys a distinct action.',
+    evidence: { count: 5 },
+  });
+  assert.equal(classifyTrust(confirmDup), 'verify_then_fix');
+});
+
 test('assembleMasterPrompt opens with the v1 sentinel and orders groups A, B, C', () => {
   const doc = assembleMasterPrompt({
     context,
@@ -132,6 +196,50 @@ test('assembleMasterPrompt opens with the v1 sentinel and orders groups A, B, C'
   const groupC = doc.indexOf('Group C');
   assert.ok(groupA > -1 && groupB > groupA && groupC > groupB, 'groups must appear in trust order A, B, C');
   assert.match(doc, /## Detection & disproof/);
+});
+
+test('assembleMasterPrompt with full inventory labels places multi_tenant + search in Group B and validate_first in Group C', () => {
+  const doc = assembleMasterPrompt({
+    context,
+    uxIssues: [
+      ux({
+        category: 'multi_tenant',
+        title: 'Company / branch / FY selector not detected',
+        developer_prompt: '# Company / branch / FY selector not detected\n\nBody.',
+      }),
+      ux({
+        category: 'navigation',
+        title: 'Command/search box missing',
+        developer_prompt: '# Command/search box missing\n\nBody.',
+      }),
+      ux({
+        category: 'layout',
+        title: 'Table overflows viewport',
+        severity: 'high',
+        developer_prompt: '# Table overflows viewport\n\nBody.',
+      }),
+    ],
+    featureGaps: [gap({
+      mode: 'validate_first',
+      expected_feature: 'form 16',
+      developer_prompt: '# form 16\n\nBody.',
+    })],
+    allInventoryLabels: ['2026 - 27 | HO', 'Search employees, modules…', 'FY 2026-27'],
+  });
+
+  // Match the section headings (prefix prose also names the groups).
+  const groupA = doc.indexOf('# Group A');
+  const groupB = doc.indexOf('# Group B');
+  const groupC = doc.indexOf('# Group C');
+  assert.ok(groupA > -1 && groupB > groupA && groupC > groupB);
+
+  const sectionA = doc.slice(groupA, groupB);
+  const sectionB = doc.slice(groupB, groupC);
+  const sectionC = doc.slice(groupC);
+  assert.match(sectionA, /Table overflows viewport/);
+  assert.match(sectionB, /Company \/ branch \/ FY selector not detected/);
+  assert.match(sectionB, /Command\/search box missing/);
+  assert.match(sectionC, /# form 16/);
 });
 
 test('assembleMasterPrompt renders the prefix exactly once for a multi-finding pack', () => {

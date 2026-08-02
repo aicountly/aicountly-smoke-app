@@ -193,6 +193,10 @@ export async function runAgentLoop(input: {
   // fresh window has passed; otherwise one sweep would spend all three warnings
   // on consecutive steps and end the session before the model could react.
   let lastCirclingWarning = 0;
+  // Sidebar re-walks change the screen every click, so evaluateLoopDetection never
+  // sticks. This counts consecutive revisit-only nav clicks and exits early.
+  let consecutiveRevisitNav = 0;
+  const seenScreenKeys = new Set<string>([screenKey(priorSignature)]);
   // Retention only thins stored screenshots; it must not cap how many actions the
   // agent may take before the session's own budget is spent.
   const budget = Math.max(1, input.budget);
@@ -423,25 +427,54 @@ export async function runAgentLoop(input: {
     // Re-walking a menu changes the screen on every click, so it resets every
     // counter evaluateLoopDetection keeps and is invisible to it. Judged here, on
     // the trail of screens instead of the shape of one action.
+    const revisit = updateConsecutiveRevisitNav({
+      consecutive: consecutiveRevisitNav,
+      seenKeys: seenScreenKeys,
+      action: decision.action,
+      outcome: step.outcome,
+      after: outcome.after,
+      targetLabel: step.target_label,
+    });
+    consecutiveRevisitNav = revisit.consecutive;
+
+    if (consecutiveRevisitNav >= REVISIT_NAV_EXIT_AT) {
+      await input.onLoopWarning?.(
+        `Loop detection: ${consecutiveRevisitNav} consecutive revisit-only navigation steps; ending session.`,
+      );
+      return finish({
+        status: 'blocked',
+        reason: 'Re-navigation only: the same already-visited screens were opened repeatedly without new coverage or productive form work.',
+        steps,
+        screenCount: steps.length,
+      });
+    }
+
     const circling = ordinal - lastCirclingWarning >= CIRCLING_WINDOW
       ? evaluateNavigationCircling({ steps })
       : { circling: false, revisited: [] };
     if (circling.circling) lastCirclingWarning = ordinal;
-    if (loop.warned || circling.circling) {
+    const revisitWarn = consecutiveRevisitNav === REVISIT_NAV_WARN_AT
+      || consecutiveRevisitNav === REVISIT_NAV_WARN_AT + 3;
+    if (loop.warned || circling.circling || revisitWarn) {
       stuckWarnings += 1;
-      const note = circling.circling
-        ? `The last ${CIRCLING_WINDOW} steps only revisited screens already covered `
-          + `(${circling.revisited.join(', ')}). Open a screen you have not seen, create or confirm `
-          + 'a record in scope, or finish and say what is missing.'
-        : 'Loop detection fired; take a different route.';
+      const note = consecutiveRevisitNav >= REVISIT_NAV_WARN_AT
+        ? `${consecutiveRevisitNav} consecutive revisit-only navigation steps. Open a screen you have not `
+          + 'seen, create or confirm a record in scope, or finish.'
+        : circling.circling
+          ? `The last ${CIRCLING_WINDOW} steps only revisited screens already covered `
+            + `(${circling.revisited.join(', ')}). Open a screen you have not seen, create or confirm `
+            + 'a record in scope, or finish and say what is missing.'
+          : 'Loop detection fired; take a different route.';
       feedback += ` ${note}`;
       await input.onLoopWarning?.(
         `Loop detection warning ${stuckWarnings}/3: ${
-          circling.circling
-            ? `only already-visited screens for the last ${CIRCLING_WINDOW} steps`
-            : consecutiveScrolls >= 4
-              ? 'four or more scrolls in a row without acting'
-              : 'stalled action pattern or unchanged page'
+          consecutiveRevisitNav >= REVISIT_NAV_WARN_AT
+            ? `${consecutiveRevisitNav} consecutive revisit-only navigation steps`
+            : circling.circling
+              ? `only already-visited screens for the last ${CIRCLING_WINDOW} steps`
+              : consecutiveScrolls >= 4
+                ? 'four or more scrolls in a row without acting'
+                : 'stalled action pattern or unchanged page'
         }.`,
       );
       if (stuckWarnings >= 3) {
@@ -533,13 +566,64 @@ export function evaluateLoopDetection(input: {
   };
 }
 
-/** Screens are keyed by route and title: that is the unit the agent navigates in. */
-function screenKey(sig: PageSignature): string {
-  return `${sig.url}|${sig.title}`;
+/** Strip query/hash so SPA noise does not defeat revisit/circling detection. */
+export function navPathname(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/\/+$/, '') || '/';
+    return `${parsed.origin}${path}`;
+  } catch {
+    return url.split(/[?#]/)[0].replace(/\/+$/, '') || url;
+  }
+}
+
+/** Screens are keyed by route pathname and title: that is the unit the agent navigates in. */
+export function screenKey(sig: PageSignature): string {
+  return `${navPathname(sig.url)}|${sig.title}`;
 }
 
 /** How many recent steps of pure re-navigation count as circling. */
 export const CIRCLING_WINDOW = 6;
+
+/** Consecutive revisit-only nav clicks before a loop warning. */
+export const REVISIT_NAV_WARN_AT = 12;
+
+/** Consecutive revisit-only nav clicks before ending the session. */
+export const REVISIT_NAV_EXIT_AT = 18;
+
+/**
+ * Track pure sidebar re-walks: click/navigate onto an already-seen screen with
+ * no form work. Productive typing/select/fill/submit or a brand-new screen resets.
+ */
+export function updateConsecutiveRevisitNav(input: {
+  consecutive: number;
+  seenKeys: Set<string>;
+  action: AgentAction;
+  outcome: AgentStepRecord['outcome'];
+  after: PageSignature;
+  targetLabel?: string;
+}): { consecutive: number } {
+  const productive = input.action.type === 'type'
+    || input.action.type === 'select'
+    || input.action.type === 'fill_form'
+    || (input.action.type === 'click' && looksLikeSubmitLabel(input.targetLabel ?? ''));
+  if (productive) {
+    input.seenKeys.add(screenKey(input.after));
+    return { consecutive: 0 };
+  }
+  if (input.outcome !== 'executed') {
+    return { consecutive: input.consecutive };
+  }
+  if (input.action.type !== 'click' && input.action.type !== 'navigate') {
+    return { consecutive: input.consecutive };
+  }
+  const key = screenKey(input.after);
+  if (!input.seenKeys.has(key)) {
+    input.seenKeys.add(key);
+    return { consecutive: 0 };
+  }
+  return { consecutive: input.consecutive + 1 };
+}
 
 /**
  * Every screen this session has landed on, with visit counts, most-visited

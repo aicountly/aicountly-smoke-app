@@ -100,16 +100,70 @@ export async function recordFileIoTest(payload: Record<string, unknown>): Promis
   return response.data.id;
 }
 
-export async function recordUxIssues(rows: Array<Record<string, unknown>>): Promise<void> {
-  for (const row of rows) {
-    await backend.post('/worker/ux-issues', row);
+export type PersistFailure = {
+  index: number;
+  status?: number;
+  message: string;
+};
+
+export type PersistBatchResult = {
+  attempted: number;
+  saved: number;
+  failures: PersistFailure[];
+};
+
+type RowPoster = (url: string, data: Record<string, unknown>) => Promise<unknown>;
+
+/**
+ * Persist finding rows one at a time. A single API/DB failure must not abort the
+ * batch or the session — callers soft-fail and still complete the job.
+ */
+export async function persistRows(
+  path: string,
+  rows: Array<Record<string, unknown>>,
+  post: RowPoster = (url, data) => backend.post(url, data),
+): Promise<PersistBatchResult> {
+  const failures: PersistFailure[] = [];
+  let saved = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    try {
+      await post(path, rows[index]!);
+      saved += 1;
+    } catch (error) {
+      failures.push({
+        index,
+        status: axiosErrorStatus(error),
+        message: axiosErrorMessage(error),
+      });
+    }
   }
+  return { attempted: rows.length, saved, failures };
 }
 
-export async function recordFeatureGaps(rows: Array<Record<string, unknown>>): Promise<void> {
-  for (const row of rows) {
-    await backend.post('/worker/feature-gaps', row);
+function axiosErrorStatus(error: unknown): number | undefined {
+  if (axios.isAxiosError(error)) {
+    return error.response?.status;
   }
+  return undefined;
+}
+
+function axiosErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data as { message?: string; error?: string } | undefined;
+    const detail = data?.message || data?.error;
+    if (detail) return String(detail).slice(0, 500);
+    if (error.response?.status) return `Request failed with status code ${error.response.status}`;
+    return (error.message || 'request failed').slice(0, 500);
+  }
+  return ((error as Error)?.message || String(error)).slice(0, 500);
+}
+
+export async function recordUxIssues(rows: Array<Record<string, unknown>>): Promise<PersistBatchResult> {
+  return persistRows('/worker/ux-issues', rows);
+}
+
+export async function recordFeatureGaps(rows: Array<Record<string, unknown>>): Promise<PersistBatchResult> {
+  return persistRows('/worker/feature-gaps', rows);
 }
 
 export async function recordReport(payload: Record<string, unknown>): Promise<number> {

@@ -3,7 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FeatureGap } from '../reviewer/featureGapEngine.js';
 import type { Severity, UxIssue } from '../reviewer/uxReviewEngine.js';
-import { SEARCH_LABEL_PATTERN, SELECTOR_LABEL_PATTERN } from '../scanner/controlPatterns.js';
+import {
+  EXPORT_OR_DOWNLOAD_LABEL_PATTERN,
+  ROW_ACTION_LABEL_PATTERN,
+  SEARCH_LABEL_PATTERN,
+  SELECTOR_LABEL_PATTERN,
+} from '../scanner/controlPatterns.js';
 
 /**
  * Wraps the per-finding Cursor prompts already produced by cursorPromptBuilder.ts
@@ -208,6 +213,48 @@ export function classifyTrust(finding: AnyFinding, allInventoryLabels: string[] 
     && labels.some((label) => SEARCH_LABEL_PATTERN.test(label))
   ) {
     return 'likely_artifact';
+  }
+  if (finding.category === 'filters') {
+    const evidence = (finding.evidence ?? {}) as Record<string, unknown>;
+    const samples = evidence.inventory_samples;
+    const hasSearchOrFilterKind = Array.isArray(samples)
+      && samples.some((item) => {
+        if (!item || typeof item !== 'object') return false;
+        const kind = String((item as Record<string, unknown>).kind ?? '');
+        return kind === 'search' || kind === 'filter';
+      });
+    if (hasSearchOrFilterKind || labels.some((label) => SEARCH_LABEL_PATTERN.test(label))) {
+      return 'likely_artifact';
+    }
+  }
+  // "Download CSV/Excel/PDF" is export evidence; demote leftover export findings.
+  if (
+    finding.category === 'reports'
+    && /export/i.test(finding.title ?? '')
+    && labels.some((label) => EXPORT_OR_DOWNLOAD_LABEL_PATTERN.test(label))
+  ) {
+    return 'likely_artifact';
+  }
+  // Repeated CRUD row actions (Edit/Deactivate/…) already emit accessible-name
+  // recommendations at the scanner/reviewer layer; treat high-count duplicates
+  // as detector artifacts so prompt packs do not promote them as build orders.
+  if (
+    finding.category === 'layout'
+    && /duplicate button label/i.test(finding.title ?? '')
+  ) {
+    const titleLabel = /\bduplicate button label\s+"([^"]+)"/i.exec(finding.title ?? '')?.[1] ?? '';
+    const evidence = (finding.evidence ?? {}) as Record<string, unknown>;
+    const count = typeof evidence.count === 'number' ? evidence.count : 0;
+    const accessibleNameStyle = /accessible name|aria-label/i.test(
+      `${finding.recommendation ?? ''} ${finding.developer_prompt ?? ''}`,
+    );
+    if (
+      count > 2
+      && accessibleNameStyle
+      && ROW_ACTION_LABEL_PATTERN.test(titleLabel)
+    ) {
+      return 'likely_artifact';
+    }
   }
   return 'verify_then_fix';
 }

@@ -62,9 +62,11 @@ test('URL/menu/href context satisfies a feature (dropping it) and scopes unrelat
   // Form 16 has zero evidence and no scope relation — dropped as noise.
   assert.equal(rows.find((row) => row.expected_feature === 'Form 16'), undefined);
 
+  // Overtime is in Attendance family scope but has zero inventory hits → validate_first.
   const overtime = rows.find((row) => row.expected_feature === 'Overtime rules');
-  assert.equal(overtime?.mode, 'implement');
-  assert.equal(overtime?.severity, 'medium');
+  assert.equal(overtime?.mode, 'validate_first');
+  assert.equal(overtime?.severity, 'suggestion');
+  assert.deepEqual(overtime?.evidence.matched_context, []);
 });
 
 test('href payload contributes a partial match without being dropped', () => {
@@ -128,6 +130,66 @@ test('countExpectedFeatures counts every distinct expected feature regardless of
   assert.equal(countExpectedFeatures('books', benchmarks), 0, 'unrelated product has none');
 });
 
+test('synonym + title context makes employee directory observed (no implement row)', () => {
+  const rows = detectGaps('HRMS', [
+    item('Employees', '/employees'),
+  ], [{ product_name: 'HRMS', competitor_name: 'Competitor', features: ['employee directory', 'employee profile'] }], {
+    sessionName: 'Employees',
+    menuPath: '/employees',
+    pageTitles: ['Employees'],
+    moduleNames: ['Employee Directory'],
+  });
+
+  assert.equal(rows.find((row) => /directory/i.test(row.expected_feature)), undefined,
+    'directory covered by employees synonym / title must not emit a gap');
+});
+
+test('employee profile is observed when title/module carries profile synonyms', () => {
+  const rows = detectGaps('HRMS', [
+    item('Employees', '/employees'),
+  ], [{ product_name: 'HRMS', competitor_name: 'Competitor', features: ['employee profile'] }], {
+    sessionName: 'Employees',
+    menuPath: '/employees',
+    pageTitles: ['Employee details'],
+    moduleNames: ['View details'],
+  });
+  assert.equal(rows.find((row) => /profile/i.test(row.expected_feature)), undefined);
+});
+
+test('inventory/menu Leave fully observes leave tracker (no implement row)', () => {
+  const rows = detectGaps('HRMS', [
+    item('Leave', '/attendance?tab=leave'),
+  ], [{ product_name: 'HRMS', competitor_name: 'Competitor', features: ['leave tracker', 'Overtime rules'] }], {
+    sessionName: 'Leave',
+    menuPath: '/attendance?tab=leave',
+    pageTitles: ['Leave'],
+    moduleNames: ['Attendance'],
+  });
+
+  assert.equal(rows.find((row) => /leave tracker/i.test(row.expected_feature)), undefined,
+    'leave tracker covered by Leave menu / phrase synonym must not emit a gap');
+});
+
+test('Portal approvals / Approvals fully observes approvals workflow (no implement row)', () => {
+  const viaPortal = detectGaps('HRMS', [
+    item('Portal approvals', '/approvals'),
+  ], [{ product_name: 'HRMS', competitor_name: 'Competitor', features: ['approvals workflow'] }], {
+    sessionName: 'Approvals',
+    menuPath: '/approvals',
+    pageTitles: ['Portal approvals'],
+  });
+  assert.equal(viaPortal.find((row) => /approvals workflow/i.test(row.expected_feature)), undefined);
+
+  const viaApprovals = detectGaps('HRMS', [
+    item('Approvals', '/workflow/approvals'),
+  ], [{ product_name: 'HRMS', competitor_name: 'Competitor', features: ['approvals workflow'] }], {
+    sessionName: 'Approvals',
+    menuPath: '/workflow/approvals',
+    pageTitles: ['Approvals'],
+  });
+  assert.equal(viaApprovals.find((row) => /approvals workflow/i.test(row.expected_feature)), undefined);
+});
+
 test('out-of-scope gap evidence is always filtered to session-related inventory, never login-page noise', () => {
   const rows = detectGaps('HRMS', [
     item('Sign in', '/login'),
@@ -142,4 +204,46 @@ test('out-of-scope gap evidence is always filtered to session-related inventory,
   assert.equal(gap?.mode, 'validate_first');
   assert.equal(gap?.evidence.sample_labels.includes('Sign in'), false);
   assert.equal(gap?.evidence.sample_labels.includes('Region: IN'), false);
+});
+
+test('zero-evidence in-scope session-family features become validate_first, not implement', () => {
+  const rows = detectGaps('HRMS', [
+    item('Attendance & Leave', '/attendance'),
+  ], [{
+    product_name: 'HRMS',
+    competitor_name: 'Competitor',
+    features: ['shift scheduler', 'timesheet', 'geo attendance'],
+  }], {
+    sessionName: 'Attendance',
+    menuPath: '/attendance',
+  });
+
+  const shift = rows.find((row) => row.expected_feature === 'shift scheduler');
+  assert.equal(shift?.mode, 'validate_first');
+  assert.equal(shift?.confidence, 'low');
+  assert.deepEqual(shift?.evidence.matched_context, []);
+  assert.match(shift?.notes ?? '', /confirm product scope/i);
+
+  const timesheet = rows.find((row) => row.expected_feature === 'timesheet');
+  assert.equal(timesheet?.mode, 'validate_first');
+  assert.deepEqual(timesheet?.evidence.matched_context, []);
+
+  // geo attendance matches only the generic anchor → validate_first (not implement+partial).
+  const geo = rows.find((row) => row.expected_feature === 'geo attendance');
+  assert.equal(geo?.mode, 'validate_first');
+  assert.equal(geo?.partial, true);
+  assert.deepEqual(geo?.evidence.matched_context, ['attendance']);
+});
+
+test('partial gaps that match a distinctive token stay implement', () => {
+  const rows = detectGaps('HRMS', [
+    item('Overtime', '/attendance/overtime'),
+  ], [{ product_name: 'HRMS', competitor_name: 'Competitor', features: ['Overtime rules'] }], {
+    sessionName: 'Attendance',
+    menuPath: '/attendance',
+  });
+  const overtime = rows.find((row) => row.expected_feature === 'Overtime rules');
+  assert.equal(overtime?.mode, 'implement');
+  assert.equal(overtime?.partial, true);
+  assert.ok(overtime?.evidence.matched_context?.includes('overtime'));
 });

@@ -12,9 +12,9 @@
       "id": "navigation-search",
       "category": "navigation",
       "title_pattern": "search|command",
-      "detected_by": "Looks for `input[type=\"search\"]`, `[role=\"searchbox\"]`, or `[aria-label*=\"search\"]` inside the page's `header`/`nav`/`aside`/`[role=\"banner\"]`.",
-      "blind_spot": "A button that opens a search/command palette on click (rather than a visible text input) does not match any of those selectors, even though it provides the same capability.",
-      "disprove": "Check this run's own UI inventory for a button labelled like \"Search ...\" in the topbar before building a new palette."
+      "detected_by": "Looks for `input[type=\"search\"]`, `[role=\"searchbox\"]`, `[aria-label*=\"search\"]` inside the page's `header`/`nav`/`aside`/`[role=\"banner\"]`, or a shell button/trigger whose accessible label matches search / Cmd+K / Ctrl+K patterns.",
+      "blind_spot": "A search entry point with neither a search-related accessible name nor a standard search input role can still be missed.",
+      "disprove": "Check this run's own UI inventory for a search input or a button labelled like \"Search ...\" / Cmd+K in the topbar before building a new palette."
     },
     {
       "id": "keyboard",
@@ -33,17 +33,17 @@
     {
       "id": "multi_tenant",
       "category": "multi_tenant",
-      "detected_by": "Looks only for `[data-company-selector]`, `[data-branch-selector]`, `[data-fy-selector]`, or a native `<select name*=\"company|branch|financial\">`. Fires on any screen whose title matches /book|invoice|gst|hrms|payroll/, including pre-login screens.",
-      "blind_spot": "A custom button-based dropdown (e.g. a topbar button showing the company name, branch, or financial year that opens a menu on click) is structurally invisible to this check, and the check does not require the screen to be an authenticated app shell.",
+      "detected_by": "Looks for `[data-company-selector]` / `[data-branch-selector]` / `[data-fy-selector]`, native `<select name*=\"company|branch|financial\">`, and shell button/combobox labels matching company/branch/FY/year patterns (or a bare tenant name beside a FY/branch sibling). Only fires on authenticated app shells with no selector kinds in that screen's inventory. Action-verb labels like \"Add Company\" are excluded.",
+      "blind_spot": "A company switcher outside the shell header/nav, or a bare tenant name with no FY/branch sibling nearby and no company/branch/FY keyword, can still be missed.",
       "disprove": "Check this run's own UI inventory for topbar buttons showing a company name, \"HO\"/branch code, or a year range (e.g. \"2026 - 27\") before adding a new selector. Also confirm the screen is actually an authenticated, multi-company screen and not the pre-login landing page."
     },
     {
       "id": "reports-export",
       "category": "reports",
       "title_pattern": "export",
-      "detected_by": "Requires a visible table (`meta.tables > 0`) and the literal word \"export\" nowhere in the page's visible text.",
-      "blind_spot": "An export action rendered as an icon-only button, inside an overflow/kebab menu, or using different wording (e.g. \"Download list\") is missed.",
-      "disprove": "Open any row-action or toolbar overflow menu on the table before adding a new Export control."
+      "detected_by": "Requires a visible table (`meta.tables > 0`) and no export evidence: the word \"export\" nowhere in page text, no \"Download\" paired with CSV/Excel/XLSX/XLS/PDF/sheet wording, no visible control whose label matches export/download-tabular patterns, and no inventory kind `export` or `download`.",
+      "blind_spot": "An export action rendered as an icon-only button, inside an overflow/kebab menu, or using wording that mentions neither export nor a tabular download format (e.g. bare \"Download list\") can still be missed.",
+      "disprove": "Check this run's inventory and the table toolbar for Export or Download CSV/Excel/PDF before adding a new Export control."
     },
     {
       "id": "reports-print",
@@ -56,41 +56,41 @@
     {
       "id": "filters",
       "category": "filters",
-      "detected_by": "Requires a visible table and zero elements matching `select`, `[role=\"combobox\"]`, `.filter`, or `[class*=\"filter\"]` on the page.",
-      "blind_spot": "A custom filter bar built from plain buttons, chips, or a search box (with no matching class name) is invisible to this check.",
-      "disprove": "Look for date-range, status, or search controls above the table before adding a new filter bar."
+      "detected_by": "Requires a visible table and zero filter evidence: `select` / `[role=\"combobox\"]` / `.filter` / `[class*=\"filter\"]`, `[aria-haspopup=\"listbox\"]`, `input[type=\"date|datetime-local\"]`, `input[type=\"search\"]` / `[role=\"searchbox\"]`, search-trigger buttons, All/status/from/to/department/branch/category/type chips in the same section as a table, or inventory kinds `search`/`filter`.",
+      "blind_spot": "Icon-only filter controls with neither a listbox popup, date input, nor a recognised toolbar label can still be missed.",
+      "disprove": "Look for date-range, status, SearchableSelect-style listbox, or search controls above the table before adding a new filter bar."
     },
     {
       "id": "layout-duplicate-placeholder",
       "category": "layout",
       "title_pattern": "duplicate button label",
-      "detected_by": "Counts visible buttons sharing an identical accessible label/text; flags any label repeated more than twice.",
-      "blind_spot": "When the shared label is a form-field placeholder (e.g. \"— select —\", \"Select\", \"Choose\"), the buttons are usually distinct per-field controls whose *visible copy* is intentionally identical; renaming the visible text would break the design system rather than fix an ambiguity.",
-      "disprove": "If the duplicated label is a placeholder-style string, the fix is almost always a per-field accessible name (`aria-label` / `aria-labelledby` pointing at the adjacent field label), not new visible copy. Confirm before changing any on-screen text."
+      "detected_by": "Counts visible buttons sharing an identical accessible label/text; flags any custom label repeated more than twice. Intentionally identical placeholder labels (\"— select —\", \"Select\", \"Choose\") and standard CRUD row actions (Edit / Deactivate / Delete / View / All / Approve / Reject) are not emitted — they are design-system patterns, not product defects.",
+      "blind_spot": "A product that reuses a non-standard label across unrelated actions (e.g. thrice-repeated \"Save draft\") is still flagged; confirm those controls are truly ambiguous before renaming.",
+      "disprove": "If the finding names a placeholder or standard row-action string, treat it as a detector artifact (no visible-copy change). For custom duplicated labels, disambiguate with icon + label or context-specific copy."
     },
     {
       "id": "layout-overflow",
       "category": "layout",
       "title_pattern": "overflow",
-      "detected_by": "Compares the widest visible table/modal's bounding-box width or height against the viewport at capture time.",
-      "blind_spot": "A container with its own internal `overflow: auto` scroll region can still measure wider/taller than the viewport at the outer level, producing a false positive.",
-      "disprove": "Resize the browser and check whether the table/modal already scrolls internally before adding a new scroll container."
+      "detected_by": "Compares the widest visible table/modal's bounding-box width or height against the viewport at capture time, but only when no ancestor has computed `overflow-x`/`overflow-y` of `auto` or `scroll` with a constrained client size.",
+      "blind_spot": "A scroll wrapper that uses a non-standard overflow value, or that becomes scrollable only after a later layout pass, can still be missed.",
+      "disprove": "Resize the browser and check whether the table/modal already scrolls inside an overflow-auto/scroll container before adding a new scroll wrapper."
     },
     {
       "id": "errors-console",
       "category": "errors",
       "title_pattern": "console error",
-      "detected_by": "Flags the page whenever any console event of type `error` or `pageerror` was captured, regardless of cause.",
-      "blind_spot": "A resource-load 404 (e.g. a missing optional avatar/logo image) triggers a browser console error identical in shape to a real script exception, and is not itself a functional regression.",
-      "disprove": "Read the actual console message. If every flagged event is a 404 for an image/logo/asset URL, the fix is a graceful client-side fallback (skip the request, or catch the load error and show a placeholder), not a JavaScript bug hunt. Also check whether the failing request's host/path is owned by a different repository than the one this prompt names."
+      "detected_by": "Flags the page when a real script exception (`pageerror`) or non-resource console `error` was captured. Resource-load 404 console messages (logo/image/font) alone do not emit a UX issue.",
+      "blind_spot": "A non-404 console error that is still benign (third-party noise) can be flagged; conversely, a script exception swallowed before reaching the console is missed.",
+      "disprove": "Read the actual console message. Confirm it is a script exception or hard failure before treating it as a P1 bug hunt. Soft asset 404s are intentionally silent."
     },
     {
       "id": "errors-network",
       "category": "errors",
       "title_pattern": "network|api failures",
-      "detected_by": "Counts failed (`ok: false`) network requests captured during page observation, on the page's own URL, regardless of which host or path the failing request itself targeted.",
+      "detected_by": "Counts hard failed (`ok: false`) network requests that are not analytics noise and not soft assets (logo/image/font). Soft-asset-only failures do not emit a UX issue; expected create conflicts (HTTP 409) emit as low severity.",
       "blind_spot": "Ownership is resolved from the *page* URL, not the *failing request* URL. If the product's API lives on a different host/path prefix than its frontend, the finding lands on the frontend repository even when the failing endpoint belongs to the backend repository.",
-      "disprove": "Check the failing request's own URL against the repository ownership rules before assuming this repository owns the fix. A 404 on an optional asset (avatar, logo) usually only needs a frontend fallback; a 5xx on a data endpoint is a backend defect."
+      "disprove": "Check the failing request's own URL against the repository ownership rules before assuming this repository owns the fix. Soft asset 404s are intentionally silent; a 5xx on a data endpoint is a backend defect."
     },
     {
       "id": "old_theme",
@@ -124,16 +124,16 @@
       "id": "feature-gap-implement-partial",
       "category": "feature_gap",
       "mode": "implement",
-      "detected_by": "Splits the expected capability's display name into whitespace tokens and requires every token to appear (as a whole word, or substring for longer tokens) somewhere in the observed inventory's labels/URLs/hrefs. Any single missing token — even a near-synonym of a token that *did* match — keeps the whole capability unobserved.",
-      "blind_spot": "A capability that exists under a different name, or whose route/label doesn't contain the literal expected word, is reported as `partial`/`implement` even when fully present. `matched_context` in the evidence lists exactly which tokens were found; anything not listed there was never seen anywhere in the run's inventory, on any screen.",
-      "disprove": "Compare `matched_context` in the evidence against the full expected-feature name. If the missing tokens are near-synonyms of ones already matched (e.g. \"employee\" matched but \"directory\" did not, for \"employee directory\"), search this repository directly for the capability by its actual route/component name before implementing anything."
+      "detected_by": "Splits the expected capability's display name into whitespace tokens and requires every token to appear (as a whole word, or substring for longer tokens) somewhere in the observed inventory's labels/URLs/hrefs, page titles/module names, or a product-agnostic synonym map (e.g. directory↔employees/staff/people). When synonyms cover every token, the capability is treated as observed and no gap row is emitted. Partial matches that only hit a generic session-family anchor (attendance/leave/payroll/employee) while distinctive tokens are missing become `validate_first` instead of `implement`.",
+      "blind_spot": "A capability that exists under a name outside both the literal tokens and the synonym map can still be reported as `partial`/`implement` when a distinctive token did match. `matched_context` in the evidence lists exactly which tokens were found.",
+      "disprove": "Compare `matched_context` in the evidence against the full expected-feature name. If the missing tokens look like near-synonyms of UI that already exists, search this repository for the capability by its actual route/component name before implementing anything."
     },
     {
       "id": "feature-gap-validate-first",
       "category": "feature_gap",
       "mode": "validate_first",
-      "detected_by": "The expected capability's tokens matched nowhere in the run's inventory, and the capability's name has no token overlap with the current session's scope, so this run has no first-hand evidence about it either way.",
-      "blind_spot": "Zero evidence is not evidence of absence — the capability may live in a module this run never visited.",
+      "detected_by": "Emitted when (a) the capability is outside session scope with only weak/no evidence, (b) session-family expansion pulled it into scope but inventory matched zero tokens (e.g. Attendance session → shift scheduler / timesheet with no UI hits), or (c) a partial match only found a generic family anchor while distinctive tokens were missing (e.g. geo attendance matching only attendance).",
+      "blind_spot": "Zero evidence is not evidence of absence — the capability may live in a module this run never visited, or under a name outside the synonym map.",
       "disprove": "This is a scope question, not a defect. Confirm with the product owner before opening any implementation ticket; do not treat this as a build order."
     }
   ],

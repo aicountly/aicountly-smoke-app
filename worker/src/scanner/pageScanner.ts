@@ -1,5 +1,10 @@
 import type { Page } from 'playwright';
-import { SEARCH_LABEL_PATTERN_SOURCE } from './controlPatterns.js';
+import {
+  EXPORT_OR_DOWNLOAD_LABEL_PATTERN_SOURCE,
+  SEARCH_LABEL_PATTERN_SOURCE,
+  TOOLBAR_FILTER_LABEL_PATTERN_SOURCE,
+} from './controlPatterns.js';
+import { HAS_SCROLLABLE_ANCESTOR_JS } from './overflowDetection.js';
 
 export type PageMetadata = {
   url: string;
@@ -54,18 +59,22 @@ const SCAN_PAGE_JS = `
   if (document.querySelector('img[align]')) oldThemeIndicators.push('img_align');
   if (document.querySelector('center')) oldThemeIndicators.push('center_tag');
 
+  ${HAS_SCROLLABLE_ANCESTOR_JS}
   const tables = $('table').filter(visible);
   let tableOverflow = false;
   for (const t of tables) {
     const r = t.getBoundingClientRect();
-    if (r.width > window.innerWidth + 10) { tableOverflow = true; break; }
+    // Wide registers inside overflow-x auto/scroll wrappers are intentional, not defects.
+    if (r.width > window.innerWidth + 10 && !hasScrollableAncestor(t, 'x')) { tableOverflow = true; break; }
   }
   let modalOverflow = false;
   const modals = $('[role="dialog"], .modal, .ant-modal, .MuiDialog-root');
   for (const m of modals) {
     if (!visible(m)) continue;
     const r = m.getBoundingClientRect();
-    if (r.height > window.innerHeight + 10 || r.width > window.innerWidth + 10) {
+    const tall = r.height > window.innerHeight + 10 && !hasScrollableAncestor(m, 'y');
+    const wide = r.width > window.innerWidth + 10 && !hasScrollableAncestor(m, 'x');
+    if (tall || wide) {
       modalOverflow = true; break;
     }
   }
@@ -115,6 +124,33 @@ const SCAN_PAGE_JS = `
     .some((el) => searchLabelPattern.test((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')));
   const hasSearch = hasSearchInput || hasSearchTrigger;
 
+  // Table screens often filter via a search box, SearchableSelect-style
+  // listbox popup, or date inputs rather than a native <select> / .filter.
+  // Count those as filter evidence so "Data screen without filters" does not
+  // fire when page-local filter controls are already present.
+  const classicFilters = $('[role="combobox"], select, .filter, [class*="filter"]').filter(visible).length;
+  const listboxFilters = $('[aria-haspopup="listbox"]').filter(visible).length;
+  const dateFilters = $('input[type="date"], input[type="datetime-local"]').filter(visible).length;
+  const searchFilterInputs = $('input[type="search"], [role="searchbox"]').filter(visible).length;
+  const searchFilterTriggers = Array.from(document.querySelectorAll('button, [role="button"]'))
+    .filter(visible)
+    .filter((el) => searchLabelPattern.test((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')))
+    .length;
+  // Optional: All/status/from/to/... chips in the same section as a table.
+  const toolbarFilterPattern = /${TOOLBAR_FILTER_LABEL_PATTERN_SOURCE}/i;
+  const toolbarFilterEls = new Set();
+  for (const t of tables) {
+    let scope = t.parentElement;
+    for (let depth = 0; depth < 3 && scope; depth++) {
+      for (const el of Array.from(scope.querySelectorAll('button, [role="button"]')).filter(visible)) {
+        if (toolbarFilterEls.has(el)) continue;
+        const name = ((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')).trim().replace(/\\s+/g, ' ');
+        if (toolbarFilterPattern.test(name)) toolbarFilterEls.add(el);
+      }
+      scope = scope.parentElement;
+    }
+  }
+
   return {
     url: location.href,
     title: document.title,
@@ -124,7 +160,16 @@ const SCAN_PAGE_JS = `
     has_search: hasSearch,
     has_help_text: /help|tooltip|info/i.test(document.body.innerHTML.slice(0, 50000)),
     has_keyboard_shortcuts: /\\bctrl\\b|\\bcmd\\b|\\u2318|\\u21E7/.test(document.body.innerHTML.slice(0, 50000)),
-    has_export: /\\bexport\\b/i.test(allText),
+    has_export: (() => {
+      // "Download CSV/Excel/PDF" is the same capability as Export even when the
+      // literal word "export" never appears in the page text.
+      if (/\\bexport\\b/i.test(allText)) return true;
+      if (/\\bdownload\\b/i.test(allText) && /\\b(csv|excel|xlsx|xls|pdf|sheet)\\b/i.test(allText)) return true;
+      const exportLabelPattern = /${EXPORT_OR_DOWNLOAD_LABEL_PATTERN_SOURCE}/i;
+      return Array.from(document.querySelectorAll('a, button, [role="button"]'))
+        .filter(visible)
+        .some((el) => exportLabelPattern.test(((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')).trim()));
+    })(),
     has_print: /\\bprint\\b/i.test(allText),
     has_download: /\\bdownload\\b/i.test(allText),
     has_upload: $('input[type="file"]').length > 0 || /\\b(upload|import|attach)\\b/i.test(allText),
@@ -137,7 +182,7 @@ const SCAN_PAGE_JS = `
     primary_buttons: $('button, [role="button"]').filter(visible).length,
     forms: $('form').filter(visible).length,
     tables: tables.length,
-    filters: $('[role="combobox"], select, .filter, [class*="filter"]').filter(visible).length,
+    filters: classicFilters + listboxFilters + dateFilters + searchFilterInputs + searchFilterTriggers + toolbarFilterEls.size,
     old_theme_indicators: oldThemeIndicators,
   };
 `;
