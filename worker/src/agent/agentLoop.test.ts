@@ -520,6 +520,48 @@ test('blocked is accepted after a submit when the reason names a server-side ref
   }
 });
 
+test('blocked is accepted when the product itself renders an access wall', () => {
+  const steps = [step({ ordinal: 19 })];
+  const submitted = submittedControls(steps);
+  const scroll = { y: 900, maxY: 900, deepestSeen: 900 };
+
+  // An app that checks entitlement before submitting shows a banner instead of
+  // returning a status code, so there is nothing for the server-refusal pattern to
+  // match. This is the real Auditor "Engagement Setup" run: the wall was refuted, the
+  // agent was sent back to scroll and fill the form, and hit the same wall a step later.
+  for (const reason of [
+    'The account has read-only access and cannot create engagements. A warning states: '
+      + '"Your account cannot create engagements. You are signed in but not yet a member of this '
+      + 'firm in Auditor, so you have read-only access. Ask a firm admin to add you under Admin -> Team."',
+    'A banner says the workspace is read-only for this user.',
+    'The screen says to contact your admin to enable this module.',
+    'This account is not entitled to the payroll module.',
+  ]) {
+    assert.equal(
+      evaluateBlockedDecision({ steps, submitted, scroll, refusalsUsed: 0, reason }),
+      null,
+      reason,
+    );
+  }
+});
+
+test('blocked is still refuted for a bare "could not create" with no entitlement signal', () => {
+  const steps = [step({ ordinal: 19 })];
+  const submitted = submittedControls(steps);
+  const scroll = { y: 900, maxY: 900, deepestSeen: 900 };
+
+  assert.notEqual(
+    evaluateBlockedDecision({
+      steps,
+      submitted,
+      scroll,
+      refusalsUsed: 0,
+      reason: 'I could not create the record.',
+    }),
+    null,
+  );
+});
+
 test('blocked still refutes a missing-control claim even when it mentions an unrelated status-shaped number', () => {
   const steps = [step({ ordinal: 19 })];
   const submitted = submittedControls(steps);

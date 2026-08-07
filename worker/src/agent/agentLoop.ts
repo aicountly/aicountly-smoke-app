@@ -789,8 +789,24 @@ const REASON_ALREADY_ADMITS_CONTROL_WAS_USED =
 const REASON_REPORTS_A_SERVER_REFUSAL =
   /insufficient permission|permission denied|access denied|not authori[sz]ed|unauthori[sz]ed|forbidden|\b(?:401|403|500|502|503|504)\b|server error/i;
 
+/**
+ * The same thing, said by the product rather than the server. A well-built app checks
+ * entitlement before it submits and renders a banner — "read-only access", "your account
+ * cannot create...", "ask a firm admin" — so there is no status code for the pattern above
+ * to find. That is the app behaving correctly, and it produced the exact failure this guard
+ * is meant to avoid: a real authorisation wall got sent back to "scroll and fill the form
+ * again", burning a step and reaching the same wall.
+ *
+ * Deliberately keyed on entitlement vocabulary, not on "cannot" alone: a bare "I could not
+ * create the record" is still the lazy claim the refutation should push back on.
+ */
+const REASON_REPORTS_AN_ACCESS_WALL =
+  /read[- ]only|no permission|lacks? (?:the )?permission|insufficient (?:privilege|access|right)|not (?:yet )?a member of|ask (?:a|an|your) (?:firm |workspace |account )?admin|contact (?:your|an) admin|account cannot|not entitled|no access to|upgrade (?:your|the) plan/i;
+
 function blockDescribesTheOutcome(reason: string): boolean {
-  return REASON_ALREADY_ADMITS_CONTROL_WAS_USED.test(reason) || REASON_REPORTS_A_SERVER_REFUSAL.test(reason);
+  return REASON_ALREADY_ADMITS_CONTROL_WAS_USED.test(reason)
+    || REASON_REPORTS_A_SERVER_REFUSAL.test(reason)
+    || REASON_REPORTS_AN_ACCESS_WALL.test(reason);
 }
 
 /**

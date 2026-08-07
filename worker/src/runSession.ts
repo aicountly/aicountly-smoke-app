@@ -35,6 +35,7 @@ import type { NetworkEvent } from './scanner/networkCapture.js';
 import { runFileIoScenarios, shouldRunFileIoSession } from './fileIo/fileIoEngine.js';
 import type { FileIoTestResult } from './fileIo/types.js';
 import { evaluateSessionCoverage } from './utils/sessionCoverage.js';
+import { meaningfulScopeTokens, scopeTokensMatchUrl } from './utils/scopeMatch.js';
 import { BrainUnavailableError, brainHealth } from './brain/ensemble.js';
 import { runAgentLoop } from './agent/agentLoop.js';
 import type { AgentStepRecord } from './agent/actions.js';
@@ -741,15 +742,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const SCOPE_STOPWORDS = new Set(['and', 'the', 'for', 'with', 'from', 'into', 'module', 'menu']);
-
-function meaningfulScopeTokens(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, ' ')
-    .split(/\s+/)
-    .filter((token) => token.length > 2 && !SCOPE_STOPWORDS.has(token));
-}
 
 /**
  * Counts only executed agent steps whose resulting screen carries a meaningful
@@ -765,8 +757,7 @@ function countScopeScreens(steps: AgentStepRecord[], menuPath: string, sessionNa
   if (!scopeTokens.length) return executed.length;
   return executed.filter((step) => {
     const url = step.signature_after?.url || step.signature_before?.url || '';
-    const urlTokens = meaningfulScopeTokens(url);
-    return scopeTokens.some((token) => urlTokens.includes(token));
+    return scopeTokensMatchUrl(scopeTokens, url);
   }).length;
 }
 
