@@ -42,7 +42,14 @@ class Filters extends BaseFilters
 
     public array $required = [
         'before' => ['cors'],
-        'after'  => ['cors', 'toolbar'],
+        'after'  => [
+            'cors',
+
+            // Debug Toolbar intentionally disabled for Smoke API.
+            // Keeping this enabled generated writable/debugbar files for
+            // every request and caused excessive disk consumption.
+            // 'toolbar',
+        ],
     ];
 
     public array $globals = [
