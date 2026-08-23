@@ -1,0 +1,54 @@
+name: Monitor Debug Toolbar Disk Usage
+
+# Scheduled watchdog for the writable/debugbar disk-growth issue (see
+# backend/app/Config/Filters.php $required['after'] — toolbar filter
+# intentionally disabled). Fails loudly (red run + GitHub email
+# notification to watchers) if the directory grows past THRESHOLD_MB, so
+# a regression is caught before it re-accumulates tens of GB.
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+env:
+  THRESHOLD_MB: 500
+
+jobs:
+  check-debugbar-size:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.PROD_SSH_PORT }}" "${{ secrets.PROD_SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config <<EOF
+          Host cpanel-prod
+            HostName ${{ secrets.PROD_SSH_HOST }}
+            Port ${{ secrets.PROD_SSH_PORT }}
+            User ${{ secrets.PROD_SSH_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Check writable/debugbar size on Smoke server
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+        run: |
+          REMOTE_ROOT="${REMOTE_ROOT%/}"
+          DEBUGBAR_PATH="${REMOTE_ROOT}/api/writable/debugbar"
+
+          SIZE_MB=$(ssh cpanel-prod "test -d '${DEBUGBAR_PATH}' && du -sm '${DEBUGBAR_PATH}' 2>/dev/null | cut -f1 || echo 0")
+          SIZE_MB="${SIZE_MB:-0}"
+          echo "writable/debugbar size: ${SIZE_MB} MB (threshold: ${THRESHOLD_MB} MB)"
+          ssh cpanel-prod "df -h /" || true
+
+          if [ "$SIZE_MB" -ge "$THRESHOLD_MB" ]; then
+            echo "::error::Smoke writable/debugbar is ${SIZE_MB} MB (>= ${THRESHOLD_MB} MB threshold). The Debug Toolbar after-filter may have been re-enabled, or old traces need a manual purge. See backend/app/Config/Filters.php \$required['after']."
+            exit 1
+          fi
+
+          echo "OK: debugbar disk usage within threshold."
