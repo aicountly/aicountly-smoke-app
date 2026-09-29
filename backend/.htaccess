@@ -1,0 +1,32 @@
+# Deployed as api/.htaccess. api/ is the whole CodeIgniter project root
+# (backend/); only public/ — the front controller — is meant for the web.
+# Everything else here would otherwise be fetched directly or run as PHP:
+# composer.json/.lock, spark, env, .env, app/, vendor/, writable/ (logs and old
+# debug-toolbar traces) and tests/.
+#
+# This file turns the rewrite engine on, so the docroot's /api/v1 rules no
+# longer apply below api/; the same routing is repeated here. ("Require all
+# denied" would refuse /api/v1/* too: that URL maps into this directory, and
+# access is checked before any rewrite runs.)
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /api/
+
+    # Pass Authorization through to PHP (stripped by default on CGI/FastCGI).
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # The API: /api/v1/* goes to the front controller, as in the docroot.
+    RewriteRule ^v1/(.*)$ public/index.php/api/v1/$1 [L,QSA,NC]
+    RewriteRule ^v1/?$ public/index.php/api/v1 [L,QSA,NC]
+
+    # Everything else in the project root is refused. public/ has its own
+    # .htaccess, so these rules do not reach requests inside it.
+    RewriteRule ^ - [F,L]
+</IfModule>
+
+<IfModule !mod_rewrite.c>
+    Require all denied
+</IfModule>

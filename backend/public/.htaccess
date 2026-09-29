@@ -1,5 +1,11 @@
 Options -Indexes
 
+# The parent api/.htaccess refuses the whole project root; public/ (the front
+# controller) is the one directory the web may reach.
+<IfModule mod_authz_core.c>
+  Require all granted
+</IfModule>
+
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
