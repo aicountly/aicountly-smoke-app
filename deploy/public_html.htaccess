@@ -1,5 +1,11 @@
 Options -Indexes
 
+# Server-side trees the deploy keeps under the docroot, not for the web: the
+# Node worker (code, scripts, .env), test samples, SQL migrations and
+# smoke-reports/ (screenshots and HTML reports; signed-in users get those
+# through the API's RBAC-checked routes, never as plain files).
+RedirectMatch 403 ^/(worker|samples|migrations|smoke-reports)(/|$)
+
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteBase /
