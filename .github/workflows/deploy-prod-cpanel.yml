@@ -500,6 +500,16 @@ jobs:
             echo "> Open https://smoke.aicountly.org/ — should show the login page, not a directory listing."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The live portal must answer as the smoke API, with the SPA just built. The runner may be
+      # shown the host's anti-bot page instead of the app; the checks then ask again from the server
+      # over SSH (Host cpanel-prod, configured above).
+      - name: Verify the live app
+        run: |
+          EXPECTED_ENTRY="$(grep -o 'assets/index-[^"]*\.js' frontend/dist/index.html | head -n 1 || true)"
+          export EXPECTED_ENTRY
+          export VERIFY_SSH="ssh -o BatchMode=yes -o ConnectTimeout=20 cpanel-prod"
+          bash scripts/ci/post-deploy-checks.sh production
+
       # Deliberately last: the deploy (frontend, API, migrations) must finish even
       # when the worker is dead, but the run must still go red so a broken worker is
       # never mistaken for a successful deploy.

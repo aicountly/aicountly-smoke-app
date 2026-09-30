@@ -1,0 +1,55 @@
+name: Verify live app (manual)
+
+# Checks the live smoke portal WITHOUT deploying anything, with the same checks every deploy runs
+# when it finishes (scripts/ci/post-deploy-checks.sh). The runner may be shown the host's anti-bot
+# page instead of the app; the checks then ask again from the server over SSH, set up here exactly
+# as deploy-prod-cpanel.yml sets it up (Host cpanel-prod). One environment. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which deployment to check
+        type: choice
+        options:
+          - production
+        default: production
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config <<EOF
+          Host cpanel-prod
+            HostName ${SSH_HOST}
+            Port ${SSH_PORT}
+            User ${SSH_USER}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Verify the live app
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          export VERIFY_SSH="ssh -o BatchMode=yes -o ConnectTimeout=20 cpanel-prod"
+          bash scripts/ci/post-deploy-checks.sh "$ENVIRONMENT"
