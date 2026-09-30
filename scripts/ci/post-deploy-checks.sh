@@ -33,7 +33,10 @@ check() {
 }
 
 # The API: it must be the smoke API (its service name is the host name); its status only warns.
-check json "Smoke API (${env_name})" "${base}/api/health" \
+# api/ is the CodeIgniter project root and api/.htaccess refuses everything in it but /api/v1/*
+# and public/ (the front controller), so /api/health answers 403. The health route is reached
+# through the front controller itself.
+check json "Smoke API (${env_name})" "${base}/api/public/index.php/health" \
   '.service == "smoke.aicountly.org"' \
   '.status == "ok"'
 
