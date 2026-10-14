@@ -76,5 +76,20 @@ def run(ctx):
     md = ((r.json or {}).get("data") or {}).get("metadata")
     ctx.check(r.status == 200 and isinstance(md, dict) and isinstance((md.get("raw") or {}).get("acceptance"), list),
               "Build GET v1/dev-requests/{id} returns metadata as an object, acceptance as an array", f"type(metadata)={type(md).__name__}")
+    # Build's approvals are decided in Build; Console hears about them only through the central audit
+    # (the former /api/v1/portal/build/* calls were removed — Console never served them).
+    r = client.post(f"{f.BUILD()}/v1/approvals", bearer=btok,
+                    json_body={"entity_id": int(dev_id), "action": "code", "payload": {"plan": "fix date parser", "files": ["Csv.php"]}})
+    appr = ((r.json or {}).get("data") or {}).get("approval_id")
+    ctx.check(r.status == 201 and appr, "a Build super_admin requests a code approval (POST v1/approvals)", f"HTTP {r.status} {r.text[:160]}")
+    rows = f.check_central_audit(ctx, "build", "approval.requested",
+                                 "Console central audit has Build's approval.requested for the dev request, by the super_admin",
+                                 f"AND entity_type = 'dev_request' AND entity_ref = '{dev_id}' AND lower(actor_email) = lower('{f.PNO_EMAIL}')")
+    meta = (pg.json_rows(config.db("console"), f"SELECT metadata FROM audit_logs WHERE id = {rows[-1]['id']}")[0]["metadata"] or {}).get("metadata") or {}
+    ctx.check(meta.get("action") == "code" and int(meta.get("approval_id") or 0) == int(appr) and meta.get("payload", {}).get("files") == ["Csv.php"],
+              "  carrying the approval id, action and payload (what the removed approval_request call sent)", str(meta)[:200])
+    kinds = [r_["kind"] for r_ in pg.json_rows(bdb, "SELECT DISTINCT kind FROM build_console_syncs WHERE direction = 'outbound'")]
+    ctx.check(kinds == ["audit_event"], "Build sends Console nothing but central audit (no calls to /api/v1/portal/build/*)", str(kinds))
+
     f.check_audit_outbox_drained(ctx, "flow")
     f.check_audit_outbox_drained(ctx, "build")
