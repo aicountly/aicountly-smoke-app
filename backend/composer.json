@@ -41,7 +41,9 @@
         "post-update-cmd": [
             "@composer dump-autoload"
         ],
-        "test": "phpunit"
+        "test": "phpunit",
+        "test:unit": "phpunit --testsuite unit",
+        "test:db": "phpunit --testsuite database"
     },
     "minimum-stability": "stable",
     "prefer-stable": true

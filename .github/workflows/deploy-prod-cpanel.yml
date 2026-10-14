@@ -127,6 +127,8 @@ jobs:
             --exclude '.env' \
             --exclude '.git/' \
             --exclude 'tests/' \
+            --exclude 'build/' \
+            --exclude 'phpunit.xml.dist' \
             --exclude 'writable/cache/*' \
             --exclude 'writable/logs/*' \
             --exclude 'writable/session/*' \
@@ -145,6 +147,9 @@ jobs:
             exit 1
           fi
           echo "Server api/.env present — will be used for migrations (unchanged by deploy)."
+          if ! ssh cpanel-prod "grep -Eq '^[[:space:]]*CONSOLE_API_TOKEN[[:space:]]*=[[:space:]]*[^[:space:]]' '${REMOTE_ROOT}/api/.env'"; then
+            echo "::warning::CONSOLE_API_TOKEN is not set in api/.env — token refresh does not re-check roles with Console, so a role removed in Console stays effective until the user's refresh token expires (JWT_REFRESH_TTL). Set it (Console per-product key with capability staff.roles)."
+          fi
 
       - name: Rsync worker
         env:

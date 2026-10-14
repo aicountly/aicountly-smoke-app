@@ -20,9 +20,15 @@ CREATE TABLE smoke_users (
     mfa_secret      VARCHAR(255),
     last_login_at   TIMESTAMP,
     last_login_ip   VARCHAR(64),
+    -- Console link (2026-10-14-100000_AddConsoleRoleSyncToSmokeUsers)
+    console_user_id     BIGINT,
+    roles_synced_at     TIMESTAMP,
+    authz_version       INTEGER,
+    sessions_revoked_at TIMESTAMP,
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX smoke_users_console_user_id_idx ON smoke_users(console_user_id);
 
 -- 02 smoke_roles
 CREATE TABLE smoke_roles (

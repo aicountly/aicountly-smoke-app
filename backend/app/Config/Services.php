@@ -5,6 +5,9 @@ namespace Config;
 use App\Services\Audit\AuditLogger;
 use App\Services\Auth\JwtService;
 use App\Services\Auth\RbacService;
+use App\Services\ConsoleAccess\ConsoleRoleSyncService;
+use App\Services\ConsoleAccess\ConsoleUserAccessClient;
+use App\Services\ConsoleAccess\DbUserRoleStore;
 use App\Services\ConsoleIdentityService;
 use App\Services\Brain\BrainEnsemble;
 use App\Services\Brain\Adapters\DeterministicAdapter;
@@ -150,6 +153,25 @@ class Services extends BaseService
             return self::getSharedInstance('searchAdapter');
         }
         return new PerplexitySearchAdapter();
+    }
+
+    /**
+     * Console-assigned roles: login sync and the refresh-time user-access pull.
+     */
+    public static function consoleRoleSync(bool $getShared = true): ConsoleRoleSyncService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('consoleRoleSync') ?? static::consoleRoleSync(false);
+        }
+
+        $cache = null;
+        try {
+            $cache = static::cache();
+        } catch (\Throwable) {
+            $cache = null;
+        }
+
+        return new ConsoleRoleSyncService(new DbUserRoleStore(), new ConsoleUserAccessClient(), null, $cache);
     }
 
     public static function consoleIdentity(bool $getShared = true): ConsoleIdentityService

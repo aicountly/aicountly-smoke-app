@@ -1,9 +1,8 @@
-import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 
-const ROLES = ['owner', 'product_reviewer', 'developer_viewer', 'auditor_viewer'] as const;
+const CONSOLE_URL = 'https://console.aicountly.org';
 
 type UserRow = {
   id: number;
@@ -14,12 +13,13 @@ type UserRow = {
   last_login_at: string | null;
   created_at: string;
   roles: string[];
+  console_user_id?: number | null;
+  roles_synced_at?: string | null;
 };
 
 export function UsersPage() {
   const qc = useQueryClient();
   const isOwner = useAuthStore((s) => s.hasRole('owner'));
-  const [form, setForm] = useState({ email: '', full_name: '', password: '', role: 'product_reviewer' });
 
   const { data, isLoading } = useQuery<{ data: UserRow[] }>({
     queryKey: ['users'],
@@ -27,29 +27,9 @@ export function UsersPage() {
     enabled: isOwner,
   });
 
-  const createMut = useMutation({
-    mutationFn: async () =>
-      (await api.post('/users', {
-        email: form.email,
-        full_name: form.full_name,
-        password: form.password,
-        roles: [form.role],
-      })).data,
-    onSuccess: () => {
-      setForm({ email: '', full_name: '', password: '', role: 'product_reviewer' });
-      qc.invalidateQueries({ queryKey: ['users'] });
-    },
-  });
-
   const statusMut = useMutation({
     mutationFn: async ({ id, status }: { id: number; status: string }) =>
       (await api.put(`/users/${id}`, { status })).data,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
-  });
-
-  const roleMut = useMutation({
-    mutationFn: async ({ id, role }: { id: number; role: string }) =>
-      (await api.post(`/users/${id}/roles`, { role })).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   });
 
@@ -67,30 +47,20 @@ export function UsersPage() {
       <div>
         <h1 className="text-xl font-semibold">Users</h1>
         <p className="text-sm text-ink-500">
-          Portal accounts and roles. Most operators sign in via Console SSO; local users are for bootstrap and role assignment.
+          People who have signed in to Smoke via Console SSO. Accounts are created on first sign-in.
         </p>
       </div>
 
-      <div className="card p-4 space-y-3">
-        <div className="font-semibold text-sm">Create user</div>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <input className="input" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-          <input className="input" placeholder="Full name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
-          <input className="input" type="password" placeholder="Password (≥12 chars)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-          <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-            {ROLES.map((r) => (
-              <option key={r} value={r}>{r}</option>
-            ))}
-          </select>
-        </div>
-        <button
-          className="btn-primary"
-          disabled={createMut.isPending || form.password.length < 12 || !form.email || !form.full_name}
-          onClick={() => createMut.mutate()}
-        >
-          {createMut.isPending ? 'Creating…' : 'Create user'}
-        </button>
-        {createMut.isError && <p className="text-sm text-red-600">Create failed — check email uniqueness and password length.</p>}
+      <div className="card p-4 text-sm">
+        <div className="font-semibold">Roles are read-only here</div>
+        <p className="text-ink-500 mt-1">
+          Roles are assigned in Console → Roles &amp; Access (
+          <a className="underline" href={CONSOLE_URL} target="_blank" rel="noreferrer">
+            console.aicountly.org
+          </a>
+          ). Smoke picks up changes at the user&apos;s next sign-in or token refresh (within 15 minutes).
+          You can still disable a user locally.
+        </p>
       </div>
 
       <div className="card overflow-hidden">
@@ -118,20 +88,11 @@ export function UsersPage() {
                     {u.roles.map((r) => (
                       <span key={r} className="badge-neutral">{r}</span>
                     ))}
+                    {u.roles.length === 0 && <span className="text-xs text-ink-500">none</span>}
                   </div>
-                  <select
-                    className="input mt-1 text-xs py-1"
-                    defaultValue=""
-                    onChange={(e) => {
-                      if (e.target.value) roleMut.mutate({ id: u.id, role: e.target.value });
-                      e.target.value = '';
-                    }}
-                  >
-                    <option value="">+ assign role</option>
-                    {ROLES.filter((r) => !u.roles.includes(r)).map((r) => (
-                      <option key={r} value={r}>{r}</option>
-                    ))}
-                  </select>
+                  <div className="text-[11px] text-ink-500 mt-1">
+                    {u.roles_synced_at ? `Synced from Console ${u.roles_synced_at}` : 'Not yet synced from Console'}
+                  </div>
                 </td>
                 <td>
                   <select

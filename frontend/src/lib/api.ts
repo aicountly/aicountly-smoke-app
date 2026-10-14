@@ -31,8 +31,9 @@ api.interceptors.response.use(
         refreshing ??= (async () => {
           const r = await axios.post(`${baseURL}/auth/refresh`, { refresh_token: auth.refreshToken });
           const newAccess = r.data?.access_token as string | undefined;
+          const roles = Array.isArray(r.data?.roles) ? (r.data.roles as string[]) : undefined;
           if (newAccess) {
-            useAuthStore.getState().setAccess(newAccess);
+            useAuthStore.getState().setAccess(newAccess, roles);
             return newAccess;
           }
           return null;

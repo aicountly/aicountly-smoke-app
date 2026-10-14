@@ -6,13 +6,19 @@ use CodeIgniter\HTTP\ResponseInterface;
 use Config\Database;
 use Config\Services;
 
+/**
+ * Local Smoke user listing and deactivation. Roles are NOT editable here:
+ * Console assigns them (Console -> Roles & Access) and they are synced at
+ * sign-in and on every token refresh (see ConsoleRoleSyncService).
+ */
 class UsersController extends BaseController
 {
+    public const ROLES_READ_ONLY_MESSAGE = 'Roles are assigned in Console → Roles & Access (https://console.aicountly.org).';
     public function index(): ResponseInterface
     {
         $db = Database::connect();
         $rows = $db->table('smoke_users')
-            ->select('id, email, full_name, status, must_rotate_pw, last_login_at, created_at')
+            ->select('id, email, full_name, status, must_rotate_pw, last_login_at, created_at, console_user_id, roles_synced_at')
             ->orderBy('created_at', 'DESC')
             ->get()
             ->getResultArray();
@@ -21,7 +27,11 @@ class UsersController extends BaseController
         foreach ($rows as &$row) {
             $row['roles'] = $rbac->rolesForUser((int) $row['id']);
         }
-        return $this->jsonOk(['data' => $rows]);
+        return $this->jsonOk([
+            'data'             => $rows,
+            'roles_managed_by' => 'console',
+            'roles_note'       => self::ROLES_READ_ONLY_MESSAGE,
+        ]);
     }
 
     public function create(): ResponseInterface
@@ -30,7 +40,9 @@ class UsersController extends BaseController
         $email = strtolower(trim((string) ($body['email'] ?? '')));
         $name  = trim((string) ($body['full_name'] ?? ''));
         $pw    = (string) ($body['password'] ?? '');
-        $roleCodes = $body['roles'] ?? [];
+        if (array_key_exists('roles', $body)) {
+            return $this->jsonError('roles_managed_by_console', self::ROLES_READ_ONLY_MESSAGE, 403);
+        }
         if ($email === '' || $name === '' || strlen($pw) < 12) {
             return $this->jsonError('invalid_request', 'email, full_name and password (>=12 chars) required', 400);
         }
@@ -47,18 +59,6 @@ class UsersController extends BaseController
         ]);
         $userId = (int) $db->insertID();
 
-        if (is_array($roleCodes)) {
-            foreach ($roleCodes as $code) {
-                $r = $db->table('smoke_roles')->where('code', $code)->get()->getRow();
-                if ($r) {
-                    $db->table('smoke_user_roles')->insert([
-                        'user_id'     => $userId,
-                        'role_id'     => $r->id,
-                        'assigned_by' => $this->user()?->id,
-                    ]);
-                }
-            }
-        }
         Services::audit()->record('users.create', 'smoke_users', (string) $userId, $this->user()?->id, ['email' => $email]);
         return $this->jsonOk(['id' => $userId], 201);
     }
@@ -66,6 +66,9 @@ class UsersController extends BaseController
     public function update(int $id): ResponseInterface
     {
         $body = $this->jsonBody();
+        if (array_key_exists('roles', $body)) {
+            return $this->jsonError('roles_managed_by_console', self::ROLES_READ_ONLY_MESSAGE, 403);
+        }
         $patch = array_filter([
             'full_name' => $body['full_name'] ?? null,
             'status'    => $body['status'] ?? null,
@@ -90,27 +93,11 @@ class UsersController extends BaseController
         return $this->jsonOk(['ok' => true]);
     }
 
+    /**
+     * POST /users/{id}/roles — kept so old clients get a clear answer.
+     */
     public function assignRole(int $id): ResponseInterface
     {
-        $body = $this->jsonBody();
-        $code = (string) ($body['role'] ?? '');
-        if ($code === '') {
-            return $this->jsonError('invalid_request', 'role required', 400);
-        }
-        $db = Database::connect();
-        $r  = $db->table('smoke_roles')->where('code', $code)->get()->getRow();
-        if (! $r) {
-            return $this->jsonError('not_found', 'Unknown role', 404);
-        }
-        $exists = $db->table('smoke_user_roles')->where('user_id', $id)->where('role_id', $r->id)->countAllResults();
-        if ($exists === 0) {
-            $db->table('smoke_user_roles')->insert([
-                'user_id'     => $id,
-                'role_id'     => $r->id,
-                'assigned_by' => $this->user()?->id,
-            ]);
-        }
-        Services::audit()->record('users.assign_role', 'smoke_users', (string) $id, $this->user()?->id, ['role' => $code]);
-        return $this->jsonOk(['ok' => true]);
+        return $this->jsonError('roles_managed_by_console', self::ROLES_READ_ONLY_MESSAGE, 403);
     }
 }

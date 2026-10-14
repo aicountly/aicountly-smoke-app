@@ -2,6 +2,8 @@
 
 namespace App\Controllers;
 
+use App\Services\ConsoleAccess\ConsoleAccessPolicy;
+use App\Services\ConsoleAccess\ConsoleRoleSyncService;
 use App\Services\ConsoleIdentityService;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Database;
@@ -22,6 +24,12 @@ class AuthController extends BaseController
         );
     }
 
+    /**
+     * POST /v1/auth/refresh {refresh_token}. Before a new access token is
+     * issued the user's access is re-confirmed with Console (user-access pull)
+     * when CONSOLE_API_URL + CONSOLE_API_TOKEN are configured: revoked access
+     * ends every local session; otherwise local roles become Console's.
+     */
     public function refresh(): ResponseInterface
     {
         $body = $this->jsonBody();
@@ -38,18 +46,36 @@ class AuthController extends BaseController
         if ($userId <= 0) {
             return $this->jsonError('invalid_token', 'Bad subject', 401);
         }
-        $db = Database::connect();
-        $u  = $db->table('smoke_users')->where('id', $userId)->get()->getRow();
-        if ($u === null || $u->status !== 'active') {
+        $db  = Database::connect();
+        $row = $db->table('smoke_users')->where('id', $userId)->get()->getRowArray();
+        if ($row === null || $row['status'] !== 'active') {
             return $this->jsonError('invalid_token', 'User not active', 401);
         }
-        $roles  = Services::rbac()->rolesForUser($userId);
-        $access = Services::jwt()->issueAccess($userId, $u->email, $roles);
+        if (ConsoleRoleSyncService::sessionRevoked($row, (int) ($payload->iat ?? 0))) {
+            return $this->jsonError('session_revoked', 'Your Smoke session was revoked. Sign in again from Console.', 401);
+        }
+
+        $decision = Services::consoleRoleSync()->checkAccess($row, true);
+        if (! $decision->allowed) {
+            Services::audit()->record('auth.refresh_denied', 'smoke_users', (string) $userId, $userId, [
+                'source'  => $decision->source,
+                'revoked' => $decision->revoke,
+            ], $this->request->getIPAddress(), $this->request->getUserAgent()->getAgentString());
+
+            return $this->jsonError($decision->revoke ? 'access_revoked' : 'console_unreachable', $decision->message, $decision->status);
+        }
+
+        $roles = Services::rbac()->rolesForUser($userId);
+        if ($roles === []) {
+            return $this->jsonError('no_access', ConsoleAccessPolicy::NOT_ASSIGNED_MESSAGE, 403);
+        }
+        $access = Services::jwt()->issueAccess($userId, (string) $row['email'], $roles);
 
         return $this->jsonOk([
             'access_token' => $access,
             'token_type'   => 'Bearer',
-            'expires_in'   => (int) env('JWT_ACCESS_TTL', 86400),
+            'expires_in'   => Services::jwt()->accessTtl(),
+            'roles'        => $roles,
         ]);
     }
 
@@ -264,6 +290,11 @@ class AuthController extends BaseController
     }
 
     /**
+     * Console decides Smoke roles. With `app_roles` in the payload the user's
+     * local roles are replaced with exactly those (superadmin => every role);
+     * an empty list is refused. Without `app_roles` (old Console) existing
+     * roles are kept and only a superadmin may be seeded with owner.
+     *
      * @param array<string,mixed> $identity
      * @return array<string,mixed>|ResponseInterface
      */
@@ -282,8 +313,22 @@ class AuthController extends BaseController
             return $this->jsonError('bad_identity', 'Console identity did not return a user email.', 502);
         }
 
-        $db   = Database::connect();
-        $user = $db->table('smoke_users')->where('email', $email)->get()->getRow();
+        $sync     = Services::consoleRoleSync();
+        $decision = $sync->decideLogin($identity);
+        $db       = Database::connect();
+        $user     = $db->table('smoke_users')->where('email', $email)->get()->getRow();
+
+        if (! $decision->allowed) {
+            if ($user) {
+                $sync->revokeLocalAccess((int) $user->id);
+                Services::audit()->record('auth.console_access_denied', 'smoke_users', (string) $user->id, (int) $user->id, [
+                    'reason' => 'no_app_roles',
+                    'event'  => $auditEvent,
+                ], $this->request->getIPAddress(), $this->request->getUserAgent()->getAgentString());
+            }
+
+            return $this->jsonError('no_access', $decision->message, $decision->status);
+        }
 
         if (! $user) {
             $db->table('smoke_users')->insert([
@@ -298,16 +343,15 @@ class AuthController extends BaseController
                 return $this->jsonError('provision_failed', 'Could not provision Smoke user from Console identity.', 500);
             }
 
-            $this->assignRoleByCode($userId, $global ? 'owner' : 'developer_viewer');
             $user = $db->table('smoke_users')->where('id', $userId)->get()->getRow();
         } elseif ($user->status !== 'active') {
             return $this->jsonError('inactive_user', 'Smoke user account is inactive.', 403);
         }
 
+        $sync->applyLogin((int) $user->id, $decision);
         $roles = Services::rbac()->rolesForUser((int) $user->id);
-        if ($roles === [] && $global) {
-            $this->assignRoleByCode((int) $user->id, 'owner');
-            $roles = Services::rbac()->rolesForUser((int) $user->id);
+        if ($roles === []) {
+            return $this->jsonError('no_access', ConsoleAccessPolicy::NOT_ASSIGNED_MESSAGE, 403);
         }
 
         try {
@@ -323,16 +367,19 @@ class AuthController extends BaseController
         ]);
 
         Services::audit()->record($auditEvent, 'smoke_users', (string) $user->id, (int) $user->id, [
-            'console_user_id'   => (int) ($consoleUser['id'] ?? 0),
+            'console_user_id'   => $decision->consoleUserId ?? (int) ($consoleUser['id'] ?? 0),
             'global_superadmin' => $global,
+            'app_superadmin'    => (bool) ($identity['app_superadmin'] ?? false),
+            'roles_source'      => $decision->source,
             'roles'             => $roles,
+            'authz_version'     => $decision->authzVersion,
         ], $this->request->getIPAddress(), $this->request->getUserAgent()->getAgentString());
 
         return [
             'access_token'  => $access,
             'refresh_token' => $refresh,
             'token_type'    => 'Bearer',
-            'expires_in'    => (int) env('JWT_ACCESS_TTL', 86400),
+            'expires_in'    => Services::jwt()->accessTtl(),
             'user'          => [
                 'id'              => (int) $user->id,
                 'email'           => $user->email,
@@ -477,28 +524,5 @@ HTML;
         }
 
         return null;
-    }
-
-    private function assignRoleByCode(int $userId, string $roleCode): void
-    {
-        $db   = Database::connect();
-        $role = $db->table('smoke_roles')->where('code', $roleCode)->get()->getRow();
-        if (! $role) {
-            return;
-        }
-
-        $exists = $db->table('smoke_user_roles')
-            ->where('user_id', $userId)
-            ->where('role_id', $role->id)
-            ->countAllResults() > 0;
-
-        if ($exists) {
-            return;
-        }
-
-        $db->table('smoke_user_roles')->insert([
-            'user_id' => $userId,
-            'role_id' => $role->id,
-        ]);
     }
 }

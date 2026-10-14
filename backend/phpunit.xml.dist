@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Smoke backend tests.
+
+    composer test        runs both suites; "unit" needs no DB or network
+    composer test:unit
+    composer test:db     SSO/refresh feature tests on PostgreSQL
+
+  The database suite is skipped unless the CI4 "tests" connection (see
+  app/Config/Database.php, overridable with database.tests.* env vars) points
+  at a reachable scratch PostgreSQL database, e.g.:
+
+    database.tests.username=postgres database.tests.password=postgres \
+    database.tests.database=smoke_test composer test:db
+
+  It runs every migration on that database and truncates the user tables.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/codeigniter4/framework/system/Test/bootstrap.php"
+         colors="true"
+         cacheDirectory="build/.phpunit.cache"
+         failOnRisky="true"
+         failOnWarning="true">
+    <testsuites>
+        <testsuite name="unit">
+            <directory>tests/unit</directory>
+        </testsuite>
+        <testsuite name="database">
+            <directory>tests/database</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory suffix=".php">app/Services/ConsoleAccess</directory>
+        </include>
+    </source>
+    <php>
+        <env name="CI_ENVIRONMENT" value="testing" force="true"/>
+        <env name="JWT_SECRET" value="test-secret-test-secret-test-secret-0123456789" force="true"/>
+        <env name="JWT_ACCESS_TTL" value="86400" force="true"/>
+        <env name="CONSOLE_API_URL" value="https://console.invalid/api" force="true"/>
+        <env name="CONSOLE_API_TOKEN" value="" force="true"/>
+        <env name="CONTROLLER_APP_CODE" value="smoke" force="true"/>
+    </php>
+</phpunit>
