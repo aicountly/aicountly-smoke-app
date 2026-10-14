@@ -82,6 +82,10 @@ def run(ctx):
     aud = pg.scalar(fdb, f"SELECT count(*) FROM audit_logs WHERE action = 'user.portal_account_restored'")
     ctx.check(note == "1" and act == "1" and int(aud or 0) >= 1, "Flow records it: internal note, ticket activity, audit log",
               f"note={note} activity={act} audit={aud}")
+    f.check_central_audit(ctx, "flow", "user.portal_account_restored",
+                          "Console central audit has Flow's user.portal_account_restored, by the team lead",
+                          f"AND lower(actor_email) = lower('{LEAD[1]}')")
+    f.check_audit_outbox_drained(ctx, "flow")
     r = client.post(f"{config.url('portal')}/api/internal/account/restore", bearer="wrong",
                     json_body={"uuid": str(UUID), "operator_email": "x@y.z", "reason": "probe"})
     ctx.check(r.status == 401, "the portal endpoint refuses a wrong service key", f"HTTP {r.status}")

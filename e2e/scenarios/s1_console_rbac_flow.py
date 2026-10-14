@@ -51,6 +51,9 @@ def run(ctx):
     ctx.check(r.status == 200 and d.get("token"), "Flow exchanges the Console launch key (POST /api/auth/controller-sso -> Console /auth/sso/exchange)",
               f"HTTP {r.status}")
     ctx.check("grievance_officer" in roles, "the Flow session carries the Console role", f"user.roles={roles}")
+    f.check_central_audit(ctx, "flow", "auth.login",
+                          "Console central audit has Flow's auth.login for the user (POST /portal/audit with Flow's own key)",
+                          f"AND lower(actor_email) = lower('{EMAIL}') AND entity_type = 'user'")
     token = d["token"]
 
     r = client.post(f"{f.FLOW()}/auth/controller-sso", json_body={"token": launch})
@@ -77,6 +80,9 @@ def run(ctx):
 
     r = client.post(f"{f.FLOW()}/auth/refresh", bearer=token)
     ctx.check(r.status == 401, "Flow refuses the next token refresh", f"HTTP {r.status} {r.text[:160]}")
+    f.check_central_audit(ctx, "flow", "auth.access_revoked",
+                          "Console central audit has Flow's auth.access_revoked for the user",
+                          f"AND lower(actor_email) = lower('{EMAIL}')")
     r = client.get(f"{f.FLOW()}/auth/me", bearer=token)
     ctx.check(r.status == 401, "the existing Flow token is refused on every later request (auth/me)", f"HTTP {r.status}")
     frow = pg.json_rows(fdb, f"SELECT u.access_revoked_at, (SELECT count(*) FROM user_app_roles r WHERE r.user_id = u.id) AS n "
@@ -85,3 +91,4 @@ def run(ctx):
               "Flow DB: access_revoked_at set and the synced roles cleared", str(frow))
     r = client.get(f"{f.CONSOLE()}/auth/sso/launch-url", bearer=staff, query={"app_code": "flow"})
     ctx.check(r.status == 403, "Console no longer launches Flow for the user", f"HTTP {r.status}")
+    f.check_audit_outbox_drained(ctx, "flow")

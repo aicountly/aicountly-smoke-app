@@ -59,14 +59,14 @@ Cross-service wiring (all keys random per run, kept in `$E2E_STATE/secrets.json`
 
 ## Scenarios (`scenarios/`)
 
-1. Console RBAC → Flow: staff user created through Console's API; superadmin grants Flow `grievance_officer`; real launch-key exchange; Flow session carries the role; revoke in Console → Flow refresh refused.
-2. Grievance: ticket through Manage's desk API (into the Flow DB) → staff resolve → customer escalates to L2 via Manage → officer (Console role) acknowledges and resolves via Flow → customer e-mails captured.
+1. Console RBAC → Flow: staff user created through Console's API; superadmin grants Flow `grievance_officer`; real launch-key exchange; Flow session carries the role; revoke in Console → Flow refresh refused. Flow's `auth.login` / `auth.access_revoked` reach Console's `audit_logs` (central audit, `POST /portal/audit`).
+2. Grievance: ticket through Manage's desk API (into the Flow DB) → staff resolve → customer escalates to L2 via Manage → officer (Console role) acknowledges and resolves via Flow → customer e-mails captured; `grievance.acknowledged` / `.resolved` reach Console's central audit and Flow's audit outbox is drained.
 3. Inbound e-mail: raw MIME piped to Flow's `scripts/inbound_email_pipe.php` for grievance@ → ticket + L2 escalation + auto-ack; attachment stored in S3 and read back; follow-up to pno@ over the HTTPS endpoint → L3.
-4. Account closure: portal closure-summary + delete → day 46 (DB timestamp) → `spark accounts:purge-expired-deletions` → Manage `internal/account-closure/purge` → outbox delivers signed `company_purge_requested` → Books worker archives + purges + acks → Manage hard-deletes with a tombstone.
+4. Account closure: portal closure-summary; delete without `confirm_company_loss` → 409 for a Manage-only owner (the gate reads Manage too); delete with it → day 46 (DB timestamp) → `spark accounts:purge-expired-deletions` → Manage `internal/account-closure/purge` → outbox delivers signed `company_purge_requested` → Books worker archives + purges + acks → Manage hard-deletes with a tombstone.
 5. Subscription lapse: `internal/subscriptions` (operator key) cancelled + period end past → `company_lifecycle.php --apply` → `company_restricted` → Books 423 on writes, GET ok → renewal → `company_unrestricted` → writes work.
-6. Flow → Build: bug → `desk/build-handoffs` → Build `POST v1/tasks` 201 → Build's own API (Console SSO) returns JSON payloads as arrays/objects.
+6. Flow → Build: bug → `desk/build-handoffs` → Build `POST v1/tasks` 201 → Build's own API (Console SSO) returns JSON payloads as arrays/objects; Flow's `build_handoff.queued` and Build's sign-in reach Console's central audit, both outboxes drained.
 7. Tata click-to-call: Flow call endpoint → stub receives the documented payload → stub webhook → `desk_calls` completed.
-8. Account restore: closure at day 35 (suspended) → mail to support@ → Flow team lead's restore action → portal `internal/account/restore` → account active, sign-in works.
+8. Account restore: closure at day 35 (suspended) → mail to support@ → Flow team lead's restore action → portal `internal/account/restore` → account active, sign-in works; `user.portal_account_restored` reaches Console's central audit.
 
 Cron jobs and workers (`product_events.php --deliver`, `company_lifecycle.php --apply`,
 `books:company-lifecycle-worker`, the portal purge sweep) are run by the scenarios as the cron would,

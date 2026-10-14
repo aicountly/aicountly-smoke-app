@@ -47,6 +47,10 @@ def run(ctx):
               "Flow stores Build's task reference (flow_build_handoffs.build_task_ref)",
               f"build_task_ref={h['build_task_ref']!r}, Build answered build_task_ref={resp.get('build_task_ref')!r}")
 
+    f.check_central_audit(ctx, "flow", "build_handoff.queued",
+                          "Console central audit has Flow's build_handoff.queued for the handoff",
+                          f"AND entity_type = 'build_handoff' AND entity_ref = '{hid}'")
+
     k = services.keys()
     r = client.post(f"{f.BUILD()}/v1/tasks", bearer="wrong-token", json_body={"flow_handoff_id": hid, "title": "x"})
     ctx.check(r.status == 401, "Build refuses a handoff without Flow's inbound token", f"HTTP {r.status}")
@@ -58,6 +62,9 @@ def run(ctx):
     b = f.build_session(admin_console)
     btok = b.get("token") or b.get("access_token")
     ctx.check(bool(btok), "superadmin opens Build through the Console launch key (Build /v1/auth/controller-sso)")
+    f.check_central_audit(ctx, "build", "auth.controller_sso_login",
+                          "Console central audit has Build's sign-in (auth.controller_sso_login, Build's own key)",
+                          f"AND lower(actor_email) = lower('{f.PNO_EMAIL}')")
     r = client.get(f"{f.BUILD()}/v1/flow-handoffs", bearer=btok)
     rows = [x for x in ((r.json or {}).get("data") or []) if int(x.get("flow_handoff_id") or 0) == int(hid)]
     raw = rows[0].get("raw_payload") if rows else None
@@ -69,3 +76,5 @@ def run(ctx):
     md = ((r.json or {}).get("data") or {}).get("metadata")
     ctx.check(r.status == 200 and isinstance(md, dict) and isinstance((md.get("raw") or {}).get("acceptance"), list),
               "Build GET v1/dev-requests/{id} returns metadata as an object, acceptance as an array", f"type(metadata)={type(md).__name__}")
+    f.check_audit_outbox_drained(ctx, "flow")
+    f.check_audit_outbox_drained(ctx, "build")

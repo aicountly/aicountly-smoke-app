@@ -223,3 +223,30 @@ def manage_create_company(ses: str, name: str, email: str) -> int:
 def write_json(path: Path, obj) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, indent=2, default=str))
+
+
+# ── central audit (portal -> Console POST /portal/audit, Console migration 067) ───────────────────
+def central_audit(app: str, action: str, where: str = "") -> list[dict]:
+    """Rows Console's audit_logs holds for a portal's audit event (source_app = the portal)."""
+    return pg.json_rows(config.db("console"),
+                        "SELECT id, source_app, caller_code, action, entity_type, entity_ref, actor_email, external_id, occurred_at "
+                        f"FROM audit_logs WHERE source_app = '{app}' AND action = '{action}' {where} ORDER BY id")
+
+
+def check_central_audit(ctx, app: str, action: str, what: str, where: str = "") -> list[dict]:
+    """The event reached Console's audit_logs, delivered with the portal's own key (caller_code = app)."""
+    rows = central_audit(app, action, where)
+    ok = bool(rows) and all(r["caller_code"] == app and (r["external_id"] or "").startswith(f"{app}:") for r in rows)
+    ctx.check(ok, what, f"{len(rows)} row(s); last={rows[-1] if rows else None}"[:300])
+    return rows
+
+
+def check_audit_outbox_drained(ctx, app: str) -> None:
+    """Nothing the portal meant for Console is stuck: no pending / dead / rejected outbox rows."""
+    if app == "flow":
+        got = pg.json_rows(config.db("flow"), "SELECT status, count(*) AS n FROM console_audit_outbox GROUP BY status")
+    else:
+        got = pg.json_rows(config.db(app), "SELECT status, count(*) AS n FROM build_console_syncs WHERE kind = 'audit_event' GROUP BY status")
+    by = {r["status"]: int(r["n"]) for r in got}
+    ctx.check(by.get("delivered", 0) > 0 and not any(by.get(s) for s in ("pending", "dead", "rejected", "failed", "skipped_not_configured")),
+              f"{app}'s central-audit outbox is drained: everything delivered to Console, nothing pending / dead / rejected", str(by))

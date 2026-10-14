@@ -45,12 +45,26 @@ def run(ctx):
               f"owned={owned} manage_companies_available={d.get('manage_companies_available')}")
     ctx.check((d.get("timeline") or {}).get("purge_after_days") == 45, "30/45-day policy applies", str(d.get("timeline")))
 
+    # The deletion gate reads the same merged list: an owner whose only company is in Manage (none in
+    # the portal's legacy cmpacsmstr) is refused without confirm_company_loss.
+    legacy = pg.scalar(pdb, f"SELECT count(*) FROM cmpacsmstr WHERE uuid_aictly_by = '{UUID}' AND uuid_acs_type = 1")
+    ctx.check(legacy == "0", "the owner holds no company in the portal's legacy store (Manage-only owner)", f"legacy owned rows={legacy}")
+    r = client.post(f"{f.PORTAL()}/auth/account/delete", bearer=cust["auth"],
+                    json_body={"confirm": "DELETE", "reason": "e2e: moving to another tool"})
+    j = r.json or {}
+    gate_ids = [c.get("cmp_id") for c in j.get("owned_companies") or []]
+    ctx.check(r.status == 409 and gate_ids == [cid] and not j.get("companies_unavailable"),
+              "delete without confirm_company_loss: 409 listing the Manage company (gate reads Manage, not only the legacy store)",
+              f"HTTP {r.status} {r.text[:200]}")
+    ctx.check(pg.scalar(pdb, f"SELECT useraictly_status FROM useraictly WHERE uuid = {UUID}") == "1",
+              "the refused request changed nothing (account still active)")
+
     mark = f.mail_mark()
     r = client.post(f"{f.PORTAL()}/auth/account/delete", bearer=cust["auth"],
                     json_body={"confirm": "DELETE", "confirm_company_loss": True, "reason": "e2e: moving to another tool"})
     j = r.json or {}
     ctx.check(r.status == 200 and j.get("policy") == "standard_30_45" and j.get("phase") == "cooling_off",
-              "customer closes the account (POST /api/auth/account/delete)", r.text[:200])
+              "with confirm_company_loss the customer closes the account (POST /api/auth/account/delete)", r.text[:200])
     ctx.check(pg.scalar(pdb, f"SELECT useraictly_status FROM useraictly WHERE uuid = {UUID}") == "6", "portal: status 6 (pending deletion)")
     m = f.wait_mail(lambda m: m["to"] == cust["email"], mark, timeout=10)
     ctx.soft(m is not None and m["sender_service"] == "portal", "portal e-mails the closure notice", m["subject"] if m else "no mail")

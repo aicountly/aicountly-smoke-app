@@ -128,8 +128,17 @@ def run(ctx):
     ctx.check(r.status == 200 and escs and escs[0].get("status") == "resolved",
               "the customer sees the resolved escalation back in Manage (same Flow DB)", str(escs)[:200])
 
+    # Central audit (Console POST /portal/audit, migration 067): the officer's actions reach Console's
+    # audit_logs, attributed to Flow and the officer, keyed by the escalation.
+    f.check_central_audit(ctx, "flow", "grievance.acknowledged",
+                          "Console central audit has Flow's grievance.acknowledged for the escalation, by the officer",
+                          f"AND entity_type = 'ticket_escalation' AND entity_ref = '{esc_id}' AND lower(actor_email) = lower('{OFFICER[1]}')")
+    f.check_central_audit(ctx, "flow", "grievance.resolved",
+                          "Console central audit has Flow's grievance.resolved for the escalation, by the officer",
+                          f"AND entity_type = 'ticket_escalation' AND entity_ref = '{esc_id}' AND lower(actor_email) = lower('{OFFICER[1]}')")
+    f.check_audit_outbox_drained(ctx, "flow")
+
     log = (services.proc.LOGS / "flow.php.log")
-    if log.exists() and "[ConsoleAuditClient]" in log.read_text() and "status=404" in log.read_text():
-        ctx.finding("Flow's central-audit fan-out (ConsoleAuditClient -> POST {CONSOLE_API_BASE_URL}/audit) gets 404 "
-                    "'Route not found' from Console: Console has no /audit ingest route, so every grievance.* / auth.* "
-                    "event Flow believes it sent to Console's central audit is lost (Flow's local audit_logs still has them).")
+    lines = [ln for ln in (log.read_text().splitlines() if log.exists() else []) if "[ConsoleAuditClient]" in ln]
+    if lines:
+        ctx.finding(f"Flow's central audit to Console logged {len(lines)} failure(s), e.g.: {lines[0][-300:]}")
