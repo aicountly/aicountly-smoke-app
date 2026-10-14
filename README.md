@@ -15,6 +15,9 @@ calendar / contacts, ...).
 - DB: PostgreSQL — `migrations/` (mirrors `backend/app/Database/Migrations/`)
 - Reports output: `smoke-reports/`
 - Sample prompts / sessions / competitor benchmarks: `samples/`
+- Cross-system E2E harness (real Console, my.aicountly, Manage, Flow, Smart Books and Build on one
+  machine; fakes only for e-mail, Tata Smartflo and S3): `e2e/` — `e2e/run.sh`, report in
+  `e2e/report.md`, see [`e2e/README.md`](e2e/README.md)
 
 See [`docs/README.md`](docs/README.md) for full setup, the workflow, roles,
 and security notes.
