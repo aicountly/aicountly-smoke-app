@@ -4,6 +4,8 @@ asks Manage to purge; Manage's outbox delivers a signed company_purge_requested 
 worker archives then deletes the company's rows and acks; Manage hard-deletes the company and leaves
 a tombstone. Asserts the state in all three databases."""
 
+import json
+
 from harness import client, config, pg, proc, services
 from harness import fixtures as f
 
@@ -124,7 +126,18 @@ def run(ctx):
               f"archived={archived} live={left} schema={job['archive_schema']}")
 
     if has_account_events:
+        # Flow is a lifecycle-only app (account events only): it gets the same account_purge_requested.
+        acc = pg.json_rows(mdb, f"SELECT status, last_http_status FROM ghm_product_event_outbox "
+                                f"WHERE event = 'account_purge_requested' AND uuid = '{UUID}' AND app_key = 'flow'")
+        ctx.check(len(acc) == 1 and acc[0]["status"] in ("delivered", "acked") and acc[0]["last_http_status"] == 202,
+                  "Manage delivers account_purge_requested to Flow too (lifecycle-only app, 202)", str(acc))
+        p, out = f.flow_lifecycle_worker()
+        ctx.check(p.returncode == 0, "Flow's lifecycle worker (kit bin/worker.php) runs the account purge and acks",
+                  json.dumps(out)[:260] if out else p.stderr.decode()[-300:])
         clo = pg.json_rows(mdb, f"SELECT apps, apps_status FROM ghm_account_closure WHERE uuid = '{UUID}'")
+        flow_ans = ((clo[0]["apps"] or {}).get("flow") or {}) if clo else {}
+        ctx.check(flow_ans.get("status") == "nothing_to_purge",
+                  "Flow answers nothing_to_purge for a customer with no support records", str(flow_ans)[:300])
         books_ans = ((clo[0]["apps"] or {}).get("books") or {}) if clo else {}
         ctx.check(clo and books_ans.get("status") in ("purged", "nothing_to_purge") and clo[0]["apps_status"] == "completed",
                   "Manage recorded Books' answer to the account purge (ghm_account_closure.apps, completed)", str(clo)[:300])

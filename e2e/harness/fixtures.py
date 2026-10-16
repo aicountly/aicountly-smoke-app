@@ -250,3 +250,60 @@ def check_audit_outbox_drained(ctx, app: str) -> None:
     by = {r["status"]: int(r["n"]) for r in got}
     ctx.check(by.get("delivered", 0) > 0 and not any(by.get(s) for s in ("pending", "dead", "rejected", "failed", "skipped_not_configured")),
               f"{app}'s central-audit outbox is drained: everything delivered to Console, nothing pending / dead / rejected", str(by))
+
+
+# ── cron jobs and workers, run as the cron would (the service's own environment) ────────────────────
+def manage_cli(args: list[str], check: bool = True):
+    return proc.php_cli("manage", services.load_env("manage"), config.src("manage") / "server-php", args, check=check)
+
+
+def flow_cli(args: list[str], check: bool = True):
+    return proc.php_cli("flow", services.load_env("flow"), config.src("flow") / "server-php", args, check=check)
+
+
+def flow_lifecycle_worker(extra: list[str] | None = None, check: bool = False) -> tuple:
+    """Flow's company-lifecycle worker exactly as its cron line runs it (kit bin/worker.php through
+    config/lifecycle-kit.php). Returns (process, the JSON line it printed or None)."""
+    p = flow_cli(["lib/company-lifecycle/bin/worker.php", "--bootstrap=config/lifecycle-kit.php", *(extra or [])], check=check)
+    out = None
+    for line in reversed(p.stdout.decode(errors="replace").splitlines()):
+        if line.startswith("{"):
+            try:
+                out = json.loads(line)
+            except ValueError:
+                pass
+            break
+    return p, out
+
+
+def manage_desk_ticket(ses: str, title: str, description: str) -> dict:
+    """A Help & Support ticket through Manage (written into the Flow database)."""
+    r = client.post(f"{MANAGE()}/desk/tickets", bearer=ses, json_body={
+        "title": title, "description": description, "product": "smart_books", "category": "core_workflows",
+        "subcategory": "daily_operations", "problem_type": "other", "priority": "medium"})
+    d = (r.json or {}).get("data") or {}
+    if r.status != 201 or not d.get("ticket_id"):
+        raise Fail(f"Manage POST desk/tickets answered {r}")
+    return d
+
+
+def close_account_and_purge(ctx, cust: dict, uuid: int, days: int = 46) -> None:
+    """The customer closes the account on my.aicountly (owning no company), time moves `days` days (DB
+    timestamp), and the portal's daily sweep finalises it — which asks Manage to purge (as scenario 4)."""
+    pdb = config.db("portal")
+    r = client.post(f"{PORTAL()}/auth/account/delete", bearer=cust["auth"],
+                    json_body={"confirm": "DELETE", "confirm_company_loss": True, "reason": "e2e: closing"})
+    ctx.check(r.status == 200, "customer closes the account on my.aicountly (POST /api/auth/account/delete)", r.text[:160])
+    pg.run_sql(pdb, f"UPDATE useraictly SET useraictly_deletion_requested_at = useraictly_deletion_requested_at - INTERVAL '{days} days' WHERE uuid = {uuid}")
+    ctx.step(f"time moved: deletion requested {days} days ago (DB timestamp)")
+    p = services.portal_cli(["accounts:purge-expired-deletions"])
+    out = p.stdout.decode()
+    ctx.check("Permanently deleted 1 account" in out, "portal purge sweep (spark accounts:purge-expired-deletions) finalises and asks Manage to purge",
+              out.strip()[-160:])
+
+
+def cron_runs(code: str) -> list[dict]:
+    """Console cron_heartbeats rows of a registered monitor, oldest first."""
+    return pg.json_rows(config.db("console"),
+                        "SELECT h.id, h.run_id, h.outcome, h.finished_at, h.counts, h.received_at FROM cron_heartbeats h "
+                        f"JOIN cron_monitors m ON m.id = h.monitor_id WHERE m.code = '{code}' ORDER BY h.id")

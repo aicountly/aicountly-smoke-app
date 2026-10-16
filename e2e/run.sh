@@ -24,8 +24,10 @@ touch "$INSTALLED"
 die() { echo "e2e: $*" >&2; exit 2; }
 
 for t in php psql pg_isready openssl python3 curl; do command -v "$t" >/dev/null || die "missing tool: $t"; done
-php -m | grep -qi '^pdo_pgsql$' || die "php needs pdo_pgsql"
-php -m | grep -qi '^curl$' || die "php needs curl"
+# Not `php -m | grep -q`: under pipefail grep -q exits at the first match and php's SIGPIPE fails the pipeline.
+PHP_MODULES="$(php -m)"
+grep -qi '^pdo_pgsql$' <<<"$PHP_MODULES" || die "php needs pdo_pgsql"
+grep -qi '^curl$' <<<"$PHP_MODULES" || die "php needs curl"
 
 if [ "${1:-}" = "--down" ]; then
   cd "$HERE" && python3 -c "

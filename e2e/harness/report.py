@@ -34,6 +34,21 @@ _NOISE = re.compile(r"(Mailer::send ok|Auth OTP email|service=books op=company/s
                     r"subscription write refused for caller=books|ConsoleIdentityService request failed HTTP 401 for /auth/sso/exchange)")
 
 
+# Defects found by an e2e pass and fixed in the owning repository (commit on its branch), newest first.
+FIXED = [
+    "2026-10-16 · books-react-app `9613f9c61` — the purge worker asked Manage `internal/company-status` without `?app=books`, "
+    "read the company-wide `active` and refused (acked `failed`) every subscription-lapse purge (scenario 10).",
+    "2026-10-16 · books-react-app `8894d341c` — `spark books:legal-hold --company=<id>` / `--uuid=` / `--lift=` (the documented "
+    "spelling) fell through to the listing and placed / lifted no hold (scenario 10).",
+    "2026-10-16 · flow-react-app `dfaa052` — a closed account's tickets opened by e-mail (no portal_uuid) were never marked, "
+    "anonymised or expired, nor their e-mailed grievances and stored files (scenario 9).",
+    "2026-10-16 · flow-react-app `5dac070` — `DeskS3Storage::tryDeleteObject` deleted only the literal key; Manage-uploaded "
+    "attachments live under `uploads/<key>`, so the 8-year expiry reported them deleted while they stayed in the bucket (scenario 12).",
+    "2026-10-16 · manage-aicountly `8fdc85d` — `CronHeartbeat` ignored `CONSOLE_API_URL`, so a Manage that names its Console "
+    "there reported its cron runs to production's Console (scenario 13).",
+]
+
+
 def log_scan(limit: int = 40) -> list[str]:
     from . import proc
     seen: dict[str, int] = {}
@@ -95,14 +110,23 @@ def render(results: list[tuple], started: float, boot_log: list[str]) -> str:
     w(f"| `e2e/stubs/mail_stub.py` | Itwalk e-mail API (`/email/1/send` multipart, `/email/3/send` JSON) used by Console, Flow, Manage, my.aicountly; every message captured to JSON lines and asserted on | {config.port('mail')} | {services.UP.get('mail', '-')} |")
     w(f"| `moto_server` | OVH Object Storage (S3, path-style, SigV4) — Flow desk attachments bucket `flow.aicountly.org` | {config.port('s3')} | {services.UP.get('s3', '-')} |")
     w(f"| `e2e/stubs/tata_stub.py` | Tata Smartflo click-to-call (`POST /v1/click_to_call`) + call-status webhooks, HTTPS | {config.port('tata')} | {services.UP.get('tata', '-')} |")
+    w("| `e2e/stubs/inventory_sender.php` | Inventory's outbox (Inventory is not in this stack): signs like Inventory, posts to Books' "
+      "machine route, follows the sender rule with the lifecycle kit's own `DeferredSend` (canonical copy in manage-aicountly) | - | run by scenario 11 |")
     w(f"| `e2e/stubs/tls_front.py` | not a fake: an HTTPS front door to the real portal (Flow only calls an `https://` restore URL; `php -S` has no TLS) | {config.port('portal_tls')} | {services.UP.get('portal_tls', '-')} |")
     w("")
     w("Identity: Console staff sign in with password + the OTP Console e-mails (read from the mail stub); the seeded "
       "superadmin `pno@aicountly.com` gets a one-off password via SQL (its real hash is unknown here — migration 006 "
       "documents an explicit one-off UPDATE for this). Customers are inserted into the portal's user tables and then "
       "sign in through the real `POST /api/auth/login` + `POST /api/seskey`; the 15-minute session key's expiry is "
-      "extended in the DB for the run (the key itself is the portal's). Time travel (day 35 / day 46 of a closure) "
-      "is a DB timestamp update, stated in each scenario.")
+      "extended in the DB for the run (the key itself is the portal's). Time travel (day 35 / day 46 of a closure, "
+      "the end of Manage's 45-day window, Flow's 3- and 8-year retention dates) is a DB timestamp update, stated in each "
+      "scenario; the services' clocks are never changed.")
+    if FIXED:
+        w("")
+        w("## Defects this harness found that were fixed in the owning repository")
+        w("")
+        for line in FIXED:
+            w(f"- {line}")
     w("")
     findings = [(c.sid, f) for _, c in results for f in c.findings]
     w("## Findings (defects observed that the scenarios do not assert)")

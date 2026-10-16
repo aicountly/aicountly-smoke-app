@@ -6,6 +6,7 @@ run the same service's CLI jobs (purge sweeps, outbox delivery, workers) with id
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -64,6 +65,11 @@ def keys() -> dict[str, str]:
         "manage_purge": S.get("manage_purge", 24),         # my.aicountly -> Manage account-closure
         "account_restore": S.get("account_restore", 24),   # Flow -> my.aicountly internal/account/restore
         "lifecycle_books": S.get("lifecycle_books", 32),   # Manage <-> Books HMAC
+        "lifecycle_flow": S.get("lifecycle_flow", 32),     # Manage <-> Flow HMAC (lifecycle-only app, account events)
+        "cron_monitor": S.get("cron_monitor", 24),         # products -> Console POST portal/cron-heartbeat
+        "inventory_inbound": S.get("inventory_inbound", 24),   # Inventory-like sender -> Books integration/inventory/*
+        "inventory_signing": S.get("inventory_signing", 32),   # ... and its X-Inventory-Signature secret
+        "manage_inventory_key": S.get("manage_inventory_key", 24),  # Inventory-like sender -> Manage internal/company-status
         "manage_books_key": S.get("manage_books_key", 24),  # Books -> Manage internal/* (label books)
         "manage_console_key": S.get("manage_console_key", 24),  # operator (label console) -> internal/subscriptions
         "manage_books_callback": S.get("manage_books_callback", 32),  # Manage -> Books signed callbacks
@@ -149,6 +155,8 @@ def env_console() -> dict[str, str]:
         "FLOW_DB_HOST": config.PG_HOST, "FLOW_DB_PORT": str(config.PG_PORT), "FLOW_DB_NAME": config.db("flow"),
         "FLOW_DB_USER": config.PG_USER, "FLOW_DB_PASS": config.PG_PASS,
         "DIGEST_OFFICE_HOURS_ONLY": "true",
+        # Cron Job Monitor ingest (POST portal/cron-heartbeat): the hash form production uses.
+        "CRON_MONITOR_KEY_HASH": hashlib.sha256(k["cron_monitor"].encode()).hexdigest(),
     }
 
 
@@ -253,7 +261,10 @@ def env_manage() -> dict[str, str]:
         "APP_ENV": "local", "APP_DEBUG": "false", "APP_PRODUCT": "manage",
         "DB_HOST": config.PG_HOST, "DB_PORT": str(config.PG_PORT), "DB_NAME": config.db("manage"),
         "DB_USER": config.PG_USER, "DB_PASSWORD": config.PG_PASS, "DB_PASS": config.PG_PASS,
-        "CONSOLE_API_URL": "", "CONSOLE_DB_DETAILS_KEY": "",
+        # The Console API base, as a deployed Manage's api/.env carries it; without CONSOLE_DB_DETAILS_KEY the
+        # database still comes from DB_NAME / DB_USER. Off production this is where cron heartbeats go.
+        "CONSOLE_API_URL": f"{config.url('console')}/api", "CONSOLE_DB_DETAILS_KEY": "",
+        "CONSOLE_CRON_MONITOR_KEY": k["cron_monitor"],
         "AICOUNTLY_AUTH_URL": config.url("portal"), "AICOUNTLY_VALIDATE_SESSION_PATH": "/api/validatesession",
         "AICOUNTLY_PORTAL_URL": config.url("portal"),
         "MANAGE_APP_URL": config.url("manage"), "DESK_PORTAL_BASE_URL": config.url("manage"),
@@ -273,12 +284,16 @@ def env_manage() -> dict[str, str]:
         "EMAIL_API_KEY": mail_key("manage"), "EMAIL_API_URL": f"{config.url('mail')}/email/1/send",
         "SENDER_EMAIL": "support@aicountly.com", "SENDER_NAME": "AICountly Support",
         "ASSIGNED_USER_EMAIL": "desk.agent@aicountly.example",
-        "MANAGE_PRODUCT_SERVICE_KEYS": f"books:{k['manage_books_key']},console:{k['manage_console_key']}",
+        "MANAGE_PRODUCT_SERVICE_KEYS": f"books:{k['manage_books_key']},console:{k['manage_console_key']},"
+                                       f"inventory:{k['manage_inventory_key']}",
         "MANAGE_SUBSCRIPTION_ADMIN_LABELS": "console",
         "MANAGE_ACCOUNT_PURGE_KEY": k["manage_purge"],
         "BOOKS_CALLBACK_SIGNING_KEY": k["manage_books_callback"],
         "LIFECYCLE_WEBHOOK_SECRET_BOOKS": k["lifecycle_books"],
         "LIFECYCLE_WEBHOOK_URL_BOOKS": config.url("books"),
+        # Flow: a lifecycle-only app (LIFECYCLE_EXTRA_APPS default "flow,..."): account events only.
+        "LIFECYCLE_WEBHOOK_SECRET_FLOW": k["lifecycle_flow"],
+        "LIFECYCLE_WEBHOOK_URL_FLOW": config.url("flow"),
         "LIFECYCLE_ALERT_EMAIL": "ops-alerts@aicountly.example",
         "SAAS_ICONS_DIR": str(config.STATE / "manage-icons"),
     }
@@ -333,6 +348,9 @@ def env_flow() -> dict[str, str]:
         "PORTAL_ACCOUNT_RESTORE_KEY": k["account_restore"],
         "INBOUND_EMAIL_TOKEN": k["inbound_email"], "INBOUND_EMAIL_LOG": str(proc.LOGS / "flow-inbound-email.log"),
         "CSAT_TOKEN_SECRET": k["csat"],
+        # Company lifecycle kit (account_purge_requested from Manage; acks to Manage)
+        "LIFECYCLE_WEBHOOK_SECRET": k["lifecycle_flow"], "MANAGE_API_URL": config.url("manage"),
+        "CONSOLE_CRON_MONITOR_KEY": k["cron_monitor"],
     }
 
 
@@ -388,6 +406,8 @@ def env_books() -> dict[str, str]:
         "MANAGE_PRODUCT_SERVICE_KEY": k["manage_books_key"],
         "LIFECYCLE_WEBHOOK_SECRET": k["lifecycle_books"],
         "MANAGE_CALLBACK_SIGNING_KEY": k["manage_books_callback"],
+        # Inventory's direction into Books (signed mode); the Inventory-like stub sender holds the same values.
+        "INVENTORY_INBOUND_SERVICE_KEY": k["inventory_inbound"], "INVENTORY_INBOUND_SIGNING_SECRET": k["inventory_signing"],
         "INVENTORY_API_BASE": config.BLACKHOLE, "CONTACTS_API_BASE": config.BLACKHOLE, "PULSE_API_BASE": config.BLACKHOLE,
         "PULSE_API_ORIGIN": config.BLACKHOLE, "HRMS_API_BASE": config.BLACKHOLE, "VAULT_APP_API_BASE": config.BLACKHOLE,
         "GST_VAULT_BASE_URL": config.BLACKHOLE, "GOTENBERG_BASE_URL": config.BLACKHOLE, "DOCS_API_BASE": config.BLACKHOLE,
@@ -446,6 +466,7 @@ def env_build() -> dict[str, str]:
         "CONSOLE_API_URL": f"{config.url('console')}/api", "CONTROLLER_APP_CODE": "build",
         "CONSOLE_API_TOKEN": S.values.get("console_caller_key_build", ""),
         "BUILD_OWNER_EMAIL": "pno@aicountly.com", "SUPER_ADMIN_EMAIL": "pno@aicountly.com",
+        "CONSOLE_CRON_MONITOR_KEY": k["cron_monitor"],
     }
 
 
