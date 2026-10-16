@@ -25,7 +25,7 @@ type State = {
   refreshToken: string | null;
   user: SmokeUser | null;
   setSession: (s: { access_token: string; refresh_token: string; user: SmokeUser }) => void;
-  setAccess: (token: string) => void;
+  setAccess: (token: string, roles?: string[]) => void;
   logout: () => void;
   hasRole: (...roles: string[]) => boolean;
 };
@@ -38,7 +38,13 @@ export const useAuthStore = create<State>()(
       user: null,
       setSession: (s) =>
         set({ accessToken: s.access_token, refreshToken: s.refresh_token, user: s.user }),
-      setAccess: (token) => set({ accessToken: token }),
+      // Roles come from Console and are re-confirmed on every refresh; keep the
+      // cached user in step so role-gated UI matches what the API enforces.
+      setAccess: (token, roles) =>
+        set((state) => ({
+          accessToken: token,
+          user: state.user && Array.isArray(roles) ? { ...state.user, roles } : state.user,
+        })),
       logout: () => set({ accessToken: null, refreshToken: null, user: null }),
       hasRole: (...roles) => {
         const u = get().user;

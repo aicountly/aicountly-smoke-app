@@ -30,7 +30,8 @@ database.default.charset  = utf8
 #--------------------------------------------------------------------
 
 JWT_SECRET        = replace_me_with_64_byte_hex_secret
-JWT_ACCESS_TTL    = 86400
+# Access tokens are capped at 900 s (15 min) in code; roles are re-checked on refresh.
+JWT_ACCESS_TTL    = 900
 JWT_REFRESH_TTL   = 2592000
 JWT_ISSUER        = smoke.aicountly.org
 
@@ -40,6 +41,12 @@ JWT_ISSUER        = smoke.aicountly.org
 
 CONSOLE_API_URL = https://console.aicountly.org/api
 CONTROLLER_APP_CODE = smoke
+
+# Console assigns Smoke roles (Console -> Roles & Access). Every token refresh
+# re-checks them via GET {CONSOLE_API_URL}/portal/controller-apps/user-access
+# using this per-product key (capability staff.roles, bound to app smoke).
+# REQUIRED in production; without it roles are only taken at sign-in.
+CONSOLE_API_TOKEN = 
 
 #--------------------------------------------------------------------
 # VAULT

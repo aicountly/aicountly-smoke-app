@@ -45,7 +45,8 @@ Settings page.
 # 1. clone & install root deps
 git clone <repo> aicountly-smoke-app
 cd aicountly-smoke-app
-cp .env.example .env       # edit DB creds, JWT_SECRET, SMOKE_VAULT_KEY, AI keys, WORKER_SHARED_TOKEN
+cp .env.example .env       # edit DB creds, JWT_SECRET, SMOKE_VAULT_KEY, AI keys, WORKER_SHARED_TOKEN,
+                           # CONSOLE_API_URL + CONSOLE_API_TOKEN (Console role pull; required in production)
 
 # 2. backend
 cd backend
@@ -163,26 +164,66 @@ you override one side, override both or the Reports page cannot find screenshots
 
 See [`worker/README.md`](../worker/README.md) for full setup.
 
-## 5. Bootstrap roles & first user
+## 5. Roles (assigned in Console) & first user
 
-After `php spark db:seed InitialSeeder` you will have:
+| Role (Console slug) | Permissions                                                                 |
+|---------------------|-----------------------------------------------------------------------------|
+| `owner`             | Everything: settings, target profiles, vault, plan approval, run, reports   |
+| `product_reviewer`  | Profiles, plan approval, run observations, reports                          |
+| `developer_viewer`  | View reports only                                                           |
+| `auditor_viewer`    | View only reports flagged `auditor_visible`                                  |
 
-| Role               | Permissions                                                                 |
-|--------------------|-----------------------------------------------------------------------------|
-| `owner`            | Everything: settings, target profiles, vault, plan approval, run, reports   |
-| `product_reviewer` | Profiles, plan approval, run observations, reports                          |
-| `developer_viewer` | View reports only                                                           |
-| `auditor_viewer`   | View only reports flagged `auditor_visible`                                  |
+Access is via **Console SSO** (local email/password login is disabled), and
+**Console assigns Smoke roles** — Console → Roles & Access
+(<https://console.aicountly.org>), app code `smoke`. Smoke keeps a local copy in
+`smoke_user_roles` only so `RbacFilter` can enforce it; nothing in Smoke grants a
+role on its own.
 
-Access is via **Console SSO** (local email/password login is disabled). The
-seeder may still create a bootstrap Owner row for DB/role wiring:
+- **Sign-in** (`/v1/auth/sso-callback`, `/v1/auth/controller-sso`,
+  `/v1/auth/console-session`): when the Console payload has `app_roles`, the
+  user's local roles are **replaced** with exactly those slugs (a Console
+  superadmin — `app_superadmin` / `global_superadmin` — gets every role,
+  including `owner`). An empty `app_roles` for a non-superadmin is refused with
+  **403 "Access not assigned. Ask a Console superadmin to assign you a role."**
+  and the user's existing refresh tokens are revoked. `console_user_id`,
+  `authz_version` and `roles_synced_at` are stored on `smoke_users`.
+  If the payload has **no `app_roles` key** (an older Console still deployed),
+  existing roles are kept and a user with none gets `developer_viewer`; only a
+  superadmin is ever seeded with `owner`.
+- **Token refresh** (`POST /v1/auth/refresh`) first calls
+  `GET {CONSOLE_API_URL}/portal/controller-apps/user-access?app_code=smoke&console_user_id=…`
+  (or `&email=…`) with `Authorization: Bearer {CONSOLE_API_TOKEN}`:
+  - `exists:false`, `active:false`, `app_access:false` or no roles → refused
+    (403) and the user's local roles dropped and `sessions_revoked_at` set, so
+    every refresh token issued before it stops working (401);
+  - otherwise local roles are replaced with `app_roles` and the new access token
+    (and the `roles` field of the response, which the SPA uses to update its
+    cached user) carries them;
+  - Console unreachable (network error, non-2xx, unusable body): refresh is
+    allowed only if `roles_synced_at` is within the last **12 hours**, otherwise
+    refused (401) with a message to sign in again from Console;
+  - `CONSOLE_API_URL` or `CONSOLE_API_TOKEN` not set: a warning is logged and
+    refresh keeps the previous behaviour (dev/test). **Production must set
+    both** (`CONSOLE_API_TOKEN` is a Console per-product key with capability
+    `staff.roles`, bound to app `smoke`).
+- **Token lifetime / revocation lag**: access tokens are capped at **15 minutes**
+  in code (`JWT_ACCESS_TTL` above 900 is ignored), so a role change or revocation
+  in Console reaches an active user within 15 minutes. Refresh tokens live
+  `JWT_REFRESH_TTL` (default 30 days) but are useless once Console revokes the
+  user. Optional cron sweep for idle users: `php spark smoke:console-roles-sync`.
 
-```
-email:    owner@aicountly.local
-password: ChangeMe!2026
-```
+The `/users` page (Owner only) lists users and can disable them locally; roles
+are shown read-only with a link to Console. `POST /v1/users/{id}/roles` and any
+`roles` field on `POST`/`PUT /v1/users` answer 403 "Roles are assigned in
+Console → Roles & Access (https://console.aicountly.org)."
 
-Owners manage portal users and roles from the `/users` page (or `POST /api/v1/users`).
+The seeder may still create a bootstrap owner row for DB wiring
+(`owner@aicountly.local` / `ChangeMe!2026`); it cannot sign in (local login is
+disabled) and grants no Console access.
+
+Backend tests: `cd backend && composer test:unit` (no DB); the SSO/refresh
+feature suite needs a scratch PostgreSQL database — see
+`backend/phpunit.xml.dist`.
 
 ## 6. The workflow
 

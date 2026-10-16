@@ -15,9 +15,20 @@ calendar / contacts, ...).
 - DB: PostgreSQL — `migrations/` (mirrors `backend/app/Database/Migrations/`)
 - Reports output: `smoke-reports/`
 - Sample prompts / sessions / competitor benchmarks: `samples/`
+- Cross-system E2E harness (real Console, my.aicountly, Manage, Flow, Smart Books and Build on one
+  machine; fakes only for e-mail, Tata Smartflo and S3): `e2e/` — `e2e/run.sh`, report in
+  `e2e/report.md`, see [`e2e/README.md`](e2e/README.md)
 
-See [`docs/README.md`](docs/README.md) for full setup, the workflow, role
-bootstrap, and security notes.
+See [`docs/README.md`](docs/README.md) for full setup, the workflow, roles,
+and security notes.
+
+**Access:** Console SSO only, and **Console assigns Smoke roles** (Console →
+Roles & Access, app code `smoke`: `owner`, `product_reviewer`,
+`developer_viewer`, `auditor_viewer`). Roles are replaced from Console at every
+sign-in and re-checked on every token refresh (access tokens live at most 15
+minutes). Production must set `CONSOLE_API_URL` and `CONSOLE_API_TOKEN`
+(per-product key, capability `staff.roles`) in the API `.env`. Details:
+[docs/README.md § 5](docs/README.md#5-roles-assigned-in-console--first-user).
 
 ## Quick start
 
