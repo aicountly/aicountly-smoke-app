@@ -36,13 +36,19 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Validate deploy secrets
+        env:
+          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
           missing=0
-          if [ -z "${{ secrets.PROD_SSH_HOST }}" ]; then echo "::error::Missing repository secret: PROD_SSH_HOST"; missing=1; fi
-          if [ -z "${{ secrets.PROD_SSH_PORT }}" ]; then echo "::error::Missing repository secret: PROD_SSH_PORT"; missing=1; fi
-          if [ -z "${{ secrets.PROD_SSH_USER }}" ]; then echo "::error::Missing repository secret: PROD_SSH_USER"; missing=1; fi
-          if [ -z "${{ secrets.PROD_SSH_PRIVATE_KEY }}" ]; then echo "::error::Missing repository secret: PROD_SSH_PRIVATE_KEY"; missing=1; fi
-          if [ -z "${{ secrets.PROD_REMOTE_ROOT }}" ]; then echo "::error::Missing repository secret: PROD_REMOTE_ROOT"; missing=1; fi
+          if [ -z "${PROD_SSH_HOST}" ]; then echo "::error::Missing repository secret: PROD_SSH_HOST"; missing=1; fi
+          if [ -z "${PROD_SSH_PORT}" ]; then echo "::error::Missing repository secret: PROD_SSH_PORT"; missing=1; fi
+          if [ -z "${PROD_SSH_USER}" ]; then echo "::error::Missing repository secret: PROD_SSH_USER"; missing=1; fi
+          if [ -z "${PROD_SSH_PRIVATE_KEY}" ]; then echo "::error::Missing repository secret: PROD_SSH_PRIVATE_KEY"; missing=1; fi
+          if [ -z "${PROD_REMOTE_ROOT}" ]; then echo "::error::Missing repository secret: PROD_REMOTE_ROOT"; missing=1; fi
           if [ "$missing" -ne 0 ]; then exit 1; fi
           echo "All required SSH deploy secrets are present."
 
@@ -88,16 +94,21 @@ jobs:
           composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
 
       - name: Configure SSH
+        env:
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
         run: |
           install -m 700 -d ~/.ssh
-          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "${PROD_SSH_PRIVATE_KEY}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "${{ secrets.PROD_SSH_PORT }}" "${{ secrets.PROD_SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -p "${PROD_SSH_PORT}" "${PROD_SSH_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
           cat >> ~/.ssh/config <<EOF
           Host cpanel-prod
-            HostName ${{ secrets.PROD_SSH_HOST }}
-            Port ${{ secrets.PROD_SSH_PORT }}
-            User ${{ secrets.PROD_SSH_USER }}
+            HostName ${PROD_SSH_HOST}
+            Port ${PROD_SSH_PORT}
+            User ${PROD_SSH_USER}
             IdentityFile ~/.ssh/deploy_key
             IdentitiesOnly yes
             StrictHostKeyChecking accept-new
