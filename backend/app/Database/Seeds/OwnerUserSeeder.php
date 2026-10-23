@@ -6,6 +6,13 @@ use CodeIgniter\Database\Seeder;
 
 class OwnerUserSeeder extends Seeder
 {
+    public static function initialPassword(): string
+    {
+        $fromEnv = (string) (getenv('SMOKE_OWNER_PASSWORD') ?: '');
+
+        return strlen($fromEnv) >= 12 ? $fromEnv : bin2hex(random_bytes(24));
+    }
+
     public function run(): void
     {
         $db = \Config\Database::connect();
@@ -16,7 +23,9 @@ class OwnerUserSeeder extends Seeder
         if ($existing === null) {
             $db->table('smoke_users')->insert([
                 'email'         => $email,
-                'password_hash' => password_hash('ChangeMe!2026', PASSWORD_BCRYPT),
+                // No shared default password: SMOKE_OWNER_PASSWORD, or a random one nobody knows
+                // (sign-in is through Console SSO; local login is disabled).
+                'password_hash' => password_hash(self::initialPassword(), PASSWORD_BCRYPT),
                 'full_name'     => 'Initial Owner',
                 'status'        => 'active',
                 'must_rotate_pw'=> true,

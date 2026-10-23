@@ -24,3 +24,14 @@ RedirectMatch 403 ^/(worker|samples|migrations|smoke-reports)(/|$)
     RewriteCond %{REQUEST_URI} !^/api/
     RewriteRule ^ index.html [L]
 </IfModule>
+
+# --- Security headers (security audit, October 2026) ---------------------------
+# Internal tool: never framed by another site, no MIME sniffing, HTTPS only.
+<IfModule mod_headers.c>
+  Header always set Strict-Transport-Security "max-age=31536000"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+  Header always set Content-Security-Policy "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+</IfModule>
