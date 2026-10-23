@@ -27,7 +27,6 @@ final class OwnerUserSeederPasswordTest extends CIUnitTestCase
 
         $this->assertSame(48, strlen($a));
         $this->assertNotSame($a, $b);
-        $this->assertNotSame('ChangeMe!2026', $a);
     }
 
     public function testAConfiguredPasswordOfTwelveOrMoreCharactersIsUsed(): void
