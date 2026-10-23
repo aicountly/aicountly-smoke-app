@@ -13,6 +13,10 @@ on:
 env:
   THRESHOLD_MB: 500
 
+# Least privilege: the job only reads the repository (deploys go over SSH with their own key).
+permissions:
+  contents: read
+
 jobs:
   check-debugbar-size:
     runs-on: ubuntu-latest

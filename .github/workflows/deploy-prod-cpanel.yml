@@ -21,6 +21,10 @@ env:
   NODE_VERSION: "24"
   PHP_VERSION: "8.2"
 
+# Least privilege: the job only reads the repository (deploys go over SSH with their own key).
+permissions:
+  contents: read
+
 jobs:
   deploy:
     name: Deploy full stack to cPanel
@@ -29,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Validate deploy secrets
         run: |
@@ -43,13 +47,13 @@ jobs:
           echo "All required SSH deploy secrets are present."
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: mbstring, intl, curl, openssl
