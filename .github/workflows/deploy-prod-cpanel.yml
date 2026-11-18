@@ -100,411 +100,53 @@ jobs:
           EOF
           chmod 600 ~/.ssh/config
 
-      - name: Ensure remote directories exist
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+      - name: Publish the single reviewed HTTPS rewrite and verify the production notice
+        shell: bash
         run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          ssh cpanel-prod "mkdir -p \
-            '${REMOTE_ROOT}/api' \
-            '${REMOTE_ROOT}/worker' \
-            '${REMOTE_ROOT}/worker/logs' \
-            '${REMOTE_ROOT}/samples' \
-            '${REMOTE_ROOT}/smoke-reports' \
-            '${REMOTE_ROOT}/migrations' \
-            '${REMOTE_ROOT}/api/writable/cache' \
-            '${REMOTE_ROOT}/api/writable/logs' \
-            '${REMOTE_ROOT}/api/writable/session' \
-            '${REMOTE_ROOT}/api/writable/uploads'"
-
-      # backend → api/ (same pattern as aicountly-qa server-php → public_html/api/)
-      - name: Rsync backend to api/
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          rsync -avz --delete \
-            --exclude '.env' \
-            --exclude '.git/' \
-            --exclude 'tests/' \
-            --exclude 'writable/cache/*' \
-            --exclude 'writable/logs/*' \
-            --exclude 'writable/session/*' \
-            --exclude 'writable/uploads/*' \
-            --exclude 'writable/debugbar/*' \
-            backend/ "cpanel-prod:${REMOTE_ROOT}/api/"
-
-      - name: Verify server api/.env exists
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          if ! ssh cpanel-prod "test -f '${REMOTE_ROOT}/api/.env'"; then
-            echo "::error::${REMOTE_ROOT}/api/.env not found on the server."
-            echo "Create it manually in cPanel (copy from backend/env) — deploy never writes or overwrites .env."
-            exit 1
-          fi
-          echo "Server api/.env present — will be used for migrations (unchanged by deploy)."
-
-      - name: Rsync worker
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          rsync -avz --delete \
-            worker/dist/ "cpanel-prod:${REMOTE_ROOT}/worker/dist/"
-          rsync -avz \
-            worker/package.json \
-            worker/ecosystem.config.cjs \
-            worker/.env.example \
-            worker/README.md \
-            "cpanel-prod:${REMOTE_ROOT}/worker/"
-          rsync -avz \
-            worker/scripts/ "cpanel-prod:${REMOTE_ROOT}/worker/scripts/"
-
-      - name: Verify server worker/.env exists
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          if ! ssh cpanel-prod "test -f '${REMOTE_ROOT}/worker/.env'"; then
-            echo "::warning::${REMOTE_ROOT}/worker/.env not found on the server."
-            echo "Create it manually (copy worker/.env.example) — deploy never writes worker/.env."
-            echo "WORKER_SHARED_TOKEN must match api/.env. Until it exists, the PM2 restart step is skipped."
+          set -euo pipefail
+          test "$(sha256sum deploy/public_html.htaccess | cut -d' ' -f1)" = 3ffbaad95bcb59775e3ef87878e60b07c786095679542f2867b3e0404b050f9a
+          remote=(ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes cpanel-prod)
+          apply() {
+            {
+              printf 'operation=%q\n' "$1"
+              printf 'payload=%q\n' "$(base64 -w0 deploy/public_html.htaccess)"
+              cat <<'REMOTE'
+          set -euo pipefail
+          umask 077
+          test "$(id -un)" = smokeaicountly
+          cd "$HOME/public_html"
+          [[ -f .htaccess && ! -L .htaccess && -O .htaccess ]]
+          backup="$HOME/.htaccess-before-https-20261118-7e1dcba67cbe2bcf6259acd99306d1ed7bf335c9475163587c4bfbd988a8a010"
+          if [ "$operation" = install ]; then
+            test "$(sha256sum .htaccess | cut -d' ' -f1)" = 7e1dcba67cbe2bcf6259acd99306d1ed7bf335c9475163587c4bfbd988a8a010
+            if [ ! -e "$backup" ]; then (set -C; cat .htaccess > "$backup"); fi
+            [[ -f "$backup" && ! -L "$backup" && -O "$backup" ]]
+            test "$(sha256sum "$backup" | cut -d' ' -f1)" = 7e1dcba67cbe2bcf6259acd99306d1ed7bf335c9475163587c4bfbd988a8a010
+            want=3ffbaad95bcb59775e3ef87878e60b07c786095679542f2867b3e0404b050f9a; existing=7e1dcba67cbe2bcf6259acd99306d1ed7bf335c9475163587c4bfbd988a8a010
           else
-            echo "Server worker/.env present (unchanged by deploy)."
+            test "$operation" = restore
+            [[ -f "$backup" && ! -L "$backup" && -O "$backup" ]]
+            want=7e1dcba67cbe2bcf6259acd99306d1ed7bf335c9475163587c4bfbd988a8a010; existing=3ffbaad95bcb59775e3ef87878e60b07c786095679542f2867b3e0404b050f9a
           fi
-
-      - name: Rsync shared assets
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          rsync -avz samples/ "cpanel-prod:${REMOTE_ROOT}/samples/"
-          rsync -avz migrations/ "cpanel-prod:${REMOTE_ROOT}/migrations/"
-          rsync -avz --exclude '*/' \
-            smoke-reports/.gitkeep "cpanel-prod:${REMOTE_ROOT}/smoke-reports/" || true
-
-      # frontend/dist → document root; preserve api/, worker/, etc.
-      - name: Rsync frontend to document root
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          rsync -avz --delete \
-            --exclude 'api/' \
-            --exclude 'worker/' \
-            --exclude 'samples/' \
-            --exclude 'smoke-reports/' \
-            --exclude 'migrations/' \
-            frontend/dist/ "cpanel-prod:${REMOTE_ROOT}/"
-
-      - name: Remove obsolete deploy folders
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          ssh cpanel-prod "rm -rf '${REMOTE_ROOT}/backend' '${REMOTE_ROOT}/frontend'"
-
-      - name: Install worker production dependencies on server
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          ssh cpanel-prod "cd '${REMOTE_ROOT}/worker' && \
-            if command -v npm >/dev/null 2>&1; then \
-              npm install --omit=dev --ignore-scripts 2>/dev/null || npm ci --omit=dev --ignore-scripts 2>/dev/null || true; \
-            else \
-              echo 'npm not found on server — install Node on cPanel or run the worker on a VPS.'; \
-            fi"
-
-      - name: Install Playwright Chromium on server
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          ssh cpanel-prod "cd '${REMOTE_ROOT}/worker' && \
-            if command -v npx >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then \
-              npx playwright install chromium || echo '::warning::playwright install chromium failed — run manually on the server'; \
-            else \
-              echo 'npx/npm not found — install Playwright browsers manually after Node is available.'; \
-            fi"
-
-      # The live worker runs on THIS account under PM2 as aicountly-smoke-worker.
-      # Without this step the new worker/dist/ sits on disk while the old process
-      # keeps serving stale code — a green deploy that changed nothing.
-      - name: Restart smoke worker (PM2)
-        id: worker_restart
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          if ! ssh cpanel-prod "test -f '${REMOTE_ROOT}/worker/.env'"; then
-            echo "::warning::Skipping worker restart — ${REMOTE_ROOT}/worker/.env is missing. A worker without WORKER_SHARED_TOKEN would poll and fail every lease forever. Create it from worker/.env.example, then re-run this workflow."
-            echo "restarted=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          set +e
-          set -o pipefail
-          # timeout: every pm2 call below is detached from this pipe, but a wedged
-          # SSH must fail in seconds rather than idling until the job timeout.
-          # Exit 124 (timeout) is treated as success when the remote printed
-          # SMOKE_WORKER_RESTART_OK — PM2's God daemon can still hold the SSH
-          # session open even after the remote script finishes.
-          timeout 180 ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-restart.log
-          set -u
-          WORKER_DIR="${1%/}/worker"
-          mkdir -p "$WORKER_DIR/logs"
-
-          # Non-login cPanel SSH shells usually have neither node nor pm2 on PATH
-          # (Node comes from the cPanel Node selector / nodevenv), so widen it first.
-          for d in "$HOME/.npm-global/bin" "$HOME/bin" "$HOME/node_modules/.bin" \
-                   /opt/cpanel/ea-nodejs*/bin "$HOME"/nodevenv/*/*/bin \
-                   /usr/local/bin /usr/bin; do
-            [ -d "$d" ] && PATH="$d:$PATH"
-          done
-          export PATH
-          if command -v npm >/dev/null 2>&1; then
-            NPM_PREFIX="$(npm prefix -g </dev/null 2>/dev/null || true)"
-            if [ -n "$NPM_PREFIX" ] && [ -d "$NPM_PREFIX/bin" ]; then
-              PATH="$NPM_PREFIX/bin:$PATH"
-              export PATH
-            fi
-          fi
-
-          if ! command -v pm2 >/dev/null 2>&1; then
-            echo "::warning::pm2 not found on the server PATH — the worker/dist just deployed is NOT live. One-time fix over SSH: npm install -g pm2 && cd $WORKER_DIR && pm2 startOrRestart ecosystem.config.cjs --update-env && pm2 save && pm2 startup"
-            exit 0
-          fi
-
-          cd "$WORKER_DIR"
-
-          # Every pm2 call is detached from this SSH session's stdio. When no God
-          # daemon is running yet, pm2 spawns one, and a daemon that inherits the
-          # SSH pipe holds it open forever — the connection then never returns.
-          # Spawning it here against a regular file is what keeps SSH closable.
-          # IMPORTANT: never run pm2 (including --version) against SSH stdout
-          # before this ping — that is what used to leave the daemon attached
-          # to the deploy pipe and force timeout exit 124 after SUCCESS.
-          PM2_LOG="$(mktemp)"
-          pm2 ping </dev/null >>"$PM2_LOG" 2>&1 \
-            || echo "::warning::pm2 ping failed — pm2 daemon may not be usable for this account."
-          PM2_VER="$(pm2 --version </dev/null 2>/dev/null || true)"
-          echo "pm2: $(command -v pm2) (${PM2_VER:-unknown})"
-
-          # startOrRestart (not startOrReload): this is a fork-mode queue worker with
-          # no listening socket, so PM2's rolling reload buys nothing and reload in
-          # fork mode degrades to a stop/start anyway. A hard restart also guarantees
-          # the old process cannot keep an old dist/index.js resident.
-          pm2 startOrRestart ecosystem.config.cjs --update-env </dev/null >>"$PM2_LOG" 2>&1 \
-            || echo "::warning::pm2 startOrRestart returned non-zero — the health check step decides whether the worker is actually running."
-          pm2 save </dev/null >>"$PM2_LOG" 2>&1 \
-            || echo "::warning::pm2 save failed — the process list may not survive a server reboot."
-          cat "$PM2_LOG"
-          rm -f "$PM2_LOG"
-          pm2 list --no-color </dev/null 2>&1 || true
-          echo "SMOKE_WORKER_RESTART_OK"
-          exit 0
-          EOS
-          ssh_rc=${PIPESTATUS[0]}
-          set -e
-          if grep -q '^SMOKE_WORKER_RESTART_OK$' /tmp/worker-restart.log; then
-            echo "restarted=true" >> "$GITHUB_OUTPUT"
-            if [ "$ssh_rc" -eq 124 ]; then
-              echo "::warning::SSH timed out after SMOKE_WORKER_RESTART_OK (PM2 daemon held the session). Treating restart as successful."
-            fi
-          else
-            echo "restarted=false" >> "$GITHUB_OUTPUT"
-            if [ "$ssh_rc" -ne 0 ]; then
-              echo "::error::Worker restart SSH failed (exit $ssh_rc) without SMOKE_WORKER_RESTART_OK."
-              exit 1
-            fi
-          fi
-
-      # A crash-looping worker reporting a green deploy is the exact failure this
-      # whole change exists to eliminate, so verify from pm2 jlist (machine
-      # readable) instead of trusting the restart command's exit code.
-      - name: Verify smoke worker is online (PM2)
-        id: worker_health
-        if: steps.worker_restart.outputs.restarted == 'true'
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          set +e
-          set -o pipefail
-          # Same as restart: tolerate timeout 124 when SMOKE_WORKER_HEALTHY was printed.
-          timeout 180 ssh cpanel-prod "bash -s '${REMOTE_ROOT}'" 2>&1 <<'EOS' | tee /tmp/worker-health.log
-          set -u
-          WORKER_DIR="${1%/}/worker"
-          for d in "$HOME/.npm-global/bin" "$HOME/bin" "$HOME/node_modules/.bin" \
-                   /opt/cpanel/ea-nodejs*/bin "$HOME"/nodevenv/*/*/bin \
-                   /usr/local/bin /usr/bin; do
-            [ -d "$d" ] && PATH="$d:$PATH"
-          done
-          export PATH
-          if command -v npm >/dev/null 2>&1; then
-            NPM_PREFIX="$(npm prefix -g </dev/null 2>/dev/null || true)"
-            if [ -n "$NPM_PREFIX" ] && [ -d "$NPM_PREFIX/bin" ]; then
-              PATH="$NPM_PREFIX/bin:$PATH"
-              export PATH
-            fi
-          fi
-
-          # As in the restart step: never let a pm2 command spawn the daemon onto
-          # this SSH session's pipe, or the connection cannot close.
-          pm2 ping </dev/null >/dev/null 2>&1 || true
-
-          probe() {
-            pm2 jlist </dev/null 2>/dev/null | node -e '
-              let raw = "";
-              process.stdin.on("data", (d) => { raw += d; });
-              process.stdin.on("end", () => {
-                // pm2 sometimes prefixes jlist with lines like "[PM2] Spawning PM2 daemon",
-                // so scan every "[" until one parses as an array.
-                const end = raw.lastIndexOf("]");
-                let list = [];
-                for (let i = raw.indexOf("["); i !== -1 && i < end; i = raw.indexOf("[", i + 1)) {
-                  try {
-                    const parsed = JSON.parse(raw.slice(i, end + 1));
-                    if (Array.isArray(parsed)) { list = parsed; break; }
-                  } catch (e) { /* not JSON at this offset, keep scanning */ }
-                }
-                const p = list.find((x) => x && x.name === "aicountly-smoke-worker");
-                if (!p) { process.stdout.write("missing 0"); return; }
-                const env = p.pm2_env || {};
-                process.stdout.write(`${env.status || "unknown"} ${env.restart_time || 0}`);
-              });
-            '
+          tmp=$(mktemp .htaccess.https-XXXXXX)
+          trap 'rm -f -- "$tmp"' EXIT
+          cp --preserve=all -- .htaccess "$tmp"
+          if [ "$operation" = install ]; then printf '%s' "$payload" | base64 -d > "$tmp"; else cat "$backup" > "$tmp"; fi
+          test "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$want"
+          test "$(stat -c '%u:%g:%a' "$tmp")" = "$(stat -c '%u:%g:%a' .htaccess)"
+          test "$(sha256sum .htaccess | cut -d' ' -f1)" = "$existing"
+          mv -f -- "$tmp" .htaccess
+          REMOTE
+            } | "${remote[@]}" 'bash -s'
           }
-
-          # Two samples: a dead/errored process fails the first check, and a worker
-          # that boots then crashes on config shows up as a climbing restart_time.
-          sleep 5
-          read -r STATUS1 RESTARTS1 <<<"$(probe)"
-          echo "pm2 status  5s after restart: status=$STATUS1 restarts=$RESTARTS1"
-          sleep 12
-          read -r STATUS2 RESTARTS2 <<<"$(probe)"
-          echo "pm2 status 17s after restart: status=$STATUS2 restarts=$RESTARTS2"
-
-          if [ "$STATUS2" = "online" ]; then
-            # Only compare counters when both samples saw the process, so a jlist
-            # hiccup cannot masquerade as a restart loop.
-            if [ "$STATUS1" = "online" ] && [ "$RESTARTS2" != "$RESTARTS1" ]; then
-              echo "::error::aicountly-smoke-worker is restarting in a loop (restart_time $RESTARTS1 -> $RESTARTS2) — it is not processing jobs reliably."
-            else
-              echo "aicountly-smoke-worker is online and stable."
-              echo "SMOKE_WORKER_HEALTHY"
-              exit 0
-            fi
-          else
-            echo "::error::aicountly-smoke-worker is not online (pm2 status: $STATUS2). The worker/dist deployed by this run is NOT processing jobs."
-          fi
-          echo "--- tail worker-error.log ---"
-          tail -40 "$WORKER_DIR/logs/worker-error.log" 2>/dev/null || echo "(no error log yet)"
-          echo "--- tail worker-out.log ---"
-          tail -40 "$WORKER_DIR/logs/worker-out.log" 2>/dev/null || echo "(no out log yet)"
-          echo "--- pm2 list ---"
-          pm2 list --no-color </dev/null 2>&1 || true
-          exit 1
-          EOS
-          ssh_rc=${PIPESTATUS[0]}
-          set -e
-          if grep -q '^SMOKE_WORKER_HEALTHY$' /tmp/worker-health.log; then
-            echo "healthy=true" >> "$GITHUB_OUTPUT"
-            if [ "$ssh_rc" -eq 124 ]; then
-              echo "::warning::SSH timed out after SMOKE_WORKER_HEALTHY (PM2 daemon held the session). Treating health check as successful."
-            fi
-          else
-            echo "healthy=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run database migrations
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          echo "DB settings from server api/.env (no secrets printed):"
-          ssh cpanel-prod "grep -E '^database\.default\.(hostname|port|database|username|sslmode)' '${REMOTE_ROOT}/api/.env' 2>/dev/null || true"
-          if ! ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark migrate --all --no-interaction"; then
-            echo "::error::Migration failed — diagnostics:"
-            ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && (test -f .env && echo '.env: present' || echo '.env: MISSING') && php -m | grep -i pgsql || echo 'pgsql PHP extension: NOT loaded'"
-            echo "::error::cPanel PostgreSQL: use the host from cPanel PostgreSQL Databases, not 127.0.0.1 unless local socket is configured. Try database.default.sslmode = require in api/.env"
-            ssh cpanel-prod "ls -la '${REMOTE_ROOT}/api/writable/logs/' 2>/dev/null; tail -30 '${REMOTE_ROOT}/api/writable/logs/log-'*.log 2>/dev/null || true"
-            exit 1
-          fi
-
-      - name: Run database seeders (first deploy only)
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          MARKER="${REMOTE_ROOT}/api/writable/.smoke_seed_complete"
-          if ssh cpanel-prod "test -f '${MARKER}'"; then
-            echo "Seeders already applied — skipping."
-            exit 0
-          fi
-          echo "First deploy — running InitialSeeder..."
-          if ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark db:seed InitialSeeder"; then
-            ssh cpanel-prod "touch '${MARKER}' && chmod 644 '${MARKER}'"
-          else
-            echo "::warning::Seeder failed — deploy continues. Fix api/.env DB settings on cPanel, then run manually:"
-            echo "  ssh → cd api && php spark db:seed InitialSeeder"
-            echo "cPanel tip: set database.default.hostname to the PostgreSQL host from cPanel (not 127.0.0.1). Add database.default.sslmode = require if needed."
-          fi
-
-      - name: Set backend writable permissions
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          ssh cpanel-prod "chmod -R ug+rwx '${REMOTE_ROOT}/api/writable' || true"
-
-      - name: Verify remote deploy
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          ssh cpanel-prod "ls -la '${REMOTE_ROOT}/index.html' '${REMOTE_ROOT}/api/public/index.php'"
-
-      - name: Deploy summary
-        env:
-          REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
-        run: |
-          REMOTE_ROOT="${REMOTE_ROOT%/}"
-          {
-            echo "## cPanel production deploy"
-            echo ""
-            echo "| Path | Purpose |"
-            echo "|---|---|"
-            echo "| \`${REMOTE_ROOT}/\` | React portal (index.html) |"
-            echo "| \`${REMOTE_ROOT}/api/\` | CodeIgniter API |"
-            echo "| \`${REMOTE_ROOT}/worker/\` | Live Playwright worker (PM2 \`aicountly-smoke-worker\`) |"
-            echo ""
-            echo "### Worker (one-time on server)"
-            echo ""
-            echo "The worker runs on **this** cPanel account. Every deploy rebuilds \`worker/dist/\`, then runs"
-            echo "\`pm2 startOrRestart ecosystem.config.cjs --update-env\` + \`pm2 save\` and verifies the process is \`online\`,"
-            echo "so the live worker always matches the deployed commit. Nothing has to be uploaded by hand."
-            echo ""
-            echo "Manual prerequisites — deploy cannot do these for you:"
-            echo ""
-            echo "1. \`${REMOTE_ROOT}/worker/.env\` (copy \`.env.example\`; \`WORKER_SHARED_TOKEN\` must match \`api/.env\`). Deploy never writes it, and skips the restart while it is missing."
-            echo "2. \`pm2\` installed for this account (\`npm install -g pm2\`) plus \`pm2 startup\` once, so it survives a reboot. If \`pm2\` is not on the deploy shell's PATH the restart is skipped with a warning."
-            echo "3. \`npx playwright install-deps chromium\` once **as root** (Chromium shared libraries; the per-deploy \`playwright install chromium\` only fetches the browser)."
-            echo ""
-            echo "Identity: PM2 process \`aicountly-smoke-worker\`, \`WORKER_ID=aicountly-smoke-worker\` — shown in the portal under Run detail → Sessions → Worker."
-            echo "The retired shared worker on \`worker.apis.aicountly.com\` must be stopped; two workers on one queue double-lease and interleave sessions from different builds."
-            echo "\`npm run worker:pack\` is legacy tooling for that retired host only."
-            echo ""
-            echo "> Open https://smoke.aicountly.org/ — should show the login page, not a directory listing."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # Deliberately last: the deploy (frontend, API, migrations) must finish even
-      # when the worker is dead, but the run must still go red so a broken worker is
-      # never mistaken for a successful deploy.
-      - name: Fail if smoke worker is not online
-        if: always() && steps.worker_health.outputs.healthy == 'false'
-        run: |
-          echo "::error::Frontend, API and migrations deployed, but PM2 process aicountly-smoke-worker is not online — see the 'Verify smoke worker is online (PM2)' step for the log tail."
-          exit 1
+          apply install
+          verify() {
+            local response code
+            for path in / /index.html; do
+              response=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code} %{redirect_url}' "http://smoke.aicountly.org$path") || return 1
+              test "$response" = "301 https://smoke.aicountly.org$path" || return 1
+            done
+            code=$(curl -sS --max-time 20 -o "$RUNNER_TEMP/https-notice-page" -w '%{http_code}' https://smoke.aicountly.org/) || return 1
+            test "$code" = 200 && grep -q 'maintenance-notice-20261118' "$RUNNER_TEMP/https-notice-page"
+          }
+          if ! verify; then apply restore; exit 1; fi
