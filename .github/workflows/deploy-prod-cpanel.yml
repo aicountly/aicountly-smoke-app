@@ -1,4 +1,4 @@
-name: Deploy to cPanel via SSH (manual Production)
+name: Deploy to S01 via SSH (manual Production)
 
 # Manual-only. Trigger via Actions UI → Run workflow (no prompts).
 #
@@ -27,13 +27,23 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy full stack to cPanel
+    name: Deploy full stack to S01
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Verify S01 deployment target
+        id: s01_target
+        env:
+          AIC_S01_TARGETS: '[{"domain":"smoke.aicountly.org","account":"smokeaicountly","root":"/home/smokeaicountly/public_html","verified_blueprint":true,"ssh_login":"aicdd03b55273466e307"}]'
+          AIC_TARGET_PROD_REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
+          AIC_TARGET_PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          AIC_TARGET_PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          AIC_TARGET_PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/s01-target-guard.py"
 
       - name: Validate deploy secrets
         env:
@@ -103,7 +113,7 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "${PROD_SSH_PRIVATE_KEY}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "${PROD_SSH_PORT}" "${PROD_SSH_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+          python3 "$GITHUB_WORKSPACE/.github/scripts/s01-keyscan.py" -p "${PROD_SSH_PORT}" "${PROD_SSH_HOST}" > ~/.ssh/known_hosts 2>/dev/null
           cat >> ~/.ssh/config <<EOF
           Host cpanel-prod
             HostName ${PROD_SSH_HOST}
@@ -111,7 +121,7 @@ jobs:
             User ${PROD_SSH_USER}
             IdentityFile ~/.ssh/deploy_key
             IdentitiesOnly yes
-            StrictHostKeyChecking accept-new
+            StrictHostKeyChecking yes
           EOF
           chmod 600 ~/.ssh/config
 
@@ -254,6 +264,7 @@ jobs:
       # Without this step the new worker/dist/ sits on disk while the old process
       # keeps serving stale code — a green deploy that changed nothing.
       - name: Restart smoke worker (PM2)
+        if: ${{ vars.S01_WEB_ONLY == '0' }}
         id: worker_restart
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
@@ -346,7 +357,7 @@ jobs:
       # readable) instead of trusting the restart command's exit code.
       - name: Verify smoke worker is online (PM2)
         id: worker_health
-        if: steps.worker_restart.outputs.restarted == 'true'
+        if: ${{ (steps.worker_restart.outputs.restarted == 'true') && vars.S01_WEB_ONLY == '0' }}
         env:
           REMOTE_ROOT: ${{ secrets.PROD_REMOTE_ROOT }}
         run: |
