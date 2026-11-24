@@ -457,9 +457,11 @@ jobs:
           REMOTE_ROOT="${REMOTE_ROOT%/}"
           echo "DB settings from server api/.env (no secrets printed):"
           ssh cpanel-prod "grep -E '^database\.default\.(hostname|port|database|username|sslmode)' '${REMOTE_ROOT}/api/.env' 2>/dev/null || true"
-          if ! ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark migrate --all --no-interaction"; then
+          # S01's deploy sandbox has no php on PATH: api/bin/ops/find-php.sh names the interpreter
+          # (PHP >= 8.2 with pgsql) or explains why there is none.
+          if ! ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && PHP=\"\$(bash bin/ops/find-php.sh)\" && \"\$PHP\" spark migrate --all --no-interaction"; then
             echo "::error::Migration failed — diagnostics:"
-            ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && (test -f .env && echo '.env: present' || echo '.env: MISSING') && php -m | grep -i pgsql || echo 'pgsql PHP extension: NOT loaded'"
+            ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && { PHP=\"\$(bash bin/ops/find-php.sh)\" || PHP=php; } && (test -f .env && echo '.env: present' || echo '.env: MISSING') && echo \"PHP: \$PHP\" && \"\$PHP\" -m | grep -i pgsql || echo 'pgsql PHP extension: NOT loaded'"
             echo "::error::cPanel PostgreSQL: use the host from cPanel PostgreSQL Databases, not 127.0.0.1 unless local socket is configured. Try database.default.sslmode = require in api/.env"
             ssh cpanel-prod "ls -la '${REMOTE_ROOT}/api/writable/logs/' 2>/dev/null; tail -30 '${REMOTE_ROOT}/api/writable/logs/log-'*.log 2>/dev/null || true"
             exit 1
@@ -476,11 +478,11 @@ jobs:
             exit 0
           fi
           echo "First deploy — running InitialSeeder..."
-          if ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && php spark db:seed InitialSeeder"; then
+          if ssh cpanel-prod "cd '${REMOTE_ROOT}/api' && PHP=\"\$(bash bin/ops/find-php.sh)\" && \"\$PHP\" spark db:seed InitialSeeder"; then
             ssh cpanel-prod "touch '${MARKER}' && chmod 644 '${MARKER}'"
           else
             echo "::warning::Seeder failed — deploy continues. Fix api/.env DB settings on cPanel, then run manually:"
-            echo "  ssh → cd api && php spark db:seed InitialSeeder"
+            echo "  ssh → cd api && \"\$(bash bin/ops/find-php.sh)\" spark db:seed InitialSeeder"
             echo "cPanel tip: set database.default.hostname to the PostgreSQL host from cPanel (not 127.0.0.1). Add database.default.sslmode = require if needed."
           fi
 
